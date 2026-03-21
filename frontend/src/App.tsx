@@ -1504,15 +1504,19 @@ export default function App() {
 
               {/* Cost Comparison */}
               {costComparison && (
-                <div className="card chart-card-clickable" style={{ padding: 24 }} onClick={() => setActiveTab('costs')}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }} onClick={() => setActiveTab('costs')}>
+                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: `radial-gradient(circle at top right, ${costComparison.isIncrease ? 'rgba(244 63 94 / 0.15)' : 'rgba(16 185 129 / 0.15)'} 0%, transparent 70%)`, borderRadius: '0 14px 0 100%' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, position: 'relative' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--blue-dim)', border: '1px solid rgba(59 130 246 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.5"><path d="M23 6l-9.5 9.5-5-5L1 18" /><path d="M17 6h6v6" /></svg>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59 130 246 / 0.3)' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M23 6l-9.5 9.5-5-5L1 18" /><path d="M17 6h6v6" /></svg>
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Month-over-Month Comparison</span>
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Month-over-Month</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Cost comparison</span>
+                      </div>
                     </div>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4, cursor: 'pointer' }}>Click to view details</span>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: '#3b82f6', background: 'rgba(59 130 246 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(59 130 246 / 0.2)', cursor: 'pointer' }}>Click to view</span>
                   </div>
 
                   {/* Visual comparison bar */}
@@ -1521,26 +1525,28 @@ export default function App() {
                       <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)' }}>Current Period</span>
                       <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)' }}>Previous Period</span>
                     </div>
-                    <div style={{ display: 'flex', gap: 4, height: 8, borderRadius: 4, background: 'var(--bg-surface)', overflow: 'hidden' }}>
-                      <div style={{ flex: costComparison.current, background: costComparison.isIncrease ? 'linear-gradient(90deg, var(--danger) 0%, rgba(244 63 94 / 0.7) 100%)' : 'linear-gradient(90deg, var(--accent) 0%, rgba(16 185 129 / 0.7) 100%)', borderRadius: 4, transition: 'width 0.5s ease' }} />
-                      <div style={{ flex: costComparison.previous, background: 'var(--border-strong)', borderRadius: 4, transition: 'width 0.5s ease' }} />
+                    <div style={{ display: 'flex', gap: 4, height: 12, borderRadius: 6, background: 'var(--bg-surface)', overflow: 'hidden', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)' }}>
+                      <div style={{ flex: costComparison.current, background: costComparison.isIncrease ? 'linear-gradient(90deg, #f43f5e 0%, #e11d48 100%)' : 'linear-gradient(90deg, #10b981 0%, #059669 100%)', borderRadius: 6, transition: 'width 0.5s ease', position: 'relative' }}>
+                        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, rgba(255,255,255,0.2) 0%, transparent 100%)' }} />
+                      </div>
+                      <div style={{ flex: costComparison.previous, background: 'linear-gradient(90deg, var(--border-strong) 0%, var(--border) 100%)', borderRadius: 6, transition: 'width 0.5s ease' }} />
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-                      <span style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-1)' }}>${costComparison.current.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+                      <span style={{ fontSize: 20, fontWeight: 900, color: 'var(--text-1)' }}>${costComparison.current.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                       <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-2)' }}>${costComparison.previous.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                     </div>
                   </div>
 
                   {/* Change indicator */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 16, background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)' }}>
-                    <div style={{ width: 40, height: 40, borderRadius: '50%', background: costComparison.isIncrease ? 'var(--danger-dim)' : 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)'} strokeWidth="2.5">{costComparison.isIncrease ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M19 12l-7 7-7-7" />}</svg>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 20, background: `linear-gradient(135deg, var(--bg-surface) 0%, ${costComparison.isIncrease ? 'rgba(244 63 94 / 0.05)' : 'rgba(16 185 129 / 0.05)'} 100%)`, borderRadius: 16, border: '1px solid var(--border)' }}>
+                    <div style={{ width: 48, height: 48, borderRadius: '50%', background: costComparison.isIncrease ? 'linear-gradient(135deg, var(--danger-dim) 0%, rgba(244 63 94 / 0.3) 100%)' : 'linear-gradient(135deg, var(--accent-dim) 0%, rgba(16 185 129 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)'}` }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)'} strokeWidth="2.5">{costComparison.isIncrease ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M19 12l-7 7-7-7" />}</svg>
                     </div>
                     <div>
-                      <div style={{ fontSize: 24, fontWeight: 900, color: costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)' }}>
+                      <div style={{ fontSize: 32, fontWeight: 900, color: costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)', lineHeight: 1 }}>
                         {costComparison.isIncrease ? '+' : ''}{costComparison.percentChange.toFixed(1)}%
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                      <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
                         {costComparison.isIncrease ? 'Increase' : 'Decrease'} of ${Math.abs(costComparison.change).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </div>
                     </div>
