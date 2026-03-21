@@ -1830,15 +1830,19 @@ export default function App() {
               </div>
 
               {/* Daily Cost Trends */}
-              <div className="card" style={{ padding: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(6 182 212 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 6, background: 'rgba(6 182 212 / 0.1)', border: '1px solid rgba(6 182 212 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(6 182 212 / 0.3)' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Daily Cost Trends</span>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Daily Cost Trends</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>30-day rolling view</span>
+                    </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>30 days</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#06b6d4', background: 'rgba(6 182 212 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(6 182 212 / 0.2)' }}>Interactive</span>
                 </div>
                 {Array.isArray(dailyCosts) && dailyCosts.length > 0 && (
                   <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
@@ -1849,22 +1853,25 @@ export default function App() {
                       const trend = costs.length > 1 && costs[0] > 0 ? ((costs[costs.length - 1] - costs[0]) / costs[0]) * 100 : 0;
                       return (
                         <>
-                          <div style={{ flex: 1, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Average</div>
-                            <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>${avg.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-2)' }}>per day</div>
+                          <div style={{ flex: 1, padding: '12px 14px', background: 'linear-gradient(135deg, var(--bg-surface) 0%, rgba(16 185 129 / 0.05) 100%)', borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: 'radial-gradient(circle at top right, var(--accent-dim) 0%, transparent 70%)', borderRadius: '0 8px 0 100%' }} />
+                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Average</div>
+                            <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--text-1)', lineHeight: 1 }}>${avg.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                            <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>per day</div>
                           </div>
-                          <div style={{ flex: 1, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Peak</div>
-                            <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--danger)' }}>${max.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-2)' }}>highest day</div>
+                          <div style={{ flex: 1, padding: '12px 14px', background: 'linear-gradient(135deg, var(--bg-surface) 0%, rgba(244 63 94 / 0.05) 100%)', borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 8px 0 100%' }} />
+                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Peak</div>
+                            <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--danger)', lineHeight: 1 }}>${max.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                            <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>highest day</div>
                           </div>
-                          <div style={{ flex: 1, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Trend</div>
-                            <div style={{ fontSize: 16, fontWeight: 800, color: trend >= 0 ? 'var(--danger)' : 'var(--accent)' }}>
+                          <div style={{ flex: 1, padding: '12px 14px', background: `linear-gradient(135deg, var(--bg-surface) 0%, ${trend >= 0 ? 'rgba(244 63 94 / 0.05)' : 'rgba(16 185 129 / 0.05)'} 100%)`, borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: `radial-gradient(circle at top right, ${trend >= 0 ? 'var(--danger-dim)' : 'var(--accent-dim)'} 0%, transparent 70%)`, borderRadius: '0 8px 0 100%' }} />
+                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Trend</div>
+                            <div style={{ fontSize: 20, fontWeight: 900, color: trend >= 0 ? 'var(--danger)' : 'var(--accent)', lineHeight: 1 }}>
                               {trend >= 0 ? '+' : ''}{trend.toFixed(1)}%
                             </div>
-                            <div style={{ fontSize: 10, color: 'var(--text-2)' }}>vs start</div>
+                            <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>vs start</div>
                           </div>
                         </>
                       );
@@ -1897,16 +1904,20 @@ export default function App() {
 
               {/* Optimization Opportunities */}
               {optimizationOpportunities.length > 0 && (
-                <div className="card" style={{ padding: 24, borderLeft: lowScoreCount + orphanedCount > 5 ? '4px solid var(--danger)' : '4px solid var(--warning)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden', borderLeft: lowScoreCount + orphanedCount > 5 ? '4px solid var(--danger)' : '4px solid var(--warning)' }}>
+                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--danger-dim)', border: '1px solid rgba(244 63 94 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #f43f5e 0%, #e11d48 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244 63 94 / 0.3)' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Optimization Opportunities</span>
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Optimization Opportunities</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{optimizationOpportunities.length} items need attention</span>
+                      </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ padding: '4px 12px', borderRadius: 12, background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 12, fontWeight: 700 }}>
+                      <span style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(16 185 129 / 0.3)' }}>
                         ${totalPotentialSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
                       </span>
                     </div>
@@ -1916,24 +1927,24 @@ export default function App() {
                       const maxSavings = optimizationOpportunities[0]?.potentialSavings || 1;
                       const percentage = maxSavings > 0 ? (o.potentialSavings / maxSavings) * 100 : 0;
                       return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(o.resource.name); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger-border)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: 'linear-gradient(90deg, rgba(244 63 94 / 0.1), transparent)', transition: 'width 0.5s ease' }} />
-                          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--danger-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, zIndex: 1 }}>
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2"><path d="M12 9v2M12 13h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(o.resource.name); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: 'linear-gradient(90deg, rgba(244 63 94 / 0.08), transparent)', transition: 'width 0.5s ease' }} />
+                          <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, var(--danger-dim) 0%, rgba(244 63 94 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, zIndex: 1, border: '1px solid rgba(244 63 94 / 0.2)' }}>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2"><path d="M12 9v2M12 13h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
                           </div>
                           <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
                             <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.resource.name}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{o.reason}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{o.reason}</div>
                           </div>
                           <div style={{ textAlign: 'right', zIndex: 1 }}>
-                            <div style={{ fontWeight: 700, color: 'var(--danger)', fontSize: 14 }}>${o.potentialSavings.toFixed(0)}</div>
+                            <div style={{ fontWeight: 700, color: 'var(--danger)', fontSize: 16 }}>${o.potentialSavings.toFixed(0)}</div>
                             <div style={{ fontSize: 10, color: 'var(--text-3)' }}>per month</div>
                           </div>
                         </div>
                       );
                     })}
                     {optimizationOpportunities.length > 5 && (
-                      <div style={{ textAlign: 'center', padding: '8px', color: 'var(--text-3)', fontSize: 11 }}>
+                      <div style={{ textAlign: 'center', padding: '10px', color: 'var(--text-3)', fontSize: 11, background: 'var(--bg-surface)', borderRadius: 8, border: '1px dashed var(--border)' }}>
                         +{optimizationOpportunities.length - 5} more opportunities
                       </div>
                     )}
@@ -1942,15 +1953,19 @@ export default function App() {
               )}
 
               {/* Resource Topology */}
-              <div className="card" style={{ padding: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(245 158 11 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 6, background: 'rgba(245 158 11 / 0.1)', border: '1px solid rgba(245 158 11 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="4" /><line x1="12" y1="2" x2="12" y2="4" /><line x1="12" y1="20" x2="12" y2="22" /><line x1="2" y1="12" x2="4" y2="12" /><line x1="20" y1="12" x2="22" y2="12" /></svg>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="4" /><line x1="12" y1="2" x2="12" y2="4" /><line x1="12" y1="20" x2="12" y2="22" /><line x1="2" y1="12" x2="4" y2="12" /><line x1="20" y1="12" x2="22" y2="12" /></svg>
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Resource Topology</span>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Resource Topology</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>By resource group</span>
+                    </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click to filter</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', background: 'rgba(245 158 11 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(245 158 11 / 0.2)' }}>Interactive</span>
                 </div>
                 {resourceTopology.length > 0 ? (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
