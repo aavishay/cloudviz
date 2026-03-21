@@ -1710,15 +1710,19 @@ export default function App() {
               </div>
 
               {/* Cost by Subscription */}
-              <div className="card chart-card-clickable" style={{ padding: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, rgba(139 92 246 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 6, background: 'rgba(139 92 246 / 0.1)', border: '1px solid rgba(139 92 246 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.3)' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost by Subscription</span>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Subscription</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsBySubscription.length} subscriptions</span>
+                    </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click bars</span>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#8b5cf6', background: 'rgba(139 92 246 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(139 92 246 / 0.2)' }}>Interactive</span>
                 </div>
                 {costsBySubscription.length > 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1726,18 +1730,18 @@ export default function App() {
                       const maxVal = costsBySubscription[0]?.value || 1;
                       const percentage = maxVal > 0 ? (sub.value / maxVal) * 100 : 0;
                       return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid transparent', position: 'relative', overflow: 'hidden' }} onClick={() => { const fullId = uniqueSubs.find(s => s.startsWith(sub.name)); if (fullId) { setActiveTab('resources'); setSubFilter([fullId]); setCurrentPage(1); }}} onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(139 92 246 / 0.5)'; e.currentTarget.style.transform = 'translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.transform = 'translateX(0)'; }}>
-                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, rgba(139 92 246 / 0.15), transparent)`, transition: 'width 0.5s ease' }} />
-                          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', minWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{sub.name}</div>
-                          <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden', zIndex: 1 }}>
-                            <div style={{ height: '100%', width: `${percentage}%`, background: 'linear-gradient(90deg, #8b5cf6, #a78bfa)', borderRadius: 3, transition: 'width 0.5s ease' }} />
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { const fullId = uniqueSubs.find(s => s.startsWith(sub.name)); if (fullId) { setActiveTab('resources'); setSubFilter([fullId]); setCurrentPage(1); }}} onMouseEnter={e => { e.currentTarget.style.borderColor = '#8b5cf6'; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(139 92 246 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, rgba(139 92 246 / 0.12), transparent)`, transition: 'width 0.5s ease' }} />
+                          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{sub.name}</div>
+                          <div style={{ flex: 1, height: 8, background: 'var(--border)', borderRadius: 4, overflow: 'hidden', zIndex: 1 }}>
+                            <div style={{ height: '100%', width: `${percentage}%`, background: 'linear-gradient(90deg, #8b5cf6, #a78bfa)', borderRadius: 4, transition: 'width 0.5s ease' }} />
                           </div>
-                          <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 12, minWidth: 60, textAlign: 'right', zIndex: 1 }}>${(sub.value / 1000).toFixed(1)}k</div>
+                          <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 13, minWidth: 65, textAlign: 'right', zIndex: 1 }}>${(sub.value / 1000).toFixed(1)}k</div>
                         </div>
                       );
                     })}
                     {costsBySubscription.length > 5 && (
-                      <div style={{ textAlign: 'center', padding: '8px 0', color: 'var(--text-3)', fontSize: 11 }}>
+                      <div style={{ textAlign: 'center', padding: '10px', color: 'var(--text-3)', fontSize: 11, background: 'var(--bg-surface)', borderRadius: 8, border: '1px dashed var(--border)' }}>
                         +{costsBySubscription.length - 5} more subscriptions
                       </div>
                     )}
@@ -1750,26 +1754,31 @@ export default function App() {
                 <div className="card chart-card-clickable" style={{ padding: 24 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: 6, background: 'rgba(236 72 153 / 0.1)', border: '1px solid rgba(236 72 153 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ec4899" strokeWidth="2.5"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(236 72 153 / 0.3)' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost by Environment</span>
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Environment</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Tagged resources</span>
+                      </div>
                     </div>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click segments</span>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: '#ec4899', background: 'rgba(236 72 153 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(236 72 153 / 0.2)' }}>Interactive</span>
                   </div>
                   <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-                    <ResponsiveContainer width="50%" height={120}>
-                      <PieChart>
-                        <Pie data={costsByEnvironment.filter(e => e.name !== 'Untagged')} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={45} innerRadius={20} paddingAngle={2} style={{ cursor: 'pointer' }}>
-                          {costsByEnvironment.filter(e => e.name !== 'Untagged').map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} />)}
-                        </Pie>
-                        <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
-                      </PieChart>
-                    </ResponsiveContainer>
+                    <div style={{ position: 'relative', width: '50%' }}>
+                      <ResponsiveContainer width="100%" height={120}>
+                        <PieChart>
+                          <Pie data={costsByEnvironment.filter(e => e.name !== 'Untagged')} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={45} innerRadius={25} paddingAngle={2} style={{ cursor: 'pointer' }}>
+                            {costsByEnvironment.filter(e => e.name !== 'Untagged').map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} />)}
+                          </Pie>
+                          <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {costsByEnvironment.filter(e => e.name !== 'Untagged').map((env, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid transparent' }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--border-strong)'; e.currentTarget.style.transform='scale(1.02)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='transparent'; e.currentTarget.style.transform='scale(1)'; }}>
-                          <div style={{ width: 10, height: 10, borderRadius: 3, background: COLORS[i % COLORS.length], flexShrink: 0 }} />
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onMouseEnter={e => { e.currentTarget.style.borderColor=COLORS[i % COLORS.length]; e.currentTarget.style.transform='translateX(3px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                          <div style={{ width: 12, height: 12, borderRadius: 4, background: COLORS[i % COLORS.length], flexShrink: 0 }} />
                           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', flex: 1 }}>{env.name}</span>
                           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(env.value / 1000).toFixed(1)}k</span>
                         </div>
@@ -1780,15 +1789,18 @@ export default function App() {
               )}
 
               {/* Resource Distribution by Cost Tier */}
-              <div className="card" style={{ padding: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, rgba(34 197 94 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 6, background: 'rgba(34 197 94 / 0.1)', border: '1px solid rgba(34 197 94 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5M2 12l10 5 10-5" /></svg>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(34 197 94 / 0.3)' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5M2 12l10 5 10-5" /></svg>
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Resources by Cost Tier</span>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Resources by Cost Tier</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Click to filter</span>
+                    </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click to filter</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {resourceAgeDistribution.map((group, i) => {
@@ -1796,8 +1808,8 @@ export default function App() {
                     const maxCount = counts.length > 0 ? Math.max(...counts) : 1;
                     const percentage = maxCount > 0 ? (group.count / maxCount) * 100 : 0;
                     return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid transparent', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.transform = 'translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.transform = 'translateX(0)'; }}>
-                        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, ${group.color}20, transparent)`, transition: 'width 0.5s ease' }} />
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); }} onMouseEnter={e => { e.currentTarget.style.borderColor = group.color; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = `0 4px 12px ${group.color}25`; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, ${group.color}15, transparent)`, transition: 'width 0.5s ease' }} />
                         <div style={{ width: 14, height: 14, borderRadius: 4, background: group.color, flexShrink: 0, zIndex: 1 }} />
                         <div style={{ flex: 1, zIndex: 1 }}>
                           <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)' }}>{group.label}</div>
