@@ -408,13 +408,13 @@ interface ResourceTableProps {
 }
 
 const COLUMNS = [
-  { key: 'name',           label: 'Name',           defaultW: 240 },
-  { key: 'type',           label: 'Type',          defaultW: 140 },
+  { key: 'name',           label: 'Name',           defaultW: 200 },
+  { key: 'type',           label: 'Type',          defaultW: 130 },
   { key: 'location',       label: 'Location',       defaultW: 100 },
-  { key: 'resourceGroup',  label: 'Resource Group', defaultW: 160 },
-  { key: 'subscriptionId', label: 'Subscription',  defaultW: 180 },
-  { key: 'optimization',   label: 'Score',         defaultW: 110 },
-  { key: 'cost',           label: 'Cost',          defaultW: 120 },
+  { key: 'resourceGroup',  label: 'Resource Group', defaultW: 140 },
+  { key: 'subscriptionId', label: 'Subscription',  defaultW: 150 },
+  { key: 'optimization',   label: 'Score',         defaultW: 90 },
+  { key: 'cost',           label: 'Cost',          defaultW: 100 },
 ];
 
 function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgClick, onSubClick, onTypeClick, onResourceClick }: ResourceTableProps) {

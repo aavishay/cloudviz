@@ -34,7 +34,7 @@
   --shadow-md:     0 4px 20px rgba(0 0 0 / 0.5);
   --shadow-lg:     0 8px 40px rgba(0 0 0 / 0.6);
   --shadow-glow:   0 0 20px rgba(16 185 129 / 0.15);
-  --sidebar-w:     260px;
+  --sidebar-w:     240px;
   --sidebar-collapsed-w: 64px;
   --header-h:      60px;
 }
