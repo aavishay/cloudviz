@@ -1578,43 +1578,53 @@ export default function App() {
               {/* Charts Row */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 16 }}>
                 {/* Cost by Type */}
-                <div className="card chart-card-clickable" style={{ padding: 24 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--accent-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost by Resource Type</span>
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Type</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsByType.length} resource types</span>
+                      </div>
                     </div>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click segments</span>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '4px 10px', borderRadius: 12, border: '1px solid var(--accent-border)' }}>Interactive</span>
                   </div>
                   {costsByType.length > 0 ? (
                     <>
-                      <ResponsiveContainer width="100%" height={180}>
-                        <PieChart>
-                          <Pie
-                            data={costsByType}
-                            dataKey="value"
-                            nameKey="name"
-                            cx="50%"
-                            cy="50%"
-                            outerRadius={65}
-                            innerRadius={30}
-                            paddingAngle={2}
-                            onClick={(data) => { if (data?.name) { setActiveTab('resources'); setSearchQuery(String(data.name)); } }}
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {costsByType.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} style={{ cursor: 'pointer', transition: 'all 0.2s ease', filter: 'brightness(1)' }} />)}
-                          </Pie>
-                          <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
-                        </PieChart>
-                      </ResponsiveContainer>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
-                        {costsByType.slice(0, 5).map((item, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: 'var(--bg-surface)', borderRadius: 4, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid transparent' }} onClick={() => { setActiveTab('resources'); setSearchQuery(item.name); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--border-strong)'; e.currentTarget.style.transform='scale(1.02)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='transparent'; e.currentTarget.style.transform='scale(1)'; }}>
-                            <div style={{ width: 8, height: 8, borderRadius: 2, background: COLORS[i % COLORS.length] }} />
-                            <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--text-2)' }}>{item.name}</span>
-                            <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</span>
+                      <div style={{ position: 'relative' }}>
+                        <ResponsiveContainer width="100%" height={160}>
+                          <PieChart>
+                            <Pie
+                              data={costsByType}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              outerRadius={60}
+                              innerRadius={35}
+                              paddingAngle={2}
+                              onClick={(data) => { if (data?.name) { setActiveTab('resources'); setSearchQuery(String(data.name)); } }}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              {costsByType.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} />)}
+                            </Pie>
+                            <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                          <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--text-1)' }}>${(totalCostsSum / 1000).toFixed(0)}k</div>
+                          <div style={{ fontSize: 9, color: 'var(--text-3)', fontWeight: 500 }}>TOTAL</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                        {costsByType.slice(0, 6).map((item, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onClick={() => { setActiveTab('resources'); setSearchQuery(item.name); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.background='var(--accent-dim)'; e.currentTarget.style.transform='translateY(-1px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--bg-surface)'; e.currentTarget.style.transform='translateY(0)'; }}>
+                            <div style={{ width: 10, height: 10, borderRadius: 3, background: COLORS[i % COLORS.length] }} />
+                            <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-2)' }}>{item.name}</span>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</span>
                           </div>
                         ))}
                       </div>
@@ -1659,15 +1669,21 @@ export default function App() {
               </div>
 
               {/* Top Spenders */}
-              <div className="card" style={{ padding: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--danger-dim)', border: '1px solid rgba(244 63 94 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #f43f5e 0%, #e11d48 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244, 63, 94, 0.3)' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Top Cost Drivers</span>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Top Cost Drivers</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Click to filter resources</span>
+                    </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click to view</span>
+                  <div style={{ padding: '4px 10px', background: 'var(--danger-dim)', borderRadius: 12, border: '1px solid rgba(244 63 94 / 0.2)' }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger)' }}>${topSpenders.reduce((s, c) => s + c.cost, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
                 </div>
                 {topSpenders.length > 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1675,16 +1691,16 @@ export default function App() {
                       const maxCost = topSpenders[0]?.cost || 1;
                       const percentage = maxCost > 0 ? (c.cost / maxCost) * 100 : 0;
                       return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid transparent', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(c.resourceGroup || ''); }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--danger-border)'; e.currentTarget.style.transform = 'translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.transform = 'translateX(0)'; }}>
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(c.resourceGroup || ''); }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--danger)'; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
                           <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, ${COLORS[i % COLORS.length]}15, transparent)`, transition: 'width 0.5s ease' }} />
-                          <div style={{ width: 26, height: 26, borderRadius: '50%', background: COLORS[i % COLORS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 11, flexShrink: 0, zIndex: 1 }}>{i + 1}</div>
+                          <div style={{ width: 28, height: 28, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS[i % COLORS.length]}, ${COLORS[(i + 1) % COLORS.length]})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, zIndex: 1, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{i + 1}</div>
                           <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
                             <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.resourceGroup || 'Unknown'}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{friendlyType(c.resourceType || '')}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(c.resourceType || '')}</div>
                           </div>
                           <div style={{ textAlign: 'right', zIndex: 1 }}>
                             <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 14 }}>${c.cost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{totalCostsSum > 0 ? ((c.cost / totalCostsSum) * 100).toFixed(1) : '0'}% of total</div>
+                            <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{totalCostsSum > 0 ? ((c.cost / totalCostsSum) * 100).toFixed(1) : '0'}%</div>
                           </div>
                         </div>
                       );
