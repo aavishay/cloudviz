@@ -18,8 +18,10 @@ cloudviz/
 
 ### Backend (Go + Gin)
 
-- **Entry point**: `backend/main.go` (single-file server, ~960 lines)
+- **Entry point**: `backend/main.go`
+- **Structure**: Multi-file Go project (`main.go`, `azure.go`, `db.go`, `types.go`)
 - **Framework**: Gin web framework
+- **Frontend Embedding**: Frontend assets are embedded in the binary via `go:embed dist`
 - **Authentication**: Azure Default Credential via `azidentity`
 - **Data sources**:
   - Azure Resource Graph (ARG) for resource inventory
@@ -51,8 +53,15 @@ cloudviz/
 
 ```bash
 cd backend
-go run main.go              # Run development server
-go build -o cloudviz-backend main.go  # Build binary
+go run main.go azure.go db.go types.go  # Run development server
+go build -o cloudviz main.go azure.go db.go types.go # Build unified binary
+```
+
+### Unified Build (Frontend + Backend)
+```bash
+cd frontend && npm run build
+cp -r frontend/dist backend/dist
+cd backend && go build -o cloudviz main.go azure.go db.go types.go
 ```
 
 ### Frontend
