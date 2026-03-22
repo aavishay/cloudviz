@@ -228,8 +228,20 @@ body, body * {
   align-items: center;
   padding: 0 20px;
   gap: 16px;
-  backdrop-filter: blur(8px);
-  background: linear-gradient(180deg, var(--bg-surface) 0%, rgba(15 22 41 / 0.95) 100%);
+  backdrop-filter: blur(12px);
+  background: linear-gradient(180deg, var(--bg-surface) 0%, rgba(15 22 41 / 0.98) 100%);
+  position: relative;
+}
+
+.app-header::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-border), transparent);
+  opacity: 0.5;
 }
 
 [data-theme="light"] .app-header {
@@ -281,6 +293,18 @@ body, body * {
   position: sticky;
   top: var(--header-h);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  position: relative;
+}
+
+.sidebar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(180deg, var(--accent-border) 0%, transparent 50%, var(--accent-border) 100%);
+  opacity: 0.3;
 }
 
 .sidebar.collapsed {
@@ -409,6 +433,44 @@ body, body * {
   color: var(--accent) !important;
 }
 
+/* ─── Sidebar hoverable items ───────────────────────────────────────────────── */
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.sidebar-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--accent-dim) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.sidebar-item:hover {
+  background: var(--bg-hover);
+  transform: translateX(4px);
+}
+
+.sidebar-item:hover::before {
+  opacity: 0.3;
+}
+
+/* ─── Sidebar active indicator ───────────────────────────────────────────────── */
+.sidebar-item.active {
+  background: var(--accent-dim);
+  border-left: 3px solid var(--accent);
+  color: var(--accent);
+}
+
 /* ─── Sidebar section header ───────────────────────────────────────────────── */
 .sidebar-section-header {
   display: flex;
@@ -534,7 +596,18 @@ body, body * {
   background: var(--bg-base);
   border: 1px solid var(--border);
   border-radius: 12px;
+  position: relative;
+  overflow: hidden;
 }
+
+.tab-strip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 0%, rgba(255 255 255 / 0.02) 100%);
+  pointer-events: none;
+}
+
 .tab {
   padding: 8px 20px;
   border-radius: 8px;
@@ -547,22 +620,39 @@ body, body * {
   color: var(--text-2);
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
   position: relative;
+  z-index: 1;
 }
+
+.tab::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, var(--accent-dim) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  border-radius: inherit;
+}
+
 .tab:hover:not(.active) {
   background: var(--bg-hover);
   color: var(--text-1);
 }
+
+.tab:hover:not(.active)::before {
+  opacity: 0.5;
+}
 .tab.active {
   background: var(--accent);
   color: #fff;
-  box-shadow: 0 2px 12px rgba(16 185 129 / 0.4);
+  box-shadow: 0 2px 12px rgba(16 185 129 / 0.4), inset 0 1px 0 rgba(255 255 255 / 0.1);
+  transform: translateY(-1px);
 }
 .tab.active::after {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(135deg, rgba(255 255 255 / 0.1) 0%, transparent 100%);
+  background: linear-gradient(135deg, rgba(255 255 255 / 0.15) 0%, transparent 100%);
 }
 .tab svg {
   vertical-align: middle;
@@ -684,6 +774,7 @@ body, body * {
 
 /* ─── Table ─────────────────────────────────────────────────────────────────── */
 .resource-table-wrap {
+  width: 100%;
   overflow-x: auto;
   overflow-y: visible;
   border-radius: 14px;
@@ -694,9 +785,11 @@ body, body * {
 }
 
 .resource-table {
+  width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
+  table-layout: fixed;
 }
 
 .resource-table thead th {
@@ -769,10 +862,13 @@ body, body * {
 /* Table row status indicators */
 .resource-table tbody tr.orphaned {
   background: var(--danger-dim);
+  border-left: 3px solid var(--danger);
 }
 .resource-table tbody tr.low-score {
   background: rgba(245 158 11 / 0.05);
+  border-left: 3px solid var(--warning);
 }
+
 
 /* Column resize handle */
 .col-resize-handle {
@@ -794,14 +890,16 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+  display: block;
 }
 
-/* Fixed width columns */
-.resource-table .col-name { min-width: 150px; max-width: 300px; }
-.resource-table .col-type { min-width: 100px; max-width: 160px; }
-.resource-table .col-location { min-width: 80px; max-width: 120px; }
-.resource-table .col-cost { min-width: 70px; max-width: 100px; text-align: right; }
-.resource-table .col-score { min-width: 80px; max-width: 130px; }
+/* Table cells should not wrap */
+.resource-table th,
+.resource-table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .badge {
   display: inline-flex;
@@ -817,17 +915,26 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   background: var(--bg-hover);
   color: var(--text-2);
   border-color: var(--border);
+  cursor: pointer;
 }
 
 .badge:hover:not(.badge-orphan) {
   background: var(--bg-card);
   border-color: var(--border-strong);
   color: var(--text-1);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0 0 0 / 0.1);
 }
 
 .badge-type {
   background: var(--bg-hover);
   color: var(--text-2);
+}
+
+.badge-type:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 
 .badge-loc {
@@ -836,10 +943,22 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   border-color: var(--cyan-border);
 }
 
+.badge-loc:hover {
+  background: rgba(34 211 238 / 0.25);
+  border-color: rgba(34 211 238 / 0.4);
+  box-shadow: 0 2px 8px rgba(34 211 238 / 0.2);
+}
+
 .badge-rg {
   background: var(--bg-hover);
   color: var(--text-2);
   font-family: inherit;
+}
+
+.badge-rg:hover {
+  background: rgba(139 92 246 / 0.15);
+  border-color: rgba(139 92 246 / 0.3);
+  color: #8b5cf6;
 }
 
 .badge-orphan {
@@ -1097,6 +1216,43 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
 .cost-card:hover::before {
   opacity: 1;
 }
+
+/* ─── Quick action badge pulse ───────────────────────────────────────────────── */
+@keyframes badgePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244 63 94 / 0.3); }
+  50% { box-shadow: 0 0 0 4px rgba(244 63 94 / 0); }
+}
+
+.quick-action-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.quick-action-badge:hover {
+  transform: scale(1.03);
+  box-shadow: 0 2px 8px rgba(0 0 0 / 0.15);
+}
+
+.quick-action-badge.warning {
+  background: var(--warning-dim);
+  color: var(--warning);
+  border: 1px solid rgba(245 158 11 / 0.2);
+}
+
+.quick-action-badge.danger {
+  background: var(--danger-dim);
+  color: var(--danger);
+  border: 1px solid rgba(244 63 94 / 0.2);
+  animation: badgePulse 2s ease-in-out infinite;
+}
 .cost-amount {
   font-size: 32px;
   font-weight: 900;
@@ -1104,7 +1260,14 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   color: var(--text-1);
   line-height: 1;
   font-variant-numeric: tabular-nums;
+  transition: all 0.25s ease;
 }
+
+.cost-card:hover .cost-amount {
+  color: var(--accent);
+  text-shadow: 0 0 20px rgba(16 185 129 / 0.3);
+}
+
 .cost-trend {
   position: absolute;
   top: 16px;
@@ -1139,11 +1302,44 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  position: relative;
+  overflow: hidden;
 }
-.page-btn:hover { border-color: var(--accent-border); color: var(--accent); }
-.page-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.page-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, var(--accent-dim) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.page-btn:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(16 185 129 / 0.15);
+}
+
+.page-btn:hover::before {
+  opacity: 1;
+}
+
+.page-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(16 185 129 / 0.3);
+}
+
+.page-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
 
 /* ─── Modal ─────────────────────────────────────────────────────────────────── */
 .modal-backdrop {
@@ -1162,12 +1358,23 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   background: var(--bg-card);
   border: 1px solid var(--border-strong);
   border-radius: 20px;
-  box-shadow: 0 25px 50px -12px rgba(0 0 0 / 0.5), var(--shadow-lg);
+  box-shadow: 0 25px 50px -12px rgba(0 0 0 / 0.5), var(--shadow-lg), 0 0 0 1px rgba(16 185 129 / 0.1);
   width: 100%;
   max-width: 640px;
   max-height: 85vh;
   overflow-y: auto;
   animation: slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+.modal::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--blue), var(--purple));
+  border-radius: 20px 20px 0 0;
 }
 .modal-header {
   padding: 24px 28px 20px;
@@ -1212,6 +1419,17 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   flex-shrink: 0;
+  position: relative;
+}
+
+.spinner::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-dim) 0%, transparent 70%);
+  opacity: 0.5;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
 /* ─── Spinner variants ───────────────────────────────────────────────────────── */
@@ -1220,10 +1438,17 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   height: 48px;
   border-width: 3px;
 }
+.spinner-lg::after {
+  inset: -8px;
+}
+
 .spinner-sm {
   width: 14px;
   height: 14px;
   border-width: 2px;
+}
+.spinner-sm::after {
+  inset: -2px;
 }
 
 /* ─── Loading shimmer effect ────────────────────────────────────────────────── */
@@ -1260,10 +1485,27 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   font-weight: 600;
   letter-spacing: 0.05em;
   gap: 12px;
+  position: relative;
 }
+
+.empty-state::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, var(--accent-dim) 0%, transparent 70%);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
 .empty-state svg {
   opacity: 0.4;
   margin-bottom: 8px;
+  transition: all 0.3s ease;
+}
+
+.empty-state:hover svg {
+  opacity: 0.6;
+  transform: scale(1.05);
 }
 
 /* ─── Score ring ────────────────────────────────────────────────────────────── */
@@ -1280,10 +1522,30 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   justify-content: space-between;
   gap: 12px;
   transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
+
+.metric-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--blue));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
 .metric-card:hover {
-  border-color: var(--border-strong);
+  border-color: var(--accent-border);
   background: var(--bg-hover);
+  transform: translateX(4px);
+}
+
+.metric-card:hover::before {
+  opacity: 1;
 }
 
 /* ─── Info grid ─────────────────────────────────────────────────────────────── */
@@ -1292,16 +1554,37 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
+
 .info-cell {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px 16px;
   transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
+
+.info-cell::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  background: linear-gradient(180deg, var(--accent), var(--blue));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
 .info-cell:hover {
-  border-color: var(--border-strong);
+  border-color: var(--accent-border);
   box-shadow: var(--shadow-sm);
+  transform: translateY(-2px);
+}
+
+.info-cell:hover::before {
+  opacity: 1;
 }
 .info-cell-label {
   font-size: 10px;
@@ -1330,6 +1613,11 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   white-space: pre-wrap;
   position: relative;
   overflow: hidden;
+  transition: all 0.2s ease;
+}
+.reco-box:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 16px rgba(16 185 129 / 0.15);
 }
 .reco-box::before {
   content: '';
@@ -1842,11 +2130,27 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
 .chart-card-clickable {
   cursor: pointer;
   transition: all 0.25s ease;
+  position: relative;
+}
+
+.chart-card-clickable::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(16 185 129 / 0.05) 0%, transparent 50%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
 }
 
 .chart-card-clickable:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadow-md), 0 0 0 1px var(--accent-border);
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--accent-border), 0 0 20px rgba(16 185 129 / 0.1);
+}
+
+.chart-card-clickable:hover::before {
+  opacity: 1;
 }
 
 .chart-card-clickable:active {
@@ -1924,6 +2228,43 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   animation: chartPulse 2s ease-in-out infinite;
 }
 
+/* ─── Interactive badge animation ───────────────────────────────────────────── */
+@keyframes badgeGlow {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  50% { box-shadow: 0 0 8px 2px currentColor; opacity: 0.9; }
+}
+
+.interactive-badge {
+  animation: badgeGlow 3s ease-in-out infinite;
+}
+
+/* ─── Clickable item hover glow ──────────────────────────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.clickable-item-glow {
+  position: relative;
+}
+
+.clickable-item-glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(16 185 129 / 0.1), transparent);
+  background-size: 200% 100%;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.clickable-item-glow:hover::after {
+  opacity: 1;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
 /* ─── Interactive legend ─────────────────────────────────────────────────────── */
 .interactive-legend {
   display: flex;
@@ -1950,6 +2291,139 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   border-color: var(--accent-border);
   transform: translateY(-1px);
   box-shadow: var(--shadow-sm);
+  background: var(--accent-dim);
+}
+
+.legend-item:active {
+  transform: translateY(0);
+}
+
+.legend-item-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.legend-item:hover .legend-item-dot {
+  transform: scale(1.2);
+}
+
+/* ─── Chart interactive hint ──────────────────────────────────────────────────── */
+@keyframes pulseHint {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+.chart-hint-badge {
+  animation: pulseHint 2s ease-in-out infinite;
+}
+
+/* ─── Clickable card bounce ──────────────────────────────────────────────────── */
+@keyframes cardBounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+.clickable-card-hint {
+  position: relative;
+}
+
+.clickable-card-hint::after {
+  content: '';
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.4;
+  animation: pulseHint 2s ease-in-out infinite;
+}
+
+/* ─── Dashboard row item ───────────────────────────────────────────────────────── */
+.dashboard-row-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-surface);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.dashboard-row-item:hover {
+  border-color: var(--accent-border);
+  transform: translateX(4px);
+  box-shadow: 0 4px 12px rgba(16 185 129 / 0.1);
+}
+
+.dashboard-row-item:active {
+  transform: translateX(2px);
+}
+
+/* ─── Anomaly severity indicators ─────────────────────────────────────────────── */
+.severity-high {
+  background: linear-gradient(135deg, var(--danger-dim) 0%, rgba(244 63 94 / 0.3) 100%);
+  border: 1px solid rgba(244 63 94 / 0.3);
+  animation: severityPulseHigh 2s ease-in-out infinite;
+}
+
+.severity-medium {
+  background: linear-gradient(135deg, var(--warning-dim) 0%, rgba(245 158 11 / 0.3) 100%);
+  border: 1px solid rgba(245 158 11 / 0.3);
+}
+
+@keyframes severityPulseHigh {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244 63 94 / 0.3); }
+  50% { box-shadow: 0 0 0 4px rgba(244 63 94 / 0.1); }
+}
+
+/* ─── Trend indicator ──────────────────────────────────────────────────────────── */
+.trend-up {
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+.trend-down {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* ─── Metric mini card ─────────────────────────────────────────────────────────── */
+.metric-mini-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, var(--bg-surface) 0%, rgba(16 185 129 / 0.05) 100%);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.metric-mini-card:hover {
+  border-color: var(--accent-border);
+  transform: translateY(-1px);
+}
+
+.metric-mini-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 40px;
+  height: 40px;
+  background: radial-gradient(circle at top right, var(--accent-dim) 0%, transparent 70%);
+  border-radius: 0 8px 0 100%;
 }
 
 .legend-dot {
@@ -1975,7 +2449,8 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
 
 /* ─── Clickable bar in charts ───────────────────────────────────────────────── */
 .recharts-bar-rectangle:hover path {
-  filter: brightness(1.1);
+  filter: brightness(1.15);
+  stroke-width: 2;
 }
 
 /* ─── Metric highlight ring ─────────────────────────────────────────────────── */
@@ -1991,6 +2466,114 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   background: conic-gradient(var(--accent), var(--blue), var(--purple), var(--accent));
   opacity: 0.2;
   animation: spin 4s linear infinite;
+}
+
+/* ─── Timeline item hover effect ────────────────────────────────────────────── */
+.timeline-item {
+  position: relative;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.timeline-item::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--accent-dim) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.timeline-item:hover::after {
+  opacity: 0.1;
+}
+
+/* ─── Gradient text for values ───────────────────────────────────────────────── */
+.gradient-value {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--blue) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Pulsing indicator dot ─────────────────────────────────────────────────── */
+@keyframes pulseDot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.7; }
+}
+
+.pulse-dot {
+  animation: pulseDot 2s ease-in-out infinite;
+}
+
+/* ─── Chart tooltip enhancement ─────────────────────────────────────────────── */
+.recharts-tooltip-wrapper {
+  z-index: 100 !important;
+}
+
+.custom-tooltip {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 12px !important;
+  box-shadow: var(--shadow-lg), 0 4px 20px rgba(0 0 0 / 0.3) !important;
+  padding: 12px 16px !important;
+}
+
+.custom-tooltip-label {
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.custom-tooltip-value {
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 16px;
+}
+
+/* ─── Card number counter animation ─────────────────────────────────────────── */
+@keyframes numberPop {
+  0% { transform: scale(0.8); opacity: 0; }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.number-pop {
+  animation: numberPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ─── Subtle background animation for loading states ─────────────────────────── */
+@keyframes shimmerBg {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.loading-shimmer {
+  background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-hover) 50%, var(--bg-surface) 75%);
+  background-size: 200% 100%;
+  animation: shimmerBg 1.5s ease-in-out infinite;
+}
+
+/* ─── Interactive card glow on hover ─────────────────────────────────────────── */
+.glow-hover {
+  position: relative;
+}
+
+.glow-hover::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--accent-border), var(--blue), var(--accent-border));
+  opacity: 0;
+  z-index: -1;
+  transition: opacity 0.3s ease;
+}
+
+.glow-hover:hover::before {
+  opacity: 0.3;
+  animation: spin 3s linear infinite;
 }
 
 @keyframes spin {
@@ -2377,7 +2960,398 @@ input:focus-visible, select:focus-visible {
   margin-top: 6px;
 }
 
-/* ─── Cost card improvements ────────────────────────────────────────────────── */
+/* ─── Chart card enhanced glow ───────────────────────────────────────────────── */
+.chart-card-glow {
+  position: relative;
+  overflow: hidden;
+}
+
+.chart-card-glow::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: conic-gradient(
+    from 0deg,
+    transparent,
+    rgba(16 185 129 / 0.05),
+    transparent,
+    rgba(59 130 246 / 0.05),
+    transparent
+  );
+  animation: chartGlowRotate 20s linear infinite;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.chart-card-glow:hover::before {
+  opacity: 1;
+}
+
+@keyframes chartGlowRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Summary stat card with animated border ─────────────────────────────────── */
+.summary-stat-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.summary-stat-card::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--blue), var(--purple));
+  opacity: 0.6;
+  transition: opacity 0.3s ease;
+}
+
+.summary-stat-card:hover::after {
+  opacity: 1;
+}
+
+/* ─── Insight alert bar enhancements ─────────────────────────────────────────── */
+.insight-alert-bar {
+  background: linear-gradient(135deg, rgba(244 63 94 / 0.08) 0%, rgba(245 158 11 / 0.05) 100%);
+  border: 1px solid rgba(244 63 94 / 0.15);
+  border-radius: 12px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: all 0.2s ease;
+}
+
+.insight-alert-bar:hover {
+  border-color: rgba(244 63 94 / 0.25);
+  box-shadow: 0 4px 16px rgba(244 63 94 / 0.1);
+}
+
+/* ─── Animated gradient border for charts ─────────────────────────────────────── */
+@keyframes gradientBorderRotate {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animated-border-card {
+  position: relative;
+}
+
+.animated-border-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--blue), var(--purple), var(--accent));
+  background-size: 300% 100%;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+  animation: gradientBorderRotate 4s linear infinite;
+}
+
+.animated-border-card:hover::before {
+  opacity: 0.3;
+}
+
+/* ─── Chart legend row hover enhancement ───────────────────────────────────────── */
+.chart-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.chart-legend-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--accent-dim) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.chart-legend-row:hover {
+  border-color: var(--accent-border);
+  transform: translateX(4px);
+  box-shadow: 0 2px 8px rgba(16 185 129 / 0.1);
+}
+
+.chart-legend-row:hover::before {
+  opacity: 0.5;
+}
+
+.chart-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.chart-legend-row:hover .chart-legend-dot {
+  transform: scale(1.2);
+}
+
+/* ─── Interactive chart bar styling ───────────────────────────────────────────── */
+.chart-bar-interactive {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.chart-bar-interactive:hover {
+  filter: brightness(1.15);
+  transform: scaleX(1.02);
+  transform-origin: left;
+}
+
+/* ─── Stat card icon container glow ───────────────────────────────────────────── */
+.stat-icon-glow {
+  position: relative;
+}
+
+.stat-icon-glow::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  background: inherit;
+  filter: blur(8px);
+  opacity: 0.4;
+  z-index: -1;
+}
+
+/* ─── Trend indicator enhanced ────────────────────────────────────────────────── */
+.trend-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  transition: all 0.2s ease;
+}
+
+.trend-indicator:hover {
+  transform: scale(1.05);
+}
+
+.trend-indicator.up {
+  background: var(--danger-dim);
+  color: var(--danger);
+  box-shadow: 0 0 0 0 rgba(244 63 94 / 0);
+}
+
+.trend-indicator.up:hover {
+  box-shadow: 0 2px 8px rgba(244 63 94 / 0.2);
+}
+
+.trend-indicator.down {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: 0 0 0 0 rgba(16 185 129 / 0);
+}
+
+.trend-indicator.down:hover {
+  box-shadow: 0 2px 8px rgba(16 185 129 / 0.2);
+}
+
+/* ─── Top spender row hover effect ────────────────────────────────────────────── */
+.top-spender-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-surface);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+}
+
+.top-spender-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--danger), transparent);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.top-spender-row:hover {
+  border-color: var(--danger);
+  transform: translateX(4px);
+  box-shadow: 0 4px 12px rgba(244 63 94 / 0.15);
+}
+
+.top-spender-row:hover::before {
+  opacity: 1;
+}
+
+/* ─── Subscription bar chart enhancement ─────────────────────────────────────── */
+.subscription-bar {
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.subscription-bar:hover {
+  transform: translateX(4px);
+}
+
+.subscription-bar:hover .bar-fill {
+  filter: brightness(1.2);
+}
+
+/* ─── Quick insight badge animation ───────────────────────────────────────────── */
+@keyframes insightBadgePulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(245 158 11 / 0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(245 158 11 / 0.1);
+    transform: scale(1.02);
+  }
+}
+
+.insight-badge-animated {
+  animation: insightBadgePulse 2s ease-in-out infinite;
+}
+
+/* ─── Chart section header with accent ─────────────────────────────────────────── */
+.chart-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.chart-section-header::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border), transparent);
+}
+
+/* ─── Interactive hint badge with shimmer ─────────────────────────────────────── */
+.hint-badge-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.hint-badge-shimmer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255 255 255 / 0.2), transparent);
+  animation: shimmerLeft 2s ease-in-out infinite;
+}
+
+@keyframes shimmerLeft {
+  0% { left: -100%; }
+  50% { left: 100%; }
+  100% { left: 100%; }
+}
+
+/* ─── Dashboard grid animations ─────────────────────────────────────────────── */
+@keyframes cardSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dashboard-grid-item {
+  animation: cardSlideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  opacity: 0;
+}
+
+.dashboard-grid-item:nth-child(1) { animation-delay: 0.05s; }
+.dashboard-grid-item:nth-child(2) { animation-delay: 0.1s; }
+.dashboard-grid-item:nth-child(3) { animation-delay: 0.15s; }
+.dashboard-grid-item:nth-child(4) { animation-delay: 0.2s; }
+.dashboard-grid-item:nth-child(5) { animation-delay: 0.25s; }
+.dashboard-grid-item:nth-child(6) { animation-delay: 0.3s; }
+.dashboard-grid-item:nth-child(7) { animation-delay: 0.35s; }
+.dashboard-grid-item:nth-child(8) { animation-delay: 0.4s; }
+
+/* ─── Chart container click ripple ───────────────────────────────────────────── */
+.chart-ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+.chart-ripple::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, var(--accent-dim) 0%, transparent 70%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.chart-ripple:hover::after {
+  opacity: 0.1;
+}
+
+/* ─── Cost trend card with animated gradient ──────────────────────────────────── */
+.trend-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.trend-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 200%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255 255 255 / 0.05), transparent);
+  animation: shimmerSlide 3s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes shimmerSlide {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(50%); }
+}
+
 .cost-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -2749,4 +3723,275 @@ button:focus-visible {
   .sidebar, .app-header, .btn, .pagination { display: none !important; }
   .main-content { padding: 0; }
   .card { box-shadow: none; border: 1px solid #ccc; }
+}
+
+/* ─── Enhanced chart card interactions ─────────────────────────────────────────── */
+.chart-card-wrapper {
+  position: relative;
+  overflow: hidden;
+}
+
+.chart-card-wrapper::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--blue), var(--purple));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.chart-card-wrapper:hover::before {
+  opacity: 1;
+}
+
+/* ─── Cost tier bar hover effect ─────────────────────────────────────────────── */
+.cost-tier-bar {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cost-tier-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255 255 255 / 0.05) 100%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.cost-tier-bar:hover::after {
+  opacity: 1;
+}
+
+.cost-tier-bar:hover {
+  transform: translateX(4px);
+  box-shadow: 0 4px 12px rgba(0 0 0 / 0.1);
+}
+
+/* ─── Chart tooltip enhanced ─────────────────────────────────────────────────── */
+.chart-tooltip-enhanced {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--accent-border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px rgba(0 0 0 / 0.3), 0 0 0 1px var(--accent-border) !important;
+  padding: 12px 16px !important;
+  position: relative;
+}
+
+.chart-tooltip-enhanced::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--blue));
+  border-radius: 12px 12px 0 0;
+}
+
+/* ─── Pie chart segment hover ─────────────────────────────────────────────────── */
+.pie-segment-interactive {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  filter: drop-shadow(0 2px 4px rgba(0 0 0 / 0.1));
+}
+
+.pie-segment-interactive:hover {
+  filter: brightness(1.15) drop-shadow(0 4px 12px rgba(0 0 0 / 0.2));
+  transform: scale(1.02);
+}
+
+/* ─── Legend color dot animation ─────────────────────────────────────────────── */
+.legend-color-dot {
+  transition: all 0.2s ease;
+}
+
+.legend-color-dot:hover {
+  transform: scale(1.3);
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* ─── Stats mini card with glow ───────────────────────────────────────────────── */
+.stats-mini-card {
+  position: relative;
+  overflow: hidden;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  transition: all 0.2s ease;
+}
+
+.stats-mini-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 40px;
+  height: 40px;
+  background: radial-gradient(circle at top right, var(--accent-dim) 0%, transparent 70%);
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+
+.stats-mini-card:hover {
+  border-color: var(--accent-border);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(16 185 129 / 0.1);
+}
+
+.stats-mini-card:hover::before {
+  opacity: 1;
+}
+
+/* ─── Optimization opportunity card ───────────────────────────────────────────── */
+.optimization-card {
+  position: relative;
+  overflow: hidden;
+  padding: 14px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.optimization-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--danger), var(--warning));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.optimization-card:hover {
+  border-color: var(--danger);
+  transform: translateX(4px);
+  box-shadow: 0 4px 16px rgba(244 63 94 / 0.15);
+}
+
+.optimization-card:hover::before {
+  opacity: 1;
+}
+
+/* ─── Anomaly severity badge pulse ─────────────────────────────────────────────── */
+@keyframes severityPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(244 63 94 / 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(244 63 94 / 0.1);
+  }
+}
+
+.severity-badge-high {
+  animation: severityPulse 2s ease-in-out infinite;
+}
+
+/* ─── Chart container hover scale ─────────────────────────────────────────────── */
+.chart-container-scalable {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chart-container-scalable:hover {
+  transform: scale(1.01);
+  box-shadow: 0 8px 32px rgba(0 0 0 / 0.15);
+}
+
+/* ─── Resource topology card hover ─────────────────────────────────────────────── */
+.topology-card {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+}
+
+.topology-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 0%, rgba(245 158 11 / 0.05) 100%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.topology-card:hover::after {
+  opacity: 1;
+}
+
+/* ─── Gradient border animation on hover ───────────────────────────────────────── */
+@keyframes gradientBorderMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.gradient-border-animated {
+  position: relative;
+}
+
+.gradient-border-animated::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--blue), var(--purple), var(--accent));
+  background-size: 300% 100%;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.gradient-border-animated:hover::before {
+  opacity: 1;
+  animation: gradientBorderMove 3s linear infinite;
+}
+
+/* ─── Card with gradient background on hover ───────────────────────────────────── */
+.card-gradient-hover {
+  position: relative;
+  overflow: hidden;
+}
+
+.card-gradient-hover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 0%, rgba(16 185 129 / 0.03) 50%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.card-gradient-hover:hover::before {
+  opacity: 1;
+}
+
+/* ─── Savings badge with animation ─────────────────────────────────────────────── */
+.savings-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 13px;
+  background: linear-gradient(135deg, var(--accent) 0%, #059669 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(16 185 129 / 0.3);
+  animation: savingsGlow 3s ease-in-out infinite;
+}
+
+@keyframes savingsGlow {
+  0%, 100% { box-shadow: 0 2px 8px rgba(16 185 129 / 0.3); }
+  50% { box-shadow: 0 2px 16px rgba(16 185 129 / 0.5); }
 }

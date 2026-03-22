@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, Component, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, Area } from 'recharts';
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 
@@ -185,9 +185,20 @@ const Sparkline = ({ data }: { data: number[] }) => {
   const max = Math.max(...validData), min = Math.min(...validData), range = max - min || 1;
   const W = 72, H = 22;
   const pts = validData.map((v, i) => `${(i / (validData.length - 1)) * W},${H - ((v - min) / range) * H}`).join(' ');
+  const areaPts = `${pts} ${W},${H} 0,${H}`;
+  const lastVal = validData[validData.length - 1];
+  const prevVal = validData[validData.length - 2] || lastVal;
+  const trendUp = lastVal >= prevVal;
   return (
     <svg width={W} height={H} style={{ overflow: 'visible', flexShrink: 0 }}>
-      <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
+      <defs>
+        <linearGradient id={`spark-${Math.random().toString(36).slice(2)}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={trendUp ? 'var(--accent)' : 'var(--danger)'} stopOpacity={0.3}/>
+          <stop offset="100%" stopColor={trendUp ? 'var(--accent)' : 'var(--danger)'} stopOpacity={0}/>
+        </linearGradient>
+      </defs>
+      <polygon points={areaPts} fill={`url(#spark-${Math.random().toString(36).slice(2)})`} opacity={0.5} />
+      <polyline points={pts} fill="none" stroke={trendUp ? 'var(--accent)' : 'var(--danger)'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 };
@@ -197,12 +208,13 @@ const Sparkline = ({ data }: { data: number[] }) => {
 const ScoreRing = ({ score }: { score: number }) => {
   const r = 12, circ = 2 * Math.PI * r;
   const color = score >= 80 ? 'var(--accent)' : score >= 50 ? 'var(--warning)' : 'var(--danger)';
+  const glowColor = score >= 80 ? 'rgba(16 185 129 / 0.4)' : score >= 50 ? 'rgba(245 158 11 / 0.4)' : 'rgba(244 63 94 / 0.4)';
   return (
-    <svg width={30} height={30} className="score-ring" style={{ flexShrink: 0 }}>
+    <svg width={30} height={30} className="score-ring" style={{ flexShrink: 0, filter: `drop-shadow(0 0 4px ${glowColor})` }}>
       <circle cx={15} cy={15} r={r} fill="none" stroke="var(--border-strong)" strokeWidth="2.5" />
       <circle cx={15} cy={15} r={r} fill="none" stroke={color} strokeWidth="2.5"
         strokeDasharray={circ} strokeDashoffset={circ - (score / 100) * circ}
-        strokeLinecap="round" transform="rotate(-90 15 15)" />
+        strokeLinecap="round" transform="rotate(-90 15 15)" style={{ transition: 'stroke-dashoffset 0.5s ease' }} />
       <text x={15} y={15} dominantBaseline="central" textAnchor="middle"
         style={{ fontSize: 7, fontWeight: 900, fill: color }}>{score}</text>
     </svg>
@@ -269,6 +281,7 @@ function FilterDropdown({ label, options, selected, onToggle }: {
   const dropdownStyle = useMemo(() => {
     const rect = ref.current?.getBoundingClientRect();
     return {
+      position: 'fixed' as const,
       top: (rect?.bottom ?? 0) + 4,
       left: rect?.left ?? 0,
       width: Math.max(rect?.width ?? 0, 220),
@@ -408,33 +421,50 @@ interface ResourceTableProps {
 }
 
 const COLUMNS = [
-  { key: 'name',           label: 'Name',           defaultW: 200 },
-  { key: 'type',           label: 'Type',          defaultW: 130 },
-  { key: 'location',       label: 'Location',       defaultW: 100 },
-  { key: 'resourceGroup',  label: 'Resource Group', defaultW: 140 },
-  { key: 'subscriptionId', label: 'Subscription',  defaultW: 150 },
-  { key: 'optimization',   label: 'Score',         defaultW: 90 },
-  { key: 'cost',           label: 'Cost',          defaultW: 100 },
+  { key: 'name',           label: 'Name',           defaultW: 120, minWidth: 80 },
+  { key: 'type',           label: 'Type',          defaultW: 100, minWidth: 60 },
+  { key: 'location',       label: 'Location',       defaultW: 80, minWidth: 50 },
+  { key: 'resourceGroup',  label: 'Resource Group', defaultW: 100, minWidth: 60 },
+  { key: 'subscriptionId', label: 'Subscription ID',  defaultW: 90, minWidth: 60 },
+  { key: 'optimization',   label: 'Efficiency',         defaultW: 70, minWidth: 50 },
+  { key: 'cost',           label: 'Cost',          defaultW: 80, minWidth: 60 },
 ];
 
 function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgClick, onSubClick, onTypeClick, onResourceClick }: ResourceTableProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const [widths, setWidths] = useState<Record<string, number>>(
     Object.fromEntries(COLUMNS.map(c => [c.key, c.defaultW]))
   );
-  const wrapRef = useRef<HTMLDivElement>(null);
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
-    if (wrapRef.current) {
-      const availableW = wrapRef.current.clientWidth;
-      const defaultTotal = COLUMNS.reduce((sum, c) => sum + c.defaultW, 0);
-      if (availableW > defaultTotal) {
-        setWidths(prev => ({
-          ...prev,
-          name: prev.name + (availableW - defaultTotal)
-        }));
+    const updateWidths = () => {
+      if (wrapRef.current) {
+        const availableW = wrapRef.current.clientWidth - 32; // Account for padding
+        const totalDefault = COLUMNS.reduce((sum, c) => sum + c.defaultW, 0);
+        const totalMin = COLUMNS.reduce((sum, c) => sum + (c as typeof COLUMNS[0] & { minWidth: number }).minWidth, 0);
+
+        if (availableW < totalMin) {
+          // Very constrained - use minimum widths
+          setWidths(Object.fromEntries(COLUMNS.map(c => [c.key, (c as typeof COLUMNS[0] & { minWidth: number }).minWidth])));
+        } else if (availableW < totalDefault) {
+          // Constrained - scale down proportionally
+          const scale = (availableW - totalMin) / (totalDefault - totalMin);
+          setWidths(Object.fromEntries(COLUMNS.map(c => {
+            const minW = (c as typeof COLUMNS[0] & { minWidth: number }).minWidth;
+            return [c.key, Math.round(minW + (c.defaultW - minW) * scale)];
+          })));
+        } else {
+          // Extra space - expand all columns proportionally
+          const scale = availableW / totalDefault;
+          setWidths(Object.fromEntries(COLUMNS.map(c => [c.key, Math.floor(c.defaultW * scale)])));
+        }
       }
-    }
+    };
+
+    updateWidths();
+    window.addEventListener('resize', updateWidths);
+    return () => window.removeEventListener('resize', updateWidths);
   }, []);
 
   const startResize = (key: string, e: React.MouseEvent) => {
@@ -450,11 +480,9 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
     document.addEventListener('mouseup', onUp);
   };
 
-  const totalWidth = COLUMNS.reduce((sum, c) => sum + widths[c.key], 0);
-
   return (
     <div className="resource-table-wrap" ref={wrapRef}>
-      <table className="resource-table" style={{ width: totalWidth, tableLayout: 'fixed' }}>
+      <table className="resource-table" style={{ width: '100%', tableLayout: 'fixed' }}>
         <thead>
           <tr>
             {COLUMNS.map(c => (
@@ -465,7 +493,7 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
                     <span style={{ color: 'var(--accent)', fontSize: 10 }}>{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
                   )}
                 </span>
-                <span className="col-resize-handle" onMouseDown={e => startResize(c.key, e)} />
+                <span className="col-resize-handle" onMouseDown={e => startResize(c.key, e)} onClick={e => e.stopPropagation()} />
               </th>
             ))}
           </tr>
@@ -744,15 +772,26 @@ export default function App() {
 
   const [costs, setCosts] = useState<CostPrediction[]>([]);
   const [costsLoading, setCostsLoading] = useState(false);
+  const [syncedSubIds, setSyncedSubIds] = useState<Set<string>>(new Set());
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [regionFilter, setRegionFilter] = useState<string[]>([]);
-  const [subFilter, setSubFilter] = useState<string[]>([]);
-  const [rgFilter, setRgFilter] = useState<string[]>([]);
-  const [typeFilter, setTypeFilter] = useState('');
-  const [showOrphanedOnly, setShowOrphanedOnly] = useState(false);
+
+  const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('cloudviz-search') || '');
+  const [regionFilter, setRegionFilter] = useState<string[]>(() => {
+    const saved = localStorage.getItem('cloudviz-regionFilter');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [subFilter, setSubFilter] = useState<string[]>(() => {
+    const saved = localStorage.getItem('cloudviz-subFilter');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [rgFilter, setRgFilter] = useState<string[]>(() => {
+    const saved = localStorage.getItem('cloudviz-rgFilter');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [typeFilter, setTypeFilter] = useState(() => localStorage.getItem('cloudviz-typeFilter') || '');
+  const [showOrphanedOnly, setShowOrphanedOnly] = useState(() => localStorage.getItem('cloudviz-orphaned') === 'true');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('cloudviz-theme');
@@ -763,11 +802,16 @@ export default function App() {
   const [aiInsight, setAiInsight] = useState<{ metrics: MetricSeries; recommendation: string } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
-  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState<SortConfig>(() => {
+    const saved = localStorage.getItem('cloudviz-sort');
+    return saved ? JSON.parse(saved) : { key: null, direction: 'asc' };
+  });
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25;
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'resources' | 'costs' | 'history'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'resources' | 'costs' | 'history'>(() => {
+    return (localStorage.getItem('cloudviz-tab') as 'dashboard' | 'resources' | 'costs' | 'history') || 'dashboard';
+  });
   const [selectedCost, setSelectedCost] = useState<CostPrediction | null>(null);
   const [costSearchQuery, setCostSearchQuery] = useState('');
   const [dailyCosts, setDailyCosts] = useState<{ date: string; cost: number }[]>([]);
@@ -775,6 +819,7 @@ export default function App() {
     const saved = localStorage.getItem('cloudviz-budget');
     return saved ? parseFloat(saved) : 0;
   });
+  useEffect(() => { localStorage.setItem('cloudviz-budget', String(budgetLimit)); }, [budgetLimit]);
   const [history, setHistory] = useState<ResourceChange[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -792,6 +837,17 @@ export default function App() {
     document.documentElement.dataset.theme = isDarkMode ? 'dark' : 'light';
     localStorage.setItem('cloudviz-theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
+
+  // Persist filters and UI state
+  useEffect(() => { localStorage.setItem('cloudviz-search', searchQuery); }, [searchQuery]);
+  useEffect(() => { localStorage.setItem('cloudviz-regionFilter', JSON.stringify(regionFilter)); }, [regionFilter]);
+  useEffect(() => { localStorage.setItem('cloudviz-subFilter', JSON.stringify(subFilter)); }, [subFilter]);
+  useEffect(() => { localStorage.setItem('cloudviz-rgFilter', JSON.stringify(rgFilter)); }, [rgFilter]);
+  useEffect(() => { localStorage.setItem('cloudviz-typeFilter', typeFilter); }, [typeFilter]);
+  useEffect(() => { localStorage.setItem('cloudviz-orphaned', String(showOrphanedOnly)); }, [showOrphanedOnly]);
+  useEffect(() => { localStorage.setItem('cloudviz-sort', JSON.stringify(sortConfig)); }, [sortConfig]);
+  useEffect(() => { localStorage.setItem('cloudviz-tab', activeTab); }, [activeTab]);
+  useEffect(() => { localStorage.setItem('cloudviz-sidebarCollapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
 
   // Fetch filter options
   useEffect(() => {
@@ -918,6 +974,8 @@ export default function App() {
             const filtered = prev.filter(c => c.subscriptionId !== subId);
             return [...filtered, ...newItems];
           });
+        } else if (msg.type === 'status' && msg.message === 'synced') {
+          setSyncedSubIds(prev => new Set(prev).add(msg.subId));
         } else if (msg.type === 'done') {
           es.close();
           setCostsLoading(false);
@@ -933,6 +991,31 @@ export default function App() {
     };
   };
 
+  const refreshCosts = async () => {
+    setCosts([]);
+    setSyncedSubIds(new Set());
+    try {
+      await fetch('http://localhost:8080/api/costs/cache', { method: 'DELETE' });
+    } catch (err) {
+      console.error('Failed to clear cost cache', err);
+    }
+    
+    // Also refresh filters so that uniqueSubs gets populated if it failed on initial load
+    try {
+      const fRes = await fetch('http://localhost:8080/api/filters');
+      const fData = await fRes.json();
+      setAllPossibleFilters(fData);
+    } catch (err) {
+      console.error('Failed to fetch filters', err);
+    }
+    
+    // We intentionally don't call fetchCosts(true) immediately here because setAllPossibleFilters
+    // is async. The useEffect observing uniqueSubs will automatically trigger fetchCosts()
+    // once uniqueSubs populates. If it's already populated correctly, we can enforce a
+    // fetchCosts call right now, but wait for state to settle.
+    fetchCosts(true);
+  };
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (uniqueSubs.length > 0) fetchCosts(); }, [uniqueSubs]);
 
@@ -942,7 +1025,12 @@ export default function App() {
     try {
       const res = await fetch('http://localhost:8080/api/history?limit=100');
       const data = await res.json();
-      setHistory(data);
+      if (Array.isArray(data)) {
+        setHistory(data);
+      } else {
+        console.error('History API returned non-array:', data);
+        setHistory([]);
+      }
     } catch (err) {
       console.error('Failed to fetch history', err);
     } finally {
@@ -992,12 +1080,18 @@ export default function App() {
 
   // Dashboard computed values
   const costsByType = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { value: number; raw: string }>();
     costs.forEach(c => {
-      const type = friendlyType(c.resourceType || 'Other');
-      map.set(type, (map.get(type) || 0) + c.cost);
+      const raw = c.resourceType || 'Other';
+      const type = friendlyType(raw);
+      const existing = map.get(type);
+      if (existing) {
+        existing.value += c.cost;
+      } else {
+        map.set(type, { value: c.cost, raw });
+      }
     });
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 8);
+    return Array.from(map.entries()).map(([name, data]) => ({ name, value: data.value, raw: data.raw })).sort((a, b) => b.value - a.value).slice(0, 8);
   }, [costs]);
 
   const costsByRegion = useMemo(() => {
@@ -1404,10 +1498,12 @@ export default function App() {
                     </div>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
                   </div>
-                  <div style={{ fontSize: 32, fontWeight: 900, color: budgetStatus?.status === 'over' ? 'var(--danger)' : budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>${totalCostsSum.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                  <div style={{ fontSize: 32, fontWeight: 900, color: budgetStatus?.status === 'over' ? 'var(--danger)' : budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>
+                    {costsLoading ? <span style={{ opacity: 0.5 }}>—</span> : `$${totalCostsSum.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                  </div>
                   <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <span>{costs.length} entries</span>
-                    {budgetStatus && <span style={{ padding: '2px 8px', borderRadius: 12, background: budgetStatus.color === 'var(--accent)' ? 'var(--accent-dim)' : budgetStatus.color === 'var(--warning)' ? 'var(--warning-dim)' : 'var(--danger-dim)', color: budgetStatus.color, fontSize: 10, fontWeight: 600 }}>{budgetStatus.message}</span>}
+                    <span>{costsLoading ? 'Loading...' : `${costs.length} cost entries`}</span>
+                    {budgetStatus && !costsLoading && <span style={{ padding: '2px 8px', borderRadius: 12, background: budgetStatus.color === 'var(--accent)' ? 'var(--accent-dim)' : budgetStatus.color === 'var(--warning)' ? 'var(--warning-dim)' : 'var(--danger-dim)', color: budgetStatus.color, fontSize: 10, fontWeight: 600 }}>{budgetStatus.message}</span>}
                   </div>
                   <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: budgetStatus?.status === 'over' || budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', opacity: 0.6 }} />
                 </div>
@@ -1427,7 +1523,7 @@ export default function App() {
                   <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{uniqueSubs.length} subscriptions</div>
                 </div>
 
-                <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setShowOrphanedOnly(lowScoreCount > 0); setCurrentPage(1); }}>
+                <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
                   <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(245 158 11 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1557,7 +1653,7 @@ export default function App() {
                       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 10 }}>Biggest Changes</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {biggestChanges.map((c, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setActiveTab('resources'); setSearchQuery(c.resourceGroup || ''); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--border-strong)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setActiveTab('resources'); c.resourceGroup ? setRgFilter([c.resourceGroup]) : setRgFilter([]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--border-strong)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
                             <div style={{ width: 28, height: 28, borderRadius: 6, background: c.change > 0 ? 'var(--danger-dim)' : 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.change > 0 ? 'var(--danger)' : 'var(--accent)'} strokeWidth="2.5">{c.change > 0 ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M19 12l-7 7-7-7" />}</svg>
                             </div>
@@ -1583,28 +1679,28 @@ export default function App() {
 
               {/* Charts Row */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 16 }}>
-                {/* Cost by Type */}
+                {/* Cost by Region (PieChart) */}
                 <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--accent-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--blue-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--blue) 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59, 130, 246, 0.3)' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>
                       </div>
                       <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Type</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsByType.length} resource types</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Region</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsByRegion.length} regions</span>
                       </div>
                     </div>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '4px 10px', borderRadius: 12, border: '1px solid var(--accent-border)' }}>Interactive</span>
+                    <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: 'var(--blue)', background: 'var(--blue-dim)', padding: '4px 10px', borderRadius: 12, border: '1px solid var(--blue-border)' }}>Interactive</span>
                   </div>
-                  {costsByType.length > 0 ? (
+                  {costsByRegion.length > 0 ? (
                     <>
                       <div style={{ position: 'relative' }}>
                         <ResponsiveContainer width="100%" height={160}>
                           <PieChart>
                             <Pie
-                              data={costsByType}
+                              data={costsByRegion}
                               dataKey="value"
                               nameKey="name"
                               cx="50%"
@@ -1612,10 +1708,10 @@ export default function App() {
                               outerRadius={60}
                               innerRadius={35}
                               paddingAngle={2}
-                              onClick={(data) => { if (data?.name) { setActiveTab('resources'); setSearchQuery(String(data.name)); } }}
+                              onClick={(data: any) => { const name = data?.name || data?.payload?.name; if (name) { setActiveTab('resources'); setRegionFilter([String(name)]); setCurrentPage(1); } }}
                               style={{ cursor: 'pointer' }}
                             >
-                              {costsByType.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} />)}
+                              {costsByRegion.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', transition: 'all 0.2s ease', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />)}
                             </Pie>
                             <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
                           </PieChart>
@@ -1626,8 +1722,8 @@ export default function App() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                        {costsByType.slice(0, 6).map((item, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onClick={() => { setActiveTab('resources'); setSearchQuery(item.name); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.background='var(--accent-dim)'; e.currentTarget.style.transform='translateY(-1px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--bg-surface)'; e.currentTarget.style.transform='translateY(0)'; }}>
+                        {costsByRegion.slice(0, 6).map((item, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onClick={() => { setActiveTab('resources'); setRegionFilter([item.name]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--blue)'; e.currentTarget.style.background='var(--blue-dim)'; e.currentTarget.style.transform='translateY(-1px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--bg-surface)'; e.currentTarget.style.transform='translateY(0)'; }}>
                             <div style={{ width: 10, height: 10, borderRadius: 3, background: COLORS[i % COLORS.length] }} />
                             <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-2)' }}>{item.name}</span>
                             <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</span>
@@ -1638,35 +1734,41 @@ export default function App() {
                   ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
                 </div>
 
-                {/* Cost by Region */}
+                {/* Cost by Resource Type (BarChart) */}
                 <div className="card chart-card-clickable" style={{ padding: 24 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--blue-dim)', border: '1px solid rgba(59 130 246 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>
+                      <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost by Region</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost by Resource Type</span>
                     </div>
                     <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click bars</span>
                   </div>
-                  {costsByRegion.length > 0 ? (
+                  {costsByType.length > 0 ? (
                     <>
                       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                        {costsByRegion.slice(0, 3).map((region, i) => (
-                          <div key={i} style={{ flex: 1, padding: '8px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); setRegionFilter([region.name]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--blue)'; e.currentTarget.style.transform='translateY(-2px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0)'; }}>
+                        {costsByType.slice(0, 3).map((item, i) => (
+                          <div key={i} style={{ flex: 1, padding: '8px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); setTypeFilter(item.raw); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.transform='translateY(-2px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0)'; }}>
                             <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-2)', marginBottom: 2 }}>#{i + 1}</div>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(region.value / 1000).toFixed(1)}k</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{region.name}</div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</div>
+                            <div style={{ fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
                           </div>
                         ))}
                       </div>
-                      <ResponsiveContainer width="100%" height={Math.max(120, costsByRegion.length * 24)}>
-                        <BarChart data={costsByRegion} layout="vertical" margin={{ left: 60, right: 10 }}>
+                      <ResponsiveContainer width="100%" height={Math.max(120, costsByType.length * 24)}>
+                        <BarChart data={costsByType} layout="vertical" margin={{ left: 60, right: 10 }}>
+                          <defs>
+                            <linearGradient id="barGradientType" x1="0" y1="0" x2="1" y2="0">
+                              <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.8}/>
+                              <stop offset="100%" stopColor="#34d399" stopOpacity={1}/>
+                            </linearGradient>
+                          </defs>
                           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
                           <XAxis type="number" tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                          <YAxis type="category" dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 10 }} width={55} axisLine={false} tickLine={false} />
-                          <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} cursor={{ fill: 'rgba(59 130 246 / 0.1)' }} />
-                          <Bar dataKey="value" fill="var(--blue)" radius={[0, 4, 4, 0]} onClick={(data) => { if (data?.name) { setActiveTab('resources'); setRegionFilter([String(data.name)]); setCurrentPage(1); } }} style={{ cursor: 'pointer' }} />
+                          <YAxis type="category" dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 10 }} width={80} axisLine={false} tickLine={false} />
+                          <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} cursor={{ fill: 'var(--accent-dim)' }} />
+                          <Bar dataKey="value" fill="url(#barGradientType)" radius={[0, 4, 4, 0]} onClick={(data: any) => { const raw = data?.raw || data?.payload?.raw; if (raw) { setActiveTab('resources'); setTypeFilter(raw); setCurrentPage(1); } }} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} />
                         </BarChart>
                       </ResponsiveContainer>
                     </>
@@ -1697,7 +1799,7 @@ export default function App() {
                       const maxCost = topSpenders[0]?.cost || 1;
                       const percentage = maxCost > 0 ? (c.cost / maxCost) * 100 : 0;
                       return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(c.resourceGroup || ''); }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--danger)'; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); c.resourceGroup ? setRgFilter([c.resourceGroup]) : setRgFilter([]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--danger)'; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
                           <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, ${COLORS[i % COLORS.length]}15, transparent)`, transition: 'width 0.5s ease' }} />
                           <div style={{ width: 28, height: 28, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS[i % COLORS.length]}, ${COLORS[(i + 1) % COLORS.length]})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, zIndex: 1, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{i + 1}</div>
                           <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
@@ -1728,7 +1830,7 @@ export default function App() {
                       <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsBySubscription.length} subscriptions</span>
                     </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: '#8b5cf6', background: 'rgba(139 92 246 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(139 92 246 / 0.2)' }}>Interactive</span>
+                  <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#8b5cf6', background: 'rgba(139 92 246 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(139 92 246 / 0.2)' }}>Interactive</span>
                 </div>
                 {costsBySubscription.length > 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1768,14 +1870,14 @@ export default function App() {
                         <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Tagged resources</span>
                       </div>
                     </div>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: '#ec4899', background: 'rgba(236 72 153 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(236 72 153 / 0.2)' }}>Interactive</span>
+                    <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#ec4899', background: 'rgba(236 72 153 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(236 72 153 / 0.2)' }}>Interactive</span>
                   </div>
                   <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
                     <div style={{ position: 'relative', width: '50%' }}>
                       <ResponsiveContainer width="100%" height={120}>
                         <PieChart>
                           <Pie data={costsByEnvironment.filter(e => e.name !== 'Untagged')} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={45} innerRadius={25} paddingAngle={2} style={{ cursor: 'pointer' }}>
-                            {costsByEnvironment.filter(e => e.name !== 'Untagged').map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} />)}
+                            {costsByEnvironment.filter(e => e.name !== 'Untagged').map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', transition: 'all 0.2s ease', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />)}
                           </Pie>
                           <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
                         </PieChart>
@@ -1848,7 +1950,7 @@ export default function App() {
                       <span style={{ fontSize: 10, color: 'var(--text-3)' }}>30-day rolling view</span>
                     </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: '#06b6d4', background: 'rgba(6 182 212 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(6 182 212 / 0.2)' }}>Interactive</span>
+                  <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#06b6d4', background: 'rgba(6 182 212 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(6 182 212 / 0.2)' }}>Interactive</span>
                 </div>
                 {Array.isArray(dailyCosts) && dailyCosts.length > 0 && (
                   <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
@@ -1889,7 +1991,7 @@ export default function App() {
                     <LineChart data={dailyCosts} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                       <defs>
                         <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25}/>
+                          <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.3}/>
                           <stop offset="100%" stopColor="var(--accent)" stopOpacity={0}/>
                         </linearGradient>
                         <linearGradient id="lineGradient" x1="0" y1="0" x2="1" y2="0">
@@ -1902,7 +2004,8 @@ export default function App() {
                       <XAxis dataKey="date" tick={{ fill: 'var(--text-3)', fontSize: 9 }} tickFormatter={v => v ? v.slice(5) : ''} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: 'var(--text-3)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} labelFormatter={(l: unknown) => String(l)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
-                      <Line type="monotone" dataKey="cost" stroke="url(#lineGradient)" strokeWidth={2.5} dot={false} activeDot={{ r: 5, fill: 'var(--accent)', stroke: 'var(--bg-card)', strokeWidth: 2 }} />
+                      <Area type="monotone" dataKey="cost" stroke="transparent" fill="url(#areaGradient)" fillOpacity={1} />
+                      <Line type="monotone" dataKey="cost" stroke="url(#lineGradient)" strokeWidth={2.5} dot={false} activeDot={{ r: 6, fill: 'var(--accent)', stroke: 'var(--bg-card)', strokeWidth: 3, style: { filter: 'drop-shadow(0 2px 6px rgba(16 185 129 / 0.4))' } }} />
                     </LineChart>
                   </ResponsiveContainer>
                 ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3v18h18" /><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" /></svg>} message="No trend data available" />}
@@ -1971,7 +2074,7 @@ export default function App() {
                       <span style={{ fontSize: 10, color: 'var(--text-3)' }}>By resource group</span>
                     </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', background: 'rgba(245 158 11 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(245 158 11 / 0.2)' }}>Interactive</span>
+                  <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', background: 'rgba(245 158 11 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(245 158 11 / 0.2)' }}>Interactive</span>
                 </div>
                 {resourceTopology.length > 0 ? (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
@@ -1979,12 +2082,12 @@ export default function App() {
                       const maxCost = resourceTopology[0]?.cost || 1;
                       const costPercent = maxCost > 0 ? (rg.cost / maxCost) * 100 : 0;
                       return (
-                        <div key={i} style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 14, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setRgFilter([rg.name]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--warning-border)'; e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.boxShadow='var(--shadow-md)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; }}>
-                          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, rgba(245 158 11 / 0.6), rgba(245 158 11 / ${costPercent / 100 * 0.4}))` }} />
+                        <div key={i} style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 14, border: '1px solid var(--border)', transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)', cursor: 'pointer', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setRgFilter([rg.name]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='#f59e0b'; e.currentTarget.style.transform='translateY(-3px) scale(1.01)'; e.currentTarget.style.boxShadow='0 8px 24px rgba(245 158 11 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0) scale(1)'; e.currentTarget.style.boxShadow='none'; }}>
+                          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, rgba(245 158 11 / 0.8), rgba(245 158 11 / ${costPercent / 100 * 0.4}))` }} />
                           <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rg.name}>{rg.name}</div>
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
                             {rg.types.slice(0, 3).map((t, j) => (
-                              <span key={j} style={{ fontSize: 10, background: 'var(--accent-dim)', color: 'var(--accent)', padding: '3px 8px', borderRadius: 4, fontWeight: 500 }}>{t.type} ({t.count})</span>
+                              <span key={j} style={{ fontSize: 10, background: 'var(--accent-dim)', color: 'var(--accent)', padding: '3px 8px', borderRadius: 4, fontWeight: 500, transition: 'all 0.2s ease' }}>{t.type} ({t.count})</span>
                             ))}
                             {rg.types.length > 3 && <span style={{ fontSize: 10, background: 'var(--bg-hover)', color: 'var(--text-3)', padding: '3px 8px', borderRadius: 4 }}>+{rg.types.length - 3}</span>}
                           </div>
@@ -2009,31 +2112,37 @@ export default function App() {
 
               {/* Reserved Instance Recommendations */}
               {riRecommendations.length > 0 && (
-                <div className="card" style={{ padding: 24 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--blue-dim)', border: '1px solid rgba(59 130 246 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(59 130 246 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59 130 246 / 0.3)' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+                      </div>
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Reserved Instance Savings</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Up to 72% cost reduction</span>
+                      </div>
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Reserved Instance Savings</span>
-                    <div style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 12, background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 12, fontWeight: 700 }}>
-                      ${riRecommendations.reduce((s, r) => s + r.yearlySavings, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr potential
+                    <div style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(16 185 129 / 0.3)' }}>
+                      ${riRecommendations.reduce((s, r) => s + r.yearlySavings, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr
                     </div>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
-                    Resources with consistent usage could benefit from Azure Reserved Instances (up to 72% savings)
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    💡 Resources with consistent usage could benefit from Azure Reserved Instances
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {riRecommendations.map((r, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setRgFilter([r.resourceGroup]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--blue)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                        <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setRgFilter([r.resourceGroup]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='#3b82f6'; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(59 130 246 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                        <div style={{ width: 40, height: 40, borderRadius: 10, background: 'linear-gradient(135deg, var(--blue-dim) 0%, rgba(59 130 246 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid rgba(59 130 246 / 0.2)' }}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.resourceGroup}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{r.region}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.region}</div>
                         </div>
                         <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)' }}>Save ${r.yearlySavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>Save ${r.yearlySavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr</div>
                           <div style={{ fontSize: 11, color: 'var(--text-2)' }}>${r.monthlyCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo current</div>
                         </div>
                       </div>
@@ -2102,13 +2211,15 @@ export default function App() {
 
                 {/* Stats */}
                 <div style={{ display: 'flex', gap: 20, marginLeft: 'auto', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <div className="stat-pill">
-                    <span className="stat-label">Filtered Cost</span>
-                    <span className="stat-value">${filteredTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <div className="stat-pill" style={{ position: 'relative' }}>
+                    <span className="stat-label">Total Cost</span>
+                    <span className="stat-value">${filteredTotalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>for {totalResources.toLocaleString()} resources</span>
                   </div>
                   <div className="stat-pill">
-                    <span className="stat-label">Resources</span>
-                    <span className="stat-value neutral">{totalResources.toLocaleString()}</span>
+                    <span className="stat-label">Showing</span>
+                    <span className="stat-value neutral">{resources.length.toLocaleString()}</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>of {totalResources.toLocaleString()}</span>
                   </div>
 
                   <div style={{ display: 'flex', gap: 6 }}>
@@ -2119,10 +2230,10 @@ export default function App() {
                     {costsLoading ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-2)', padding: '0 8px' }}>
                         <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-                        {`${new Set(costs.map(c => c.subscriptionId)).size}/${uniqueSubs.length} subs`}
+                        {`${syncedSubIds.size}/${uniqueSubs.length} subs`}
                       </div>
                     ) : (
-                      <button className="btn" onClick={() => { setCosts([]); fetchCosts(true); }}>
+                      <button className="btn" onClick={refreshCosts}>
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
                         Refresh Costs
                       </button>
@@ -2228,13 +2339,15 @@ export default function App() {
                           border: '1px solid var(--border)',
                           borderLeft: `3px solid ${borderColor}`,
                           borderRadius: 12,
-                          transition: 'all 0.2s ease',
+                          transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
                           position: 'relative',
-                          overflow: 'hidden'
+                          overflow: 'hidden',
+                          cursor: 'pointer'
                         }}
-                        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.transform = 'translateX(4px)'; }}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; }}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.transform = 'translateX(6px)'; e.currentTarget.style.boxShadow = `0 4px 16px ${borderColor}15`; }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}
                       >
+                        <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(90deg, ${borderColor}08, transparent)`, opacity: 0, transition: 'opacity 0.2s ease' }} />
                         <div style={{
                           width: 36,
                           height: 36,
@@ -2244,7 +2357,9 @@ export default function App() {
                           alignItems: 'center',
                           justifyContent: 'center',
                           flexShrink: 0,
-                          border: `1px solid ${borderColor}33`
+                          border: `1px solid ${borderColor}33`,
+                          position: 'relative',
+                          zIndex: 1
                         }}>
                           {isCreated ? (
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
@@ -2337,10 +2452,10 @@ export default function App() {
                     {costsLoading ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-2)', padding: '0 8px' }}>
                         <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-                        {`${new Set(costs.map(c => c.subscriptionId)).size}/${uniqueSubs.length} subs`}
+                        {`${syncedSubIds.size}/${uniqueSubs.length} subs`}
                       </div>
                     ) : (
-                      <button className="btn" onClick={() => { setCosts([]); fetchCosts(true); }}>
+                      <button className="btn" onClick={refreshCosts}>
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
                         Refresh Costs
                       </button>
@@ -2367,7 +2482,8 @@ export default function App() {
               {costsLoading && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 12, color: 'var(--text-2)', fontSize: 13 }}>
                   <div className="spinner" />
-                  Syncing financial data ({new Set(costs.map(c => c.subscriptionId)).size}/{uniqueSubs.length} subscriptions)...
+                  Syncing financial data ({syncedSubIds.size}/{uniqueSubs.length} subscriptions)...
+
                 </div>
               )}
 
@@ -2381,8 +2497,11 @@ export default function App() {
                         key={i}
                         className="cost-card"
                         onClick={() => setSelectedCost(c)}
-                        style={{ position: 'relative', textAlign: 'left', width: '100%' }}
+                        style={{ position: 'relative', textAlign: 'left', width: '100%', overflow: 'hidden' }}
                       >
+                        {/* Background gradient */}
+                        <div style={{ position: 'absolute', top: 0, right: 0, width: '50%', height: '100%', background: trendUp ? 'linear-gradient(135deg, transparent, rgba(244 63 94 / 0.08))' : 'linear-gradient(135deg, transparent, rgba(16 185 129 / 0.08))', pointerEvents: 'none' }} />
+
                         {/* Trend indicator */}
                         {c.trend !== undefined && c.trend !== 0 && (
                           <div style={{
@@ -2398,7 +2517,8 @@ export default function App() {
                             fontWeight: 700,
                             background: trendUp ? 'var(--danger-dim)' : 'var(--accent-dim)',
                             color: trendUp ? 'var(--danger)' : 'var(--accent)',
-                            border: `1px solid ${trendUp ? 'var(--danger)' : 'var(--accent)'}33`
+                            border: `1px solid ${trendUp ? 'var(--danger)' : 'var(--accent)'}33`,
+                            boxShadow: trendUp ? '0 2px 8px rgba(244 63 94 / 0.2)' : '0 2px 8px rgba(16 185 129 / 0.2)'
                           }}>
                             {trendUp ? (
                               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
