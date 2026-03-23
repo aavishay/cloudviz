@@ -122,19 +122,33 @@ func (dc *dbCache) set(subID string, period string, data armcostmanagement.Query
 	colCost, colId, colRg, colType, colLoc := 0, -1, -1, -1, -1
 	if data.Properties.Columns != nil {
 		for i, col := range data.Properties.Columns {
-			if col.Name == nil { continue }
+			if col.Name == nil {
+				continue
+			}
 			name := *col.Name
-			if name == "PreTaxCost" || name == "Cost" { colCost = i }
-			if name == "ResourceId" { colId = i }
-			if name == "ResourceGroup" { colRg = i }
-			if name == "ResourceType" { colType = i }
-			if name == "ResourceLocation" || name == "Location" { colLoc = i }
+			if name == "PreTaxCost" || name == "Cost" {
+				colCost = i
+			}
+			if name == "ResourceId" {
+				colId = i
+			}
+			if name == "ResourceGroup" {
+				colRg = i
+			}
+			if name == "ResourceType" {
+				colType = i
+			}
+			if name == "ResourceLocation" || name == "Location" {
+				colLoc = i
+			}
 		}
 	}
 
 	now := time.Now()
 	for _, row := range data.Properties.Rows {
-		if len(row) < 1 { continue }
+		if len(row) < 1 {
+			continue
+		}
 
 		getVal := func(idx int) string {
 			if idx >= 0 && idx < len(row) && row[idx] != nil {
@@ -146,10 +160,14 @@ func (dc *dbCache) set(subID string, period string, data armcostmanagement.Query
 		var cost float64
 		if colCost < len(row) {
 			switch v := row[colCost].(type) {
-			case float64: cost = v
-			case float32: cost = float64(v)
-			case int64: cost = float64(v)
-			case int: cost = float64(v)
+			case float64:
+				cost = v
+			case float32:
+				cost = float64(v)
+			case int64:
+				cost = float64(v)
+			case int:
+				cost = float64(v)
 			default:
 				if s, ok := v.(string); ok {
 					fmt.Sscanf(s, "%f", &cost)

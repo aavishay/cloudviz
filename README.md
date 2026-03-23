@@ -37,7 +37,10 @@ The easiest way to run CloudViz is via the unified CLI binary:
 ## CLI Usage
 The `cloudviz` binary also supports CLI commands for resource and cost inspection:
 
-- `cloudviz resources`: List Azure resources with their associated costs.
+- `cloudviz resources --orphaned`: List orphaned resources only.
+- `cloudviz resources --unattached-disk`: List unattached disks only.
+- `cloudviz resources --unassigned-pip`: List unassigned public IPs only.
+- `cloudviz resources --unattached-nic`: List unattached network interfaces only.
 - `cloudviz costs --sub <subscription_id>`: Show cost breakdown for a specific subscription.
 - `cloudviz cache clear`: Clear the local cost cache.
 
@@ -45,6 +48,3 @@ The `cloudviz` binary also supports CLI commands for resource and cost inspectio
 - `backend/`: Go source code for the API server and CLI tool.
 - `frontend/`: React/Vite application for the web dashboard.
 - `backend/dist/`: Embedded frontend assets (built from `frontend/`).
-
-## Security Note
-CloudViz does not commit binaries, databases, or PII to the repository. Ensure your `.gitignore` is correctly configured to ignore `.db` and `.log` files.
