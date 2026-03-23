@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"embed"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/costmanagement/armcostmanagement"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
@@ -19,7 +20,6 @@ import (
 	_ "github.com/glebarez/go-sqlite"
 	"github.com/spf13/cobra"
 	"golang.org/x/time/rate"
-	"embed"
 	"io/fs"
 )
 
@@ -71,8 +71,11 @@ func main() {
 			limit, _ := cmd.Flags().GetInt("limit")
 			search, _ := cmd.Flags().GetString("search")
 			orphaned, _ := cmd.Flags().GetBool("orphaned")
+			unattachedDisk, _ := cmd.Flags().GetBool("unattached-disk")
+			unassignedPIP, _ := cmd.Flags().GetBool("unassigned-pip")
+			unattachedNIC, _ := cmd.Flags().GetBool("unattached-nic")
 
-			resources, totalCost, err := FetchResourcesWithCosts(context.Background(), nil, nil, nil, nil, search, orphaned)
+			resources, totalCost, err := FetchResourcesWithCosts(context.Background(), nil, nil, nil, nil, search, orphaned, unattachedDisk, unassignedPIP, unattachedNIC, "", "")
 			if err != nil {
 				log.Fatalf("Error: %v", err)
 			}
@@ -87,9 +90,13 @@ func main() {
 
 			for _, r := range resources {
 				name := r.Name
-				if len(name) > 48 { name = name[:45] + "..." }
+				if len(name) > 48 {
+					name = name[:45] + "..."
+				}
 				resType := strings.Replace(r.Type, "microsoft.", "", 1)
-				if len(resType) > 28 { resType = resType[:25] + "..." }
+				if len(resType) > 28 {
+					resType = resType[:25] + "..."
+				}
 				fmt.Printf("%-50s %-30s %-15s $%-9.2f\n", name, resType, r.Location, r.Cost)
 			}
 		},
@@ -97,6 +104,9 @@ func main() {
 	resourcesCmd.Flags().IntP("limit", "l", 20, "Limit number of resources")
 	resourcesCmd.Flags().StringP("search", "s", "", "Search query")
 	resourcesCmd.Flags().Bool("orphaned", false, "Filter orphaned resources")
+	resourcesCmd.Flags().Bool("unattached-disk", false, "Filter unattached disks only")
+	resourcesCmd.Flags().Bool("unassigned-pip", false, "Filter unassigned public IPs only")
+	resourcesCmd.Flags().Bool("unattached-nic", false, "Filter unattached NICs only")
 
 	// ─── Command: costs ──────────────────────────────────────────────────────
 	var costsCmd = &cobra.Command{
@@ -118,7 +128,7 @@ func main() {
 
 			fmt.Printf("Cost Breakdown for %s (Last 30 days)\n", subID)
 			items := normalizeResults(res.QueryResult).([]interface{})
-			
+
 			// Sort by cost desc
 			sort.Slice(items, func(i, j int) bool {
 				return items[i].(map[string]interface{})["cost"].(float64) > items[j].(map[string]interface{})["cost"].(float64)
@@ -129,9 +139,13 @@ func main() {
 			for _, item := range items {
 				m := item.(map[string]interface{})
 				rt := m["resourceType"].(string)
-				if len(rt) > 28 { rt = rt[:25] + "..." }
+				if len(rt) > 28 {
+					rt = rt[:25] + "..."
+				}
 				rg := m["resourceGroup"].(string)
-				if len(rg) > 38 { rg = rg[:35] + "..." }
+				if len(rg) > 38 {
+					rg = rg[:35] + "..."
+				}
 				fmt.Printf("%-30s %-40s $%-9.2f\n", rt, rg, m["cost"].(float64))
 			}
 		},
@@ -192,10 +206,15 @@ func startServer(port string) {
 		locs := c.QueryArray("location")
 		search := c.Query("search")
 		orphaned := c.Query("orphaned") == "true"
+		unattachedDiskOnly := c.Query("unattachedDiskOnly") == "true"
+		unassignedPIPOnly := c.Query("unassignedPIPOnly") == "true"
+		unattachedNICOnly := c.Query("unattachedNICOnly") == "true"
+		tagKey := c.Query("tagKey")
+		tagValue := c.Query("tagValue")
 		sortBy := c.Query("sortBy")
 		sortOrder := c.Query("sortOrder")
 
-		res, totalCost, err := FetchResourcesWithCosts(c.Request.Context(), subs, rgs, types, locs, search, orphaned)
+		res, totalCost, err := FetchResourcesWithCosts(c.Request.Context(), subs, rgs, types, locs, search, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly, tagKey, tagValue)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -233,7 +252,7 @@ func startServer(port string) {
 	})
 
 	r.GET("/api/filters", func(c *gin.Context) {
-		res, _, err := FetchResourcesWithCosts(c.Request.Context(), nil, nil, nil, nil, "", false)
+		res, _, err := FetchResourcesWithCosts(c.Request.Context(), nil, nil, nil, nil, "", false, false, false, false, "", "")
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -249,7 +268,11 @@ func startServer(port string) {
 
 		keys := func(m map[string]bool) []string {
 			var ks []string
-			for k := range m { if k != "" { ks = append(ks, k) } }
+			for k := range m {
+				if k != "" {
+					ks = append(ks, k)
+				}
+			}
 			sort.Strings(ks)
 			return ks
 		}
@@ -278,9 +301,11 @@ func startServer(port string) {
 
 	r.GET("/api/costs", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
-		rows, err := cache.db.Query("SELECT resource_group, resource_type, resource_location, cost, subscription_id FROM costs WHERE subscription_id IN (" + placeholders(len(subs)) + ")", (func() []any {
+		rows, err := cache.db.Query("SELECT resource_group, resource_type, resource_location, cost, subscription_id FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", (func() []any {
 			args := []any{}
-			for _, s := range subs { args = append(args, s) }
+			for _, s := range subs {
+				args = append(args, s)
+			}
 			return args
 		})()...)
 		if err != nil {
@@ -313,8 +338,11 @@ func startServer(port string) {
 		locs := c.QueryArray("location")
 		search := c.Query("search")
 		orphaned := c.Query("orphaned") == "true"
-		
-		res, _, err := FetchResourcesWithCosts(c.Request.Context(), subs, rgs, types, locs, search, orphaned)
+		unattachedDiskOnly := c.Query("unattachedDiskOnly") == "true"
+		unassignedPIPOnly := c.Query("unassignedPIPOnly") == "true"
+		unattachedNICOnly := c.Query("unattachedNICOnly") == "true"
+
+		res, _, err := FetchResourcesWithCosts(c.Request.Context(), subs, rgs, types, locs, search, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly, "", "")
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -445,13 +473,13 @@ func sseHandler(c *gin.Context) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				
+
 				curr, ok1 := cache.get(id, "current")
 				if ok1 {
 					msgChan <- streamMsg{Type: "data", SubID: id, Data: gin.H{"current": normalizeResults(curr)}}
 				} else {
 					now := time.Now()
-					fetchSubCostsSync(costClient, id, "current", now.AddDate(0,0,-30), now, c.Request.Context())
+					fetchSubCostsSync(costClient, id, "current", now.AddDate(0, 0, -30), now, c.Request.Context())
 					if res, ok := cache.get(id, "current"); ok {
 						msgChan <- streamMsg{Type: "data", SubID: id, Data: gin.H{"current": normalizeResults(res)}}
 					}
@@ -468,7 +496,9 @@ func sseHandler(c *gin.Context) {
 		data, _ := json.Marshal(msg)
 		c.SSEvent("message", string(data))
 		c.Writer.Flush()
-		if msg.Type == "done" { break }
+		if msg.Type == "done" {
+			break
+		}
 	}
 }
 

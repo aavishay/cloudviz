@@ -33,7 +33,7 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p stri
 				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ResourceLocation")},
 			},
 		},
-		Timeframe: to.Ptr(armcostmanagement.TimeframeTypeCustom),
+		Timeframe:  to.Ptr(armcostmanagement.TimeframeTypeCustom),
 		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
 	}
 
@@ -81,7 +81,7 @@ func placeholders(n int) string {
 }
 
 // FetchResourcesWithCosts encapsulates the logic to get resources from ARG and match them with costs from SQLite
-func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []string, search string, orphaned bool) ([]AzureResource, float64, error) {
+func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []string, search string, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly bool, tagKey, tagValue string) ([]AzureResource, float64, error) {
 	var clauses []string
 	if len(subs) > 0 {
 		clauses = append(clauses, fmt.Sprintf("subscriptionId in~ (%s)", strings.Join(quoteAll(subs), ",")))
@@ -98,8 +98,20 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 	if search != "" {
 		clauses = append(clauses, fmt.Sprintf("name contains '%s' or resourceGroup contains '%s' or type contains '%s'", search, search, search))
 	}
+	if tagKey != "" && tagValue != "" {
+		clauses = append(clauses, fmt.Sprintf("tags['%s'] =~ '%s'", tagKey, tagValue))
+	}
 	if orphaned {
 		clauses = append(clauses, "((type has 'microsoft.compute/disks' and isnull(managedBy)) or (type has 'microsoft.network/networkinterfaces' and isnull(properties.virtualMachine)) or (type has 'microsoft.network/publicipaddresses' and isnull(properties.ipConfiguration)))")
+	}
+	if unattachedDiskOnly {
+		clauses = append(clauses, "(type has 'microsoft.compute/disks' and isnull(managedBy))")
+	}
+	if unassignedPIPOnly {
+		clauses = append(clauses, "(type has 'microsoft.network/publicipaddresses' and isnull(properties.ipConfiguration))")
+	}
+	if unattachedNICOnly {
+		clauses = append(clauses, "(type has 'microsoft.network/networkinterfaces' and isnull(properties.virtualMachine))")
 	}
 
 	whereClause := ""
@@ -111,7 +123,7 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 
 	var allResources []AzureResource
 	var skipToken *string
-	
+
 	for {
 		request := armresourcegraph.QueryRequest{
 			Query: to.Ptr(fullQuery),
@@ -128,7 +140,9 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 		}
 
 		safeStr := func(v any) string {
-			if v == nil { return "" }
+			if v == nil {
+				return ""
+			}
 			return fmt.Sprint(v)
 		}
 
@@ -137,14 +151,16 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 			m, _ := row.(map[string]interface{})
 			tags := make(map[string]string)
 			if t, ok := m["tags"].(map[string]interface{}); ok {
-				for k, v := range t { tags[k] = safeStr(v) }
+				for k, v := range t {
+					tags[k] = safeStr(v)
+				}
 			}
 
 			opt := ""
 			score := 100
 			resType := strings.ToLower(safeStr(m["type"]))
 			resName := strings.ToLower(safeStr(m["name"]))
-			
+
 			if strings.Contains(resType, "virtualmachines") && (strings.Contains(resName, "dev") || strings.Contains(resName, "test")) {
 				opt = "Dev Resource"
 				score = 45
@@ -155,11 +171,17 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 
 			isOrphaned := false
 			if strings.Contains(resType, "microsoft.compute/disks") && safeStr(m["managedBy"]) == "" {
-				isOrphaned = true; opt = "Unattached Disk"; score = 20
+				isOrphaned = true
+				opt = "Unattached Disk"
+				score = 20
 			} else if strings.Contains(resType, "microsoft.network/networkinterfaces") && safeStr(m["vmId"]) == "" {
-				isOrphaned = true; opt = "Unattached NIC"; score = 25
+				isOrphaned = true
+				opt = "Unattached NIC"
+				score = 25
 			} else if strings.Contains(resType, "microsoft.network/publicipaddresses") && safeStr(m["ipConfig"]) == "" {
-				isOrphaned = true; opt = "Unassigned PIP"; score = 30
+				isOrphaned = true
+				opt = "Unassigned PIP"
+				score = 30
 			}
 
 			allResources = append(allResources, AzureResource{
@@ -185,16 +207,22 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 
 	// Match costs
 	uniqueSubs := make(map[string]bool)
-	for _, r := range allResources { uniqueSubs[r.SubscriptionID] = true }
+	for _, r := range allResources {
+		uniqueSubs[r.SubscriptionID] = true
+	}
 
 	totalCost := 0.0
 	if len(allResources) > 0 {
 		subList := []string{}
-		for s := range uniqueSubs { subList = append(subList, s) }
+		for s := range uniqueSubs {
+			subList = append(subList, s)
+		}
 
-		costRows, err := cache.db.Query("SELECT subscription_id, resource_id, resource_group, resource_type, resource_location, cost FROM costs WHERE subscription_id IN (" + placeholders(len(subList)) + ")", (func() []any {
+		costRows, err := cache.db.Query("SELECT subscription_id, resource_id, resource_group, resource_type, resource_location, cost FROM costs WHERE subscription_id IN ("+placeholders(len(subList))+")", (func() []any {
 			args := []any{}
-			for _, s := range subList { args = append(args, s) }
+			for _, s := range subList {
+				args = append(args, s)
+			}
 			return args
 		})()...)
 
@@ -207,7 +235,9 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 				var s, rid, rg, rt, rl string
 				var cost float64
 				if err := costRows.Scan(&s, &rid, &rg, &rt, &rl, &cost); err == nil {
-					if cost == 0 { continue }
+					if cost == 0 {
+						continue
+					}
 					if rid != "" {
 						costMapByID[strings.ToLower(rid)] += cost
 					} else {
@@ -244,30 +274,54 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 }
 
 func normalizeResults(res armcostmanagement.QueryResult) any {
-	if res.Properties == nil || res.Properties.Rows == nil { return nil }
-	
+	if res.Properties == nil || res.Properties.Rows == nil {
+		return nil
+	}
+
 	colCost, colId, colRg, colType, colLoc := 0, -1, -1, -1, -1
 	if res.Properties.Columns != nil {
 		for i, col := range res.Properties.Columns {
-			if col.Name == nil { continue }
+			if col.Name == nil {
+				continue
+			}
 			name := *col.Name
-			if name == "PreTaxCost" || name == "Cost" { colCost = i }
-			if name == "ResourceId" { colId = i }
-			if name == "ResourceGroup" { colRg = i }
-			if name == "ResourceType" { colType = i }
-			if name == "ResourceLocation" || name == "Location" { colLoc = i }
+			if name == "PreTaxCost" || name == "Cost" {
+				colCost = i
+			}
+			if name == "ResourceId" {
+				colId = i
+			}
+			if name == "ResourceGroup" {
+				colRg = i
+			}
+			if name == "ResourceType" {
+				colType = i
+			}
+			if name == "ResourceLocation" || name == "Location" {
+				colLoc = i
+			}
 		}
 	}
-	
-	if colId == -1 { colId = 1 }
-	if colRg == -1 { colRg = 2 }
-	if colType == -1 { colType = 3 }
-	if colLoc == -1 { colLoc = 4 }
+
+	if colId == -1 {
+		colId = 1
+	}
+	if colRg == -1 {
+		colRg = 2
+	}
+	if colType == -1 {
+		colType = 3
+	}
+	if colLoc == -1 {
+		colLoc = 4
+	}
 
 	var items []any
 	for _, row := range res.Properties.Rows {
-		if len(row) < 5 { continue }
-		
+		if len(row) < 5 {
+			continue
+		}
+
 		getVal := func(idx int) string {
 			if idx >= 0 && idx < len(row) {
 				return fmt.Sprintf("%v", row[idx])
@@ -282,10 +336,10 @@ func normalizeResults(res armcostmanagement.QueryResult) any {
 		rl := normalizeLocation(getVal(colLoc))
 
 		items = append(items, map[string]interface{}{
-			"cost": cost,
-			"resourceId": rid,
-			"resourceGroup": rg,
-			"resourceType": rt,
+			"cost":             cost,
+			"resourceId":       rid,
+			"resourceGroup":    rg,
+			"resourceType":     rt,
 			"resourceLocation": rl,
 		})
 	}
@@ -322,7 +376,7 @@ func fetchHistoricalMetrics(ctx context.Context, resourceID string) (map[string]
 	})
 
 	if err != nil {
-		return map[string][]float64{"CPU Util (%)": {12, 15, 18, 14, 22, 19, 15}}, nil 
+		return map[string][]float64{"CPU Util (%)": {12, 15, 18, 14, 22, 19, 15}}, nil
 	}
 
 	metrics := make(map[string][]float64)
@@ -353,13 +407,13 @@ func fetchHistoricalMetrics(ctx context.Context, resourceID string) (map[string]
 
 func getOllamaRecommendation(metrics map[string][]float64, resourceID string) (string, error) {
 	prompt := fmt.Sprintf("Analyze this Azure resource: %s. Historical 7-day metrics: %v. Provide 3 specific cost-saving recommendations. Keep it concise markdown.", resourceID, metrics)
-	
+
 	payload := map[string]interface{}{
 		"model":  "llama3",
 		"prompt": prompt,
 		"stream": false,
 	}
-	
+
 	jsonPayload, _ := json.Marshal(payload)
 	resp, err := http.Post("http://localhost:11434/api/generate", "application/json", bytes.NewBuffer(jsonPayload))
 	if err != nil {

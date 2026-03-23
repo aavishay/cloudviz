@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, Component, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useRef, Component, useId, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, Area } from 'recharts';
 
@@ -178,6 +178,7 @@ const friendlyType = (type: string) => {
 // ─── Sparkline ────────────────────────────────────────────────────────────────
 
 const Sparkline = ({ data }: { data: number[] }) => {
+  const sparkId = useId();
   if (!data || !Array.isArray(data) || data.length < 2) return null;
   // Filter out NaN/Infinity values
   const validData = data.filter(v => typeof v === 'number' && isFinite(v));
@@ -192,12 +193,12 @@ const Sparkline = ({ data }: { data: number[] }) => {
   return (
     <svg width={W} height={H} style={{ overflow: 'visible', flexShrink: 0 }}>
       <defs>
-        <linearGradient id={`spark-${Math.random().toString(36).slice(2)}`} x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={`spark-${sparkId}`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={trendUp ? 'var(--accent)' : 'var(--danger)'} stopOpacity={0.3}/>
           <stop offset="100%" stopColor={trendUp ? 'var(--accent)' : 'var(--danger)'} stopOpacity={0}/>
         </linearGradient>
       </defs>
-      <polygon points={areaPts} fill={`url(#spark-${Math.random().toString(36).slice(2)})`} opacity={0.5} />
+      <polygon points={areaPts} fill={`url(#spark-${sparkId})`} opacity={0.5} />
       <polyline points={pts} fill="none" stroke={trendUp ? 'var(--accent)' : 'var(--danger)'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -667,15 +668,18 @@ function AIInsightsModal({ resource, onClose, insight, loading }: {
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTypes, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, setRegionFilter, setSubFilter, setRgFilter, setTypeFilter, setShowOrphanedOnly, setCurrentPage, collapsed, onToggleCollapse }: {
+function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTypes, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, setRegionFilter, setSubFilter, setRgFilter, setTypeFilter, setShowOrphanedOnly, setShowUnattachedDiskOnly, setShowUnassignedPIPOnly, setShowUnattachedNICOnly, setCurrentPage, collapsed, onToggleCollapse }: {
   open: boolean; onClose: () => void;
   uniqueRegions: string[]; uniqueSubs: string[]; uniqueRGs: string[]; uniqueTypes: string[];
-  regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; showOrphanedOnly: boolean;
+  regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; showOrphanedOnly: boolean; showUnattachedDiskOnly: boolean; showUnassignedPIPOnly: boolean; showUnattachedNICOnly: boolean;
   setRegionFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setSubFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setRgFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setTypeFilter: React.Dispatch<React.SetStateAction<string>>;
   setShowOrphanedOnly: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowUnattachedDiskOnly: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowUnassignedPIPOnly: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowUnattachedNICOnly: React.Dispatch<React.SetStateAction<boolean>>;
   setCurrentPage: React.Dispatch<React.SetStateAction<number>>;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -685,7 +689,7 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
     setCurrentPage(1);
   };
 
-  const hasFilters = regionFilter.length || subFilter.length || rgFilter.length || typeFilter || showOrphanedOnly;
+  const hasFilters = regionFilter.length || subFilter.length || rgFilter.length || typeFilter || showOrphanedOnly || showUnattachedDiskOnly || showUnassignedPIPOnly || showUnattachedNICOnly;
 
   return (
     <>
@@ -746,13 +750,64 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
                     background: showOrphanedOnly ? 'var(--danger-dim)' : 'var(--bg-surface)',
                     color: showOrphanedOnly ? 'var(--danger)' : 'var(--text-2)',
                     cursor: 'pointer', fontSize: 12, fontWeight: 600, width: '100%', textAlign: 'left',
-                    transition: 'all 0.2s ease'
+                    transition: 'all 0.2s ease', marginBottom: 8
                   }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
                   </svg>
-                  Orphaned resources only
+                  Orphaned Resources
+                </button>
+                <button
+                  onClick={() => { setShowUnattachedDiskOnly((v: boolean) => !v); setCurrentPage(1); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 10,
+                    border: showUnattachedDiskOnly ? '1px solid var(--warning)' : '1px solid var(--border)',
+                    background: showUnattachedDiskOnly ? 'rgba(245, 158, 11, 0.1)' : 'var(--bg-surface)',
+                    color: showUnattachedDiskOnly ? '#f59e0b' : 'var(--text-2)',
+                    cursor: 'pointer', fontSize: 12, fontWeight: 600, width: '100%', textAlign: 'left',
+                    transition: 'all 0.2s ease', marginBottom: 8
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                    <polyline points="22 4 12 14.01 9 11.01" />
+                  </svg>
+                  Unattached Disks
+                </button>
+                <button
+                  onClick={() => { setShowUnassignedPIPOnly((v: boolean) => !v); setCurrentPage(1); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 10,
+                    border: showUnassignedPIPOnly ? '1px solid #0ea5e9' : '1px solid var(--border)',
+                    background: showUnassignedPIPOnly ? 'rgba(14, 165, 233, 0.1)' : 'var(--bg-surface)',
+                    color: showUnassignedPIPOnly ? '#0ea5e9' : 'var(--text-2)',
+                    cursor: 'pointer', fontSize: 12, fontWeight: 600, width: '100%', textAlign: 'left',
+                    transition: 'all 0.2s ease', marginBottom: 8
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                  </svg>
+                  Unassigned PIPs
+                </button>
+                <button
+                  onClick={() => { setShowUnattachedNICOnly((v: boolean) => !v); setCurrentPage(1); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 10,
+                    border: showUnattachedNICOnly ? '1px solid #f43f5e' : '1px solid var(--border)',
+                    background: showUnattachedNICOnly ? 'rgba(244, 63, 94, 0.1)' : 'var(--bg-surface)',
+                    color: showUnattachedNICOnly ? '#f43f5e' : 'var(--text-2)',
+                    cursor: 'pointer', fontSize: 12, fontWeight: 600, width: '100%', textAlign: 'left',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                    <path d="M6 21V23M18 21V23M8 7v2M12 7v2M16 7v2" />
+                  </svg>
+                  Unattached NICs
                 </button>
               </div>
             </>
@@ -790,6 +845,13 @@ export default function App() {
   });
   const [typeFilter, setTypeFilter] = useState(() => localStorage.getItem('cloudviz-typeFilter') || '');
   const [showOrphanedOnly, setShowOrphanedOnly] = useState(() => localStorage.getItem('cloudviz-orphaned') === 'true');
+  const [showUnattachedDiskOnly, setShowUnattachedDiskOnly] = useState(() => localStorage.getItem('cloudviz-unattachedDisk') === 'true');
+  const [showUnassignedPIPOnly, setShowUnassignedPIPOnly] = useState(() => localStorage.getItem('cloudviz-unassignedPIP') === 'true');
+  const [showUnattachedNICOnly, setShowUnattachedNICOnly] = useState(() => localStorage.getItem('cloudviz-unattachedNIC') === 'true');
+  const [tagFilter, setTagFilter] = useState<{ key: string; value: string } | null>(() => {
+    const saved = localStorage.getItem('cloudviz-tag-filter');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
 
@@ -845,6 +907,10 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-rgFilter', JSON.stringify(rgFilter)); }, [rgFilter]);
   useEffect(() => { localStorage.setItem('cloudviz-typeFilter', typeFilter); }, [typeFilter]);
   useEffect(() => { localStorage.setItem('cloudviz-orphaned', String(showOrphanedOnly)); }, [showOrphanedOnly]);
+  useEffect(() => { localStorage.setItem('cloudviz-unattachedDisk', String(showUnattachedDiskOnly)); }, [showUnattachedDiskOnly]);
+  useEffect(() => { localStorage.setItem('cloudviz-unassignedPIP', String(showUnassignedPIPOnly)); }, [showUnassignedPIPOnly]);
+  useEffect(() => { localStorage.setItem('cloudviz-unattachedNIC', String(showUnattachedNICOnly)); }, [showUnattachedNICOnly]);
+  useEffect(() => { localStorage.setItem('cloudviz-tag-filter', JSON.stringify(tagFilter)); }, [tagFilter]);
   useEffect(() => { localStorage.setItem('cloudviz-sort', JSON.stringify(sortConfig)); }, [sortConfig]);
   useEffect(() => { localStorage.setItem('cloudviz-tab', activeTab); }, [activeTab]);
   useEffect(() => { localStorage.setItem('cloudviz-sidebarCollapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
@@ -867,6 +933,13 @@ export default function App() {
     if (typeFilter) params.append('type', typeFilter);
     if (debouncedSearch) params.append('search', debouncedSearch);
     if (showOrphanedOnly) params.append('orphaned', 'true');
+    if (showUnattachedDiskOnly) params.append('unattachedDiskOnly', 'true');
+    if (showUnassignedPIPOnly) params.append('unassignedPIPOnly', 'true');
+    if (showUnattachedNICOnly) params.append('unattachedNICOnly', 'true');
+    if (tagFilter) {
+      params.append('tagKey', tagFilter.key);
+      params.append('tagValue', tagFilter.value);
+    }
     params.append('skip', String((currentPage - 1) * itemsPerPage));
     params.append('limit', String(itemsPerPage));
     if (sortConfig.key) { params.append('sortBy', sortConfig.key); params.append('sortOrder', sortConfig.direction); }
@@ -875,7 +948,7 @@ export default function App() {
       .then(r => r.json())
       .then(data => { setResources(data.data || []); setTotalResources(data.total || 0); setFilteredTotalCost(data.totalCost || 0); setLoading(false); })
       .catch(err => { setError(err.message); setLoading(false); });
-  }, [regionFilter, subFilter, rgFilter, typeFilter, debouncedSearch, showOrphanedOnly, currentPage, sortConfig]);
+  }, [regionFilter, subFilter, rgFilter, typeFilter, debouncedSearch, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, tagFilter, currentPage, sortConfig]);
 
   const handleSort = (key: string) => {
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
@@ -1341,7 +1414,7 @@ export default function App() {
 
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 10, background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0, 122, 204, 0.25)' }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)' }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" width="22" height="22">
               <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 3.5 1 9.2a7 7 0 0 1-9 8.8Z" />
               <path d="M7 20s-2-3-2-8" />
@@ -1414,9 +1487,12 @@ export default function App() {
           open={sidebarOpen} onClose={() => setSidebarOpen(false)}
           collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(v => !v)}
           uniqueRegions={uniqueRegions} uniqueSubs={uniqueSubs} uniqueRGs={uniqueRGs} uniqueTypes={uniqueTypes}
-          regionFilter={regionFilter} subFilter={subFilter} rgFilter={rgFilter} typeFilter={typeFilter} showOrphanedOnly={showOrphanedOnly}
-          setRegionFilter={setRegionFilter} setSubFilter={setSubFilter} setRgFilter={setRgFilter}
-          setTypeFilter={setTypeFilter} setShowOrphanedOnly={setShowOrphanedOnly} setCurrentPage={setCurrentPage}
+          regionFilter={regionFilter} subFilter={subFilter} rgFilter={rgFilter} typeFilter={typeFilter}
+          showOrphanedOnly={showOrphanedOnly} showUnattachedDiskOnly={showUnattachedDiskOnly} showUnassignedPIPOnly={showUnassignedPIPOnly} showUnattachedNICOnly={showUnattachedNICOnly}
+          setRegionFilter={setRegionFilter} setSubFilter={setSubFilter} setRgFilter={setRgFilter} setTypeFilter={setTypeFilter}
+          setShowOrphanedOnly={setShowOrphanedOnly} setShowUnattachedDiskOnly={setShowUnattachedDiskOnly}
+          setShowUnassignedPIPOnly={setShowUnassignedPIPOnly} setShowUnattachedNICOnly={setShowUnattachedNICOnly}
+          setCurrentPage={setCurrentPage}
         />
 
         {/* ── Main ── */}
@@ -1653,7 +1729,7 @@ export default function App() {
                       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 10 }}>Biggest Changes</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {biggestChanges.map((c, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setActiveTab('resources'); c.resourceGroup ? setRgFilter([c.resourceGroup]) : setRgFilter([]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--border-strong)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setActiveTab('resources'); const rg = c.resourceGroup; if (rg) { setRgFilter([rg]); } else { setRgFilter([]); } setCurrentPage(1); }} onMouseEnter={e => { const s = e.currentTarget.style; s.borderColor='var(--border-strong)'; s.transform='translateX(4px)'; }} onMouseLeave={e => { const s = e.currentTarget.style; s.borderColor='var(--border)'; s.transform='translateX(0)'; }}>
                             <div style={{ width: 28, height: 28, borderRadius: 6, background: c.change > 0 ? 'var(--danger-dim)' : 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.change > 0 ? 'var(--danger)' : 'var(--accent)'} strokeWidth="2.5">{c.change > 0 ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M19 12l-7 7-7-7" />}</svg>
                             </div>
@@ -1708,12 +1784,17 @@ export default function App() {
                               outerRadius={60}
                               innerRadius={35}
                               paddingAngle={2}
-                              onClick={(data: any) => { const name = data?.name || data?.payload?.name; if (name) { setActiveTab('resources'); setRegionFilter([String(name)]); setCurrentPage(1); } }}
+                              onClick={(data: { name?: string; payload?: { name?: string } }) => { const name = data?.name || data?.payload?.name; if (name) { setActiveTab('resources'); setRegionFilter([String(name)]); setCurrentPage(1); } }}
                               style={{ cursor: 'pointer' }}
                             >
                               {costsByRegion.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', transition: 'all 0.2s ease', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />)}
                             </Pie>
-                            <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
+                             <Tooltip
+                               formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
+                               labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
+                               itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
+                               contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
+                             />
                           </PieChart>
                         </ResponsiveContainer>
                         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
@@ -1734,7 +1815,6 @@ export default function App() {
                   ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
                 </div>
 
-                {/* Cost by Resource Type (BarChart) */}
                 <div className="card chart-card-clickable" style={{ padding: 24 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1749,80 +1829,97 @@ export default function App() {
                     <>
                       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                         {costsByType.slice(0, 3).map((item, i) => (
-                          <div key={i} style={{ flex: 1, padding: '8px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); setTypeFilter(item.raw); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.transform='translateY(-2px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0)'; }}>
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-2)', marginBottom: 2 }}>#{i + 1}</div>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                          <div key={i} style={{ flex: 1, padding: '8px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setTypeFilter(item.raw); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor=COLORS[i % COLORS.length]; e.currentTarget.style.transform='translateY(-2px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0)'; }}>
+                            <div style={{ position: 'absolute', top: 0, left: 0, width: 4, bottom: 0, background: COLORS[i % COLORS.length] }} />
+                            <div style={{ paddingLeft: 4 }}>
+                              <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-2)', marginBottom: 2 }}>#{i + 1}</div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</div>
+                              <div style={{ fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                            </div>
                           </div>
                         ))}
                       </div>
-                      <ResponsiveContainer width="100%" height={Math.max(120, costsByType.length * 24)}>
-                        <BarChart data={costsByType} layout="vertical" margin={{ left: 60, right: 10 }}>
-                          <defs>
-                            <linearGradient id="barGradientType" x1="0" y1="0" x2="1" y2="0">
-                              <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.8}/>
-                              <stop offset="100%" stopColor="#34d399" stopOpacity={1}/>
-                            </linearGradient>
-                          </defs>
-                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
-                          <XAxis type="number" tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                          <YAxis type="category" dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 10 }} width={80} axisLine={false} tickLine={false} />
-                          <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} cursor={{ fill: 'var(--accent-dim)' }} />
-                          <Bar dataKey="value" fill="url(#barGradientType)" radius={[0, 4, 4, 0]} onClick={(data: any) => { const raw = data?.raw || data?.payload?.raw; if (raw) { setActiveTab('resources'); setTypeFilter(raw); setCurrentPage(1); } }} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }} />
-                        </BarChart>
-                      </ResponsiveContainer>
+                      <div style={{ height: Math.max(120, costsByType.length * 24) }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={costsByType} layout="vertical" margin={{ left: 60, right: 10 }}>
+                            <defs>
+                              {costsByType.map((_, index) => (
+                                <linearGradient key={`grad-${index}`} id={`typeGradient-${index}`} x1="0" y1="0" x2="1" y2="0">
+                                  <stop offset="0%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0.8}/>
+                                  <stop offset="100%" stopColor={COLORS[(index + 1) % COLORS.length]} stopOpacity={1}/>
+                                </linearGradient>
+                              ))}
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
+                            <XAxis type="number" tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
+                            <YAxis type="category" dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 10 }} width={80} axisLine={false} tickLine={false} />
+                             <Tooltip
+                               formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
+                               labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
+                               itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
+                               contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
+                               cursor={{ fill: 'var(--accent-dim)' }}
+                             />
+                            <Bar dataKey="value" radius={[0, 4, 4, 0]} onClick={(data: { raw?: string; payload?: { raw?: string } }) => { const raw = data?.raw || data?.payload?.raw; if (raw) { setActiveTab('resources'); setTypeFilter(raw); setCurrentPage(1); } }} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }}>
+                              {costsByType.map((_, index) => (
+                                <Cell key={`cell-${index}`} fill={`url(#typeGradient-${index})`} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
                     </>
+                  ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
+                </div>
+
+                {/* Top Spenders */}
+                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #f43f5e 0%, #e11d48 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244, 63, 94, 0.3)' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                      </div>
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Top Cost Drivers</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Click to filter resources</span>
+                      </div>
+                    </div>
+                    <div style={{ padding: '4px 10px', background: 'var(--danger-dim)', borderRadius: 12, border: '1px solid rgba(244, 63, 94, 0.2)' }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger)' }}>${topSpenders.reduce((s, c) => s + c.cost, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                    </div>
+                  </div>
+                  {topSpenders.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {topSpenders.map((c, i) => {
+                        const maxCost = topSpenders[0]?.cost || 1;
+                        const percentage = maxCost > 0 ? (c.cost / maxCost) * 100 : 0;
+                        return (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); const rg = c.resourceGroup; if (rg) { setRgFilter([rg]); } else { setRgFilter([]); } setCurrentPage(1); }} onMouseEnter={e => { const s = e.currentTarget.style; s.borderColor = 'var(--danger)'; s.transform = 'translateX(4px)'; s.boxShadow = '0 4px 12px rgba(244, 63, 94, 0.15)'; }} onMouseLeave={e => { const s = e.currentTarget.style; s.borderColor = 'var(--border)'; s.transform = 'translateX(0)'; s.boxShadow = 'none'; }}>
+                            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, ${COLORS[i % COLORS.length]}15, transparent)`, transition: 'width 0.5s ease' }} />
+                            <div style={{ width: 28, height: 28, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS[i % COLORS.length]}, ${COLORS[(i + 1) % COLORS.length]})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, zIndex: 1, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{i + 1}</div>
+                            <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
+                              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.resourceGroup || 'Unknown'}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(c.resourceType || '')}</div>
+                            </div>
+                            <div style={{ textAlign: 'right', zIndex: 1 }}>
+                              <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 14 }}>${c.cost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{totalCostsSum > 0 ? ((c.cost / totalCostsSum) * 100).toFixed(1) : '0'}%</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
                 </div>
               </div>
 
-              {/* Top Spenders */}
-              <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #f43f5e 0%, #e11d48 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244, 63, 94, 0.3)' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Top Cost Drivers</span>
-                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Click to filter resources</span>
-                    </div>
-                  </div>
-                  <div style={{ padding: '4px 10px', background: 'var(--danger-dim)', borderRadius: 12, border: '1px solid rgba(244 63 94 / 0.2)' }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger)' }}>${topSpenders.reduce((s, c) => s + c.cost, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                  </div>
-                </div>
-                {topSpenders.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {topSpenders.map((c, i) => {
-                      const maxCost = topSpenders[0]?.cost || 1;
-                      const percentage = maxCost > 0 ? (c.cost / maxCost) * 100 : 0;
-                      return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); c.resourceGroup ? setRgFilter([c.resourceGroup]) : setRgFilter([]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--danger)'; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
-                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, ${COLORS[i % COLORS.length]}15, transparent)`, transition: 'width 0.5s ease' }} />
-                          <div style={{ width: 28, height: 28, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS[i % COLORS.length]}, ${COLORS[(i + 1) % COLORS.length]})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, zIndex: 1, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{i + 1}</div>
-                          <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
-                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.resourceGroup || 'Unknown'}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(c.resourceType || '')}</div>
-                          </div>
-                          <div style={{ textAlign: 'right', zIndex: 1 }}>
-                            <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 14 }}>${c.cost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{totalCostsSum > 0 ? ((c.cost / totalCostsSum) * 100).toFixed(1) : '0'}%</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
-              </div>
-
               {/* Cost by Subscription */}
               <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, rgba(139 92 246 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+                <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, var(--accent-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.3)' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px var(--accent-dim)' }}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
                     </div>
                     <div>
@@ -1830,19 +1927,20 @@ export default function App() {
                       <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsBySubscription.length} subscriptions</span>
                     </div>
                   </div>
-                  <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#8b5cf6', background: 'rgba(139 92 246 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(139 92 246 / 0.2)' }}>Interactive</span>
+                  <span className="chart-hint-badge">Interactive</span>
                 </div>
                 {costsBySubscription.length > 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {costsBySubscription.slice(0, 5).map((sub, i) => {
                       const maxVal = costsBySubscription[0]?.value || 1;
                       const percentage = maxVal > 0 ? (sub.value / maxVal) * 100 : 0;
+                      const color = COLORS[i % COLORS.length];
                       return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { const fullId = uniqueSubs.find(s => s.startsWith(sub.name)); if (fullId) { setActiveTab('resources'); setSubFilter([fullId]); setCurrentPage(1); }}} onMouseEnter={e => { e.currentTarget.style.borderColor = '#8b5cf6'; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(139 92 246 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
-                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, rgba(139 92 246 / 0.12), transparent)`, transition: 'width 0.5s ease' }} />
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { const fullId = uniqueSubs.find(s => s.startsWith(sub.name)); if (fullId) { setActiveTab('resources'); setSubFilter([fullId]); setCurrentPage(1); }}} onMouseEnter={e => { e.currentTarget.style.borderColor = color; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = `0 4px 12px ${color}20`; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, ${color}15, transparent)`, transition: 'width 0.5s ease' }} />
                           <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{sub.name}</div>
                           <div style={{ flex: 1, height: 8, background: 'var(--border)', borderRadius: 4, overflow: 'hidden', zIndex: 1 }}>
-                            <div style={{ height: '100%', width: `${percentage}%`, background: 'linear-gradient(90deg, #8b5cf6, #a78bfa)', borderRadius: 4, transition: 'width 0.5s ease' }} />
+                            <div style={{ height: '100%', width: `${percentage}%`, background: `linear-gradient(90deg, ${color}, ${COLORS[(i + 1) % COLORS.length]})`, borderRadius: 4, transition: 'width 0.5s ease' }} />
                           </div>
                           <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 13, minWidth: 65, textAlign: 'right', zIndex: 1 }}>${(sub.value / 1000).toFixed(1)}k</div>
                         </div>
@@ -1858,7 +1956,7 @@ export default function App() {
               </div>
 
               {/* Cost by Environment Tag */}
-              {costsByEnvironment.length > 0 && costsByEnvironment.some(e => e.name !== 'Untagged') && (
+              {(loading || (costsByEnvironment.length > 0 && costsByEnvironment.some(e => e.name !== 'Untagged'))) && (
                 <div className="card chart-card-clickable" style={{ padding: 24 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1872,25 +1970,54 @@ export default function App() {
                     </div>
                     <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#ec4899', background: 'rgba(236 72 153 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(236 72 153 / 0.2)' }}>Interactive</span>
                   </div>
-                  <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-                    <div style={{ position: 'relative', width: '50%' }}>
-                      <ResponsiveContainer width="100%" height={120}>
+                  <div style={{ display: 'flex', gap: 24, alignItems: 'center', minHeight: 180 }}>
+                    <div style={{ position: 'relative', width: '40%', height: 160 }}>
+                      <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Pie data={costsByEnvironment.filter(e => e.name !== 'Untagged')} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={45} innerRadius={25} paddingAngle={2} style={{ cursor: 'pointer' }}>
-                            {costsByEnvironment.filter(e => e.name !== 'Untagged').map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', transition: 'all 0.2s ease', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />)}
+                          <Pie 
+                            data={costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0)} 
+                            dataKey="value" 
+                            nameKey="name" 
+                            cx="50%" 
+                            cy="50%" 
+                            outerRadius={70} 
+                            innerRadius={45} 
+                            paddingAngle={3}
+                            style={{ cursor: 'pointer' }}
+                            onClick={(data: any) => { if (data?.name) { setActiveTab('resources'); setTagFilter({ key: 'Environment', value: data.name }); setCurrentPage(1); } }}
+                          >
+                            {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).map((_, i) => (
+                              <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', outline: 'none' }} />
+                            ))}
                           </Pie>
-                          <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
+                          <Tooltip
+                            formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
+                            labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
+                            itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
+                            contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
+                          />
                         </PieChart>
                       </ResponsiveContainer>
+                      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-1)' }}>
+                          ${(costsByEnvironment.filter(e => e.name !== 'Untagged').reduce((acc, curr) => acc + curr.value, 0) / 1000).toFixed(0)}k
+                        </div>
+                        <div style={{ fontSize: 8, color: 'var(--text-3)', fontWeight: 600, letterSpacing: '0.05em' }}>TAGGED</div>
+                      </div>
                     </div>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {costsByEnvironment.filter(e => e.name !== 'Untagged').map((env, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onMouseEnter={e => { e.currentTarget.style.borderColor=COLORS[i % COLORS.length]; e.currentTarget.style.transform='translateX(3px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                          <div style={{ width: 12, height: 12, borderRadius: 4, background: COLORS[i % COLORS.length], flexShrink: 0 }} />
-                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', flex: 1 }}>{env.name}</span>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', paddingRight: 4 }}>
+                      {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).slice(0, 8).map((env, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onClick={() => { setActiveTab('resources'); setTagFilter({ key: 'Environment', value: env.name }); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor=COLORS[i % COLORS.length]; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.background='var(--bg-hover)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.background='var(--bg-surface)'; }}>
+                          <div style={{ width: 10, height: 10, borderRadius: 3, background: COLORS[i % COLORS.length], flexShrink: 0 }} />
+                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{env.name}</span>
                           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(env.value / 1000).toFixed(1)}k</span>
                         </div>
                       ))}
+                      {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).length > 8 && (
+                        <div style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 10, padding: '4px 0' }}>
+                          +{costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).length - 8} more environments
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2036,7 +2163,7 @@ export default function App() {
                       const maxSavings = optimizationOpportunities[0]?.potentialSavings || 1;
                       const percentage = maxSavings > 0 ? (o.potentialSavings / maxSavings) * 100 : 0;
                       return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(o.resource.name); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(o.resource.name); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
                           <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: 'linear-gradient(90deg, rgba(244 63 94 / 0.08), transparent)', transition: 'width 0.5s ease' }} />
                           <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, var(--danger-dim) 0%, rgba(244 63 94 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, zIndex: 1, border: '1px solid rgba(244 63 94 / 0.2)' }}>
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2"><path d="M12 9v2M12 13h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
@@ -2168,7 +2295,7 @@ export default function App() {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {costAnomalies.map((a, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.resourceGroup); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.resourceGroup); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
                         <div style={{
                           width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                           background: a.severity === 'high' ? 'var(--danger-dim)' : 'var(--warning-dim)',
@@ -2209,6 +2336,16 @@ export default function App() {
                   />
                 </div>
 
+                {tagFilter && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'rgba(236, 72, 153, 0.1)', border: '1px solid rgba(236, 72, 153, 0.2)', borderRadius: 20, fontSize: 11, fontWeight: 600, color: '#ec4899' }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
+                    <span>{tagFilter.key}: {tagFilter.value}</span>
+                    <button style={{ border: 'none', background: 'transparent', color: '#ec4899', cursor: 'pointer', display: 'flex', padding: 2, marginLeft: 4 }} onClick={() => { setTagFilter(null); setCurrentPage(1); }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    </button>
+                  </div>
+                )}
+
                 {/* Stats */}
                 <div style={{ display: 'flex', gap: 20, marginLeft: 'auto', alignItems: 'center', flexWrap: 'wrap' }}>
                   <div className="stat-pill" style={{ position: 'relative' }}>
@@ -2218,7 +2355,7 @@ export default function App() {
                   </div>
                   <div className="stat-pill">
                     <span className="stat-label">Showing</span>
-                    <span className="stat-value neutral">{resources.length.toLocaleString()}</span>
+                    <span className="stat-value neutral">{Math.min(itemsPerPage, resources.length).toLocaleString()}</span>
                     <span style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>of {totalResources.toLocaleString()}</span>
                   </div>
 
@@ -2250,7 +2387,7 @@ export default function App() {
                 </div>
               ) : (
                 <ResourceTable
-                  resources={resources}
+                  resources={resources.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)}
                   sortConfig={sortConfig}
                   onSort={handleSort}
                   onLocationClick={loc => { setRegionFilter([loc]); setCurrentPage(1); }}
@@ -2790,7 +2927,7 @@ export default function App() {
             <div style={{ width: 64, height: 64, border: '3px solid var(--border-strong)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
             <div style={{ position: 'absolute', inset: 0, width: 64, height: 64, border: '3px solid transparent', borderTopColor: 'var(--accent)', borderRightColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
             <div style={{ position: 'absolute', inset: 8, width: 48, height: 48, background: 'var(--bg-surface)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 3.5 1 9.2a7 7 0 0 1-9 8.8Z" />
                 <path d="M7 20s-2-3-2-8" />
                 <path d="M11 20s2-4 2-9h4" />
