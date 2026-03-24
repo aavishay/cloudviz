@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -67,6 +68,57 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	}
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_resource ON resource_history(resource_id)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON resource_history(timestamp)`)
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS budgets (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		amount REAL NOT NULL,
+		subscription_id TEXT,
+		resource_group TEXT,
+		period TEXT DEFAULT 'monthly',
+		alert_email TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS cost_type_daily (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		cache_key TEXT,
+		dates TEXT,
+		types TEXT,
+		fetched_at DATETIME
+	)`)
+	if err != nil {
+		return nil, err
+	}
+	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_type_daily_key ON cost_type_daily(cache_key)`)
+
+	// Migrate old per-sub schema to new composite-key schema
+	db.Exec(`ALTER TABLE cost_type_daily ADD COLUMN cache_key TEXT`)
+	var oldCount int
+	row := db.QueryRow("SELECT COUNT(*) FROM cost_type_daily WHERE cache_key IS NULL OR cache_key = ''")
+	if row != nil {
+		row.Scan(&oldCount)
+	}
+	if oldCount > 0 {
+		// Old rows exist; drop and recreate clean
+		db.Exec("DROP TABLE IF EXISTS cost_type_daily")
+		db.Exec(`CREATE TABLE IF NOT EXISTS cost_type_daily (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			cache_key TEXT,
+			dates TEXT,
+			types TEXT,
+			fetched_at DATETIME
+		)`)
+		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_type_daily_key ON cost_type_daily(cache_key)`)
+		log.Println("Migrated cost_type_daily schema: dropped", oldCount, "old rows")
+	}
+	if err != nil {
+		return nil, err
+	}
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_budgets_sub ON budgets(subscription_id)`)
 
 	return &dbCache{db: db}, nil
 }
@@ -185,6 +237,27 @@ func (dc *dbCache) set(subID string, period string, data armcostmanagement.Query
 	tx.Commit()
 }
 
+func (dc *dbCache) getTypeDaily(cacheKey string) (dates []map[string]any, types []string, ok bool) {
+	var fetchedAt time.Time
+	var datesJSON, typesJSON string
+	err := dc.db.QueryRow("SELECT fetched_at, dates, types FROM cost_type_daily WHERE cache_key = ?", cacheKey).Scan(&fetchedAt, &datesJSON, &typesJSON)
+	if err != nil || time.Since(fetchedAt) > 6*time.Hour {
+		return nil, nil, false
+	}
+	json.Unmarshal([]byte(datesJSON), &dates)
+	json.Unmarshal([]byte(typesJSON), &types)
+	return dates, types, true
+}
+
+func (dc *dbCache) setTypeDaily(cacheKey string, dates []map[string]any, types []string) {
+	now := time.Now()
+	datesJSON, _ := json.Marshal(dates)
+	typesJSON, _ := json.Marshal(types)
+	dc.db.Exec("DELETE FROM cost_type_daily WHERE cache_key = ?", cacheKey)
+	dc.db.Exec("INSERT INTO cost_type_daily (cache_key, dates, types, fetched_at) VALUES (?, ?, ?, ?)",
+		cacheKey, string(datesJSON), string(typesJSON), now)
+}
+
 func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	now := time.Now()
 	rows, err := db.Query("SELECT id, name, type, location, subscription_id, resource_group, tags, status FROM resources")
@@ -217,6 +290,17 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 			}
 			if old.Location != r.Location {
 				recordChange(db, r.ID, r.Name, "modified", "location", old.Location, r.Location)
+			}
+			if old.ResourceGroup != r.ResourceGroup {
+				recordChange(db, r.ID, r.Name, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup)
+			}
+			if old.Type != r.Type {
+				recordChange(db, r.ID, r.Name, "modified", "type", old.Type, r.Type)
+			}
+			oldTagsJSON, _ := json.Marshal(old.Tags)
+			newTagsJSON, _ := json.Marshal(r.Tags)
+			if string(oldTagsJSON) != string(newTagsJSON) {
+				recordChange(db, r.ID, r.Name, "modified", "tags", string(oldTagsJSON), string(newTagsJSON))
 			}
 		} else {
 			recordChange(db, r.ID, r.Name, "created", "", "", "")
