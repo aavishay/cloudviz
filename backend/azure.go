@@ -37,7 +37,7 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p stri
 		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
 	}
 
-	for retry := 0; retry < 5; retry++ {
+	for retry := 0; retry < 3; retry++ {
 		if err := costLimiter.Wait(ctx); err != nil {
 			log.Printf("Rate limiter error: %v", err)
 		}
@@ -49,7 +49,7 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p stri
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := 2 + retry*3
+			waitSecs := (retry + 1) * 3
 			log.Printf("Streaming rate limit (429) hit for %s/%s, retry %d in %ds", sid, p, retry, waitSecs)
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
@@ -82,7 +82,7 @@ func fetchDailyCosts(client *armcostmanagement.QueryClient, sid string, start, e
 	}
 
 	ctx := context.Background()
-	for retry := 0; retry < 5; retry++ {
+	for retry := 0; retry < 3; retry++ {
 		if err := costLimiter.Wait(ctx); err != nil {
 			log.Printf("Rate limiter error: %v", err)
 		}
@@ -93,7 +93,7 @@ func fetchDailyCosts(client *armcostmanagement.QueryClient, sid string, start, e
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := 2 + retry*3
+			waitSecs := (retry + 1) * 3
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
 			case <-ctx.Done():
@@ -461,7 +461,7 @@ func fetchDailyCostsByType(client *armcostmanagement.QueryClient, sid string, st
 	}
 
 	ctx := context.Background()
-	for retry := 0; retry < 5; retry++ {
+	for retry := 0; retry < 3; retry++ {
 		if err := costLimiter.Wait(ctx); err != nil {
 			log.Printf("Rate limiter error: %v", err)
 		}
@@ -472,7 +472,7 @@ func fetchDailyCostsByType(client *armcostmanagement.QueryClient, sid string, st
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := 2 + retry*3
+			waitSecs := (retry + 1) * 3
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
 			case <-ctx.Done():
@@ -565,7 +565,7 @@ func fetchForecast(client *armcostmanagement.ForecastClient, sid string, start, 
 	}
 
 	ctx := context.Background()
-	for retry := 0; retry < 5; retry++ {
+	for retry := 0; retry < 3; retry++ {
 		if err := costLimiter.Wait(ctx); err != nil {
 			log.Printf("Rate limiter error: %v", err)
 		}
@@ -577,7 +577,7 @@ func fetchForecast(client *armcostmanagement.ForecastClient, sid string, start, 
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := 2 + retry*3
+			waitSecs := (retry + 1) * 3
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
 			case <-ctx.Done():
