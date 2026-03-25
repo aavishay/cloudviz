@@ -49,7 +49,7 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p stri
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := (retry + 1) * 3
+			waitSecs := 10 + int(time.Now().UnixNano()%20)
 			log.Printf("Streaming rate limit (429) hit for %s/%s, retry %d in %ds", sid, p, retry, waitSecs)
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
@@ -93,7 +93,7 @@ func fetchDailyCosts(client *armcostmanagement.QueryClient, sid string, start, e
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := (retry + 1) * 3
+			waitSecs := 10 + int(time.Now().UnixNano()%20)
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
 			case <-ctx.Done():
@@ -472,7 +472,7 @@ func fetchDailyCostsByType(client *armcostmanagement.QueryClient, sid string, st
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := (retry + 1) * 3
+			waitSecs := 10 + int(time.Now().UnixNano()%20)
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
 			case <-ctx.Done():
@@ -577,7 +577,7 @@ func fetchForecast(client *armcostmanagement.ForecastClient, sid string, start, 
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := (retry + 1) * 3
+			waitSecs := 10 + int(time.Now().UnixNano()%20)
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
 			case <-ctx.Done():
