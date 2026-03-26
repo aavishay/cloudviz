@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1248,6 +1250,7 @@ func startServer(port string) {
 	r.GET("/api/history", historyHandler)
 	r.DELETE("/api/costs/cache", func(c *gin.Context) {
 		cache.db.Exec("DELETE FROM costs")
+		cache.db.Exec("DELETE FROM cost_type_daily")
 		c.JSON(200, gin.H{"message": "Cache cleared"})
 	})
 
@@ -1293,11 +1296,52 @@ func startServer(port string) {
 
 	fmt.Printf("CloudViz server starting at :%s\n", port)
 	go backgroundSync(costClient)
+	go openBrowser(fmt.Sprintf("http://localhost:%s", port))
 	r.Run(":" + port)
 }
 
+// openBrowser opens the default browser at the given URL.
+func openBrowser(url string) {
+	var err error
+	switch runtime.GOOS {
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	case "windows":
+		err = exec.Command("cmd", "/c", "start", url).Start()
+	default:
+		_, err = exec.LookPath("xdg-open")
+		if err == nil {
+			err = exec.Command("xdg-open", url).Start()
+		}
+	}
+	if err != nil {
+		log.Printf("Failed to open browser: %v", err)
+	}
+}
+
 func historyHandler(c *gin.Context) {
-	rows, err := cache.db.Query(`SELECT resource_id, COALESCE(resource_name, resource_id), change_type, field_name, old_value, new_value, timestamp FROM resource_history ORDER BY timestamp DESC LIMIT 100`)
+	rows, err := cache.db.Query(`
+		SELECT
+			h.resource_id,
+			COALESCE(h.resource_name, h.resource_id),
+			h.change_type,
+			h.field_name,
+			h.old_value,
+			h.new_value,
+			h.timestamp,
+			COALESCE((
+				SELECT SUM(c.cost)
+				FROM costs c
+				WHERE LOWER(c.resource_id) = LOWER(h.resource_id)
+				AND c.period = (
+					SELECT period FROM costs
+					WHERE LOWER(resource_id) = LOWER(h.resource_id)
+					ORDER BY fetched_at DESC LIMIT 1
+				)
+			), 0) as resource_cost
+		FROM resource_history h
+		ORDER BY h.timestamp DESC
+		LIMIT 100`)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1307,7 +1351,7 @@ func historyHandler(c *gin.Context) {
 	var history []ResourceChange
 	for rows.Next() {
 		var h ResourceChange
-		rows.Scan(&h.ResourceID, &h.ResourceName, &h.ChangeType, &h.Field, &h.OldValue, &h.NewValue, &h.Timestamp)
+		rows.Scan(&h.ResourceID, &h.ResourceName, &h.ChangeType, &h.Field, &h.OldValue, &h.NewValue, &h.Timestamp, &h.Cost)
 		history = append(history, h)
 	}
 	c.JSON(200, history)

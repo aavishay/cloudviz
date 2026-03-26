@@ -25,4 +25,5 @@ type ResourceChange struct {
 	OldValue     string    `json:"oldValue"`
 	NewValue     string    `json:"newValue"`
 	Timestamp    time.Time `json:"timestamp"`
+	Cost         float64   `json:"cost"`
 }

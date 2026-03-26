@@ -102,6 +102,7 @@ interface ResourceChange {
   oldValue: string;
   newValue: string;
   timestamp: string;
+  cost: number;
 }
 
 // ─── Resource type labels ─────────────────────────────────────────────────────
@@ -2971,7 +2972,7 @@ export default function App() {
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
                       <XAxis dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 11 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                      <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} labelStyle={{ color: 'var(--text-1)', fontWeight: 800 }} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8 }} />
+                      <Tooltip formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, '']} labelStyle={{ color: 'var(--text-1)', fontWeight: 800 }} itemStyle={{ color: '#22c55e', fontWeight: 700 }} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8 }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {costsByEnvironment.filter(e => e.value > 0).map((_, i) => (
                           <Cell key={i} fill={COLORS[i % COLORS.length]} />
@@ -3039,10 +3040,23 @@ export default function App() {
                       <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-2)' }}>Track changes to your Azure resources over time</p>
                     </div>
                   </div>
-                  <button className="btn" onClick={() => fetchHistory()} disabled={historyLoading} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {historyLoading ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>}
-                    Refresh
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+                    {history.length > 0 && (() => {
+                      const totalCost = history.reduce((sum, h) => sum + (h.cost || 0), 0);
+                      return totalCost > 0 ? (
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Monthly Cost</div>
+                          <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--accent)' }}>
+                            ${totalCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                        </div>
+                      ) : null;
+                    })()}
+                    <button className="btn" onClick={() => fetchHistory()} disabled={historyLoading} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {historyLoading ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>}
+                      Refresh
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -3132,9 +3146,14 @@ export default function App() {
                               {new Date(h.timestamp).toLocaleString()}
                             </span>
                           </div>
-                          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-1)', marginBottom: 4 }}>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-1)', marginBottom: h.cost > 0 ? 2 : 4 }}>
                             {h.resourceName}
                           </div>
+                          {h.cost > 0 && (
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', marginBottom: 4 }}>
+                              ${h.cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} /mo
+                            </div>
+                          )}
                           <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
                             {isCreated ? (
                               <span style={{ color: 'var(--accent)' }}>New resource added to inventory</span>
