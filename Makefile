@@ -1,7 +1,7 @@
 .PHONY: build build-darwin-arm64 build-darwin-amd64 build-linux release clean test
 
 BINARY_NAME=cloudviz
-VERSION?=0.1.1
+VERSION?=0.1.2
 DIST_DIR=dist
 BACKEND_DIR=backend
 DARWIN_ARM64_DIR=$(DIST_DIR)/darwin_arm64
