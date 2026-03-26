@@ -11,6 +11,7 @@ dist/
 build/
 *.exe
 backend/cloudviz-backend
+cloudviz
 
 # Environment files
 .env
