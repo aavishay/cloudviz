@@ -18,6 +18,40 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
 )
 
+// retryAfter429 calls fn with up to 6 retries. On 429 responses it backs off
+// exponentially starting at 30s (30s, 60s, 120s, 240s, 480s, 960s), capped at 960s.
+func retryAfter429[T any](logCtx string, fn func() (T, error)) (T, error) {
+	var zero T
+	ctx := context.Background()
+	for retry := 0; retry < 6; retry++ {
+		if err := costLimiter.Wait(ctx); err != nil {
+			log.Printf("Rate limiter error for %s: %v", logCtx, err)
+		}
+
+		result, err := fn()
+		if err == nil {
+			return result, nil
+		}
+
+		if strings.Contains(err.Error(), "429") {
+			waitSecs := 30 * (1 << retry)
+			if waitSecs > 960 {
+				waitSecs = 960
+			}
+			log.Printf("Rate limit (429) hit for %s, retry %d in %ds", logCtx, retry, waitSecs)
+			select {
+			case <-time.After(time.Duration(waitSecs) * time.Second):
+			case <-ctx.Done():
+				log.Printf("Context cancelled for %s, stopping retries", logCtx)
+				return zero, ctx.Err()
+			}
+			continue
+		}
+		return zero, err
+	}
+	return zero, fmt.Errorf("max retries exceeded for %s", logCtx)
+}
+
 func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p string, start time.Time, end time.Time, ctx context.Context) (*armcostmanagement.QueryClientUsageResponse, error) {
 	scope := "subscriptions/" + sid
 	props := armcostmanagement.QueryDefinition{
@@ -37,31 +71,15 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p stri
 		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
 	}
 
-	for retry := 0; retry < 3; retry++ {
-		if err := costLimiter.Wait(ctx); err != nil {
-			log.Printf("Rate limiter error: %v", err)
-		}
-
-		res, err := client.Usage(ctx, scope, props, nil)
-		if err == nil {
-			cache.set(sid, p, res.QueryResult)
-			return &res, nil
-		}
-
-		if strings.Contains(err.Error(), "429") {
-			waitSecs := 15 * (1 << retry)
-			log.Printf("Streaming rate limit (429) hit for %s/%s, retry %d in %ds", sid, p, retry, waitSecs)
-			select {
-			case <-time.After(time.Duration(waitSecs) * time.Second):
-			case <-ctx.Done():
-				log.Printf("Context cancelled for %s/%s, stopping retries", sid, p)
-				return nil, ctx.Err()
-			}
-			continue
-		}
+	logCtx := fmt.Sprintf("%s/%s", sid, p)
+	res, err := retryAfter429(logCtx, func() (armcostmanagement.QueryClientUsageResponse, error) {
+		return client.Usage(ctx, scope, props, nil)
+	})
+	if err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("max retries exceeded for %s/%s", sid, p)
+	cache.set(sid, p, res.QueryResult)
+	return &res, nil
 }
 
 // fetchDailyCosts queries Azure Cost Management grouped by date for daily trend data
@@ -81,29 +99,14 @@ func fetchDailyCosts(client *armcostmanagement.QueryClient, sid string, start, e
 		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
 	}
 
-	ctx := context.Background()
-	for retry := 0; retry < 3; retry++ {
-		if err := costLimiter.Wait(ctx); err != nil {
-			log.Printf("Rate limiter error: %v", err)
-		}
-
+	return retryAfter429(sid, func() ([]map[string]any, error) {
+		ctx := context.Background()
 		res, err := client.Usage(ctx, scope, props, nil)
-		if err == nil {
-			return parseDailyCostResults(res.QueryResult), nil
+		if err != nil {
+			return nil, err
 		}
-
-		if strings.Contains(err.Error(), "429") {
-			waitSecs := 15 * (1 << retry)
-			select {
-			case <-time.After(time.Duration(waitSecs) * time.Second):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			continue
-		}
-		return nil, err
-	}
-	return nil, fmt.Errorf("max retries exceeded for daily costs %s", sid)
+		return parseDailyCostResults(res.QueryResult), nil
+	})
 }
 
 func parseDailyCostResults(res armcostmanagement.QueryResult) []map[string]any {
@@ -452,7 +455,7 @@ func fetchDailyCostsByType(client *armcostmanagement.QueryClient, sid string, st
 				"totalCost": {Name: to.Ptr("PreTaxCost"), Function: to.Ptr(armcostmanagement.FunctionTypeSum)},
 			},
 			Grouping: []*armcostmanagement.QueryGrouping{
-				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("BillingMonth")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("Date")},
 				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ResourceType")},
 			},
 		},
@@ -460,29 +463,14 @@ func fetchDailyCostsByType(client *armcostmanagement.QueryClient, sid string, st
 		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
 	}
 
-	ctx := context.Background()
-	for retry := 0; retry < 3; retry++ {
-		if err := costLimiter.Wait(ctx); err != nil {
-			log.Printf("Rate limiter error: %v", err)
-		}
-
+	return retryAfter429(sid, func() ([]map[string]any, error) {
+		ctx := context.Background()
 		res, err := client.Usage(ctx, scope, props, nil)
-		if err == nil {
-			return parseDailyCostsByType(res.QueryResult), nil
+		if err != nil {
+			return nil, err
 		}
-
-		if strings.Contains(err.Error(), "429") {
-			waitSecs := 15 * (1 << retry)
-			select {
-			case <-time.After(time.Duration(waitSecs) * time.Second):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			continue
-		}
-		return nil, err
-	}
-	return nil, fmt.Errorf("max retries exceeded for daily costs by type %s", sid)
+		return parseDailyCostsByType(res.QueryResult), nil
+	})
 }
 
 func parseDailyCostsByType(res armcostmanagement.QueryResult) []map[string]any {
@@ -531,7 +519,10 @@ func parseDailyCostsByType(res armcostmanagement.QueryResult) []map[string]any {
 		// Parse date string - Azure returns yyyyMMdd or yyyy-MM-dd format
 		dateStr := strings.TrimSpace(dateVal)
 		if len(dateStr) == 8 { // yyyyMMdd
-			dateStr = fmt.Sprintf("%s-%s-%s", dateStr[0:4], dateStr[4:6], dateStr[6:8])
+			year := dateStr[0:4]
+			month := dateStr[4:6]
+			day := dateStr[6:8]
+			dateStr = fmt.Sprintf("%s-%s-%s", year, month, day)
 		}
 		// else: already yyyy-MM-dd from Date dimension, use as-is
 		// Normalize resource type
@@ -564,30 +555,16 @@ func fetchForecast(client *armcostmanagement.ForecastClient, sid string, start, 
 		},
 	}
 
-	ctx := context.Background()
-	for retry := 0; retry < 3; retry++ {
-		if err := costLimiter.Wait(ctx); err != nil {
-			log.Printf("Rate limiter error: %v", err)
-		}
-
-		res, err := client.Usage(ctx, scope, props, nil)
-		if err == nil {
-			actualCost, forecastCost = parseForecastResults(res.QueryResult)
-			return actualCost, forecastCost, nil
-		}
-
-		if strings.Contains(err.Error(), "429") {
-			waitSecs := 15 * (1 << retry)
-			select {
-			case <-time.After(time.Duration(waitSecs) * time.Second):
-			case <-ctx.Done():
-				return 0, 0, ctx.Err()
-			}
-			continue
-		}
+	logCtx := fmt.Sprintf("forecast %s", sid)
+	res, err := retryAfter429(logCtx, func() (armcostmanagement.ForecastClientUsageResponse, error) {
+		ctx := context.Background()
+		return client.Usage(ctx, scope, props, nil)
+	})
+	if err != nil {
 		return 0, 0, err
 	}
-	return 0, 0, fmt.Errorf("max retries exceeded for forecast %s", sid)
+	actualCost, forecastCost = parseForecastResults(res.QueryResult)
+	return actualCost, forecastCost, nil
 }
 
 func parseForecastResults(res armcostmanagement.QueryResult) (actualCost, forecastCost float64) {
