@@ -1645,6 +1645,52 @@ th:hover .col-resize-handle { opacity: 1; background: var(--accent); }
   50% { transform: translate(25%, 25%); opacity: 0.6; }
 }
 
+/* ─── Confidence badge ──────────────────────────────────────────────────────── */
+.confidence-badge {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.confidence-badge.high { background: var(--accent-dim); color: var(--accent); }
+.confidence-badge.medium { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+.confidence-badge.low { background: var(--bg-surface); color: var(--text-3); }
+
+/* ─── Recommendation cards ─────────────────────────────────────────────────── */
+.reco-card {
+  border-left-width: 3px;
+  border-left-style: solid;
+}
+.reco-card.priority-1 { border-left-color: var(--danger); }
+.reco-card.priority-2 { border-left-color: var(--warning); }
+.reco-card.priority-3 { border-left-color: var(--text-3); }
+
+/* ─── Category badges ───────────────────────────────────────────────────────── */
+.category-badge.rightsize { background: #3b82f6; }
+.category-badge.stop { background: #ef4444; }
+.category-badge.schedule { background: #f59e0b; }
+.category-badge.migrate { background: #8b5cf6; }
+.category-badge.delete { background: #dc2626; }
+.category-badge.monitor { background: var(--text-3); }
+
+/* ─── AI row button ────────────────────────────────────────────────────────── */
+.ai-row-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 3px 10px;
+  background: linear-gradient(135deg, var(--accent) 0%, #34d399 100%);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 10;
+  white-space: nowrap;
+}
+
 /* ─── Status indicators ─────────────────────────────────────────────────────── */
 .status-dot {
   width: 8px;

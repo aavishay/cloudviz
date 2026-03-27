@@ -120,6 +120,21 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	}
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_budgets_sub ON budgets(subscription_id)`)
 
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS alerts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		type TEXT NOT NULL DEFAULT 'budget',
+		threshold REAL NOT NULL,
+		email TEXT,
+		webhook_url TEXT,
+		enabled INTEGER DEFAULT 1,
+		subscription_id TEXT,
+		resource_group TEXT,
+		period TEXT DEFAULT 'monthly',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_alerts_sub ON alerts(subscription_id)`)
+
 	return &dbCache{db: db}, nil
 }
 

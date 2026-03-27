@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, Component, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, AreaChart, Area } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, AreaChart, Area, Brush, ReferenceArea } from 'recharts';
 import { jsPDF } from 'jspdf';
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
@@ -573,7 +573,7 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
 // ─── AIInsightsModal ──────────────────────────────────────────────────────────
 
 function AIInsightsModal({ resource, onClose, insight, loading }: {
-  resource: AzureResource; onClose: () => void; insight: { metrics: MetricSeries; recommendation: string } | null; loading: boolean;
+  resource: AzureResource; onClose: () => void; insight: { metrics: MetricSeries; recommendations: Array<{category: string; action: string; estimatedSavings: number; savingsPercent: number; rationale: string; priority: number}> } | null; loading: boolean;
 }) {
   return (
     <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -625,24 +625,25 @@ function AIInsightsModal({ resource, onClose, insight, loading }: {
                 Historical Metrics (7 Days)
               </span>
             </div>
-            {insight?.metrics ? (
+            {insight?.metrics && Object.keys(insight.metrics).length > 0 && Object.values(insight.metrics).some(v => v.length > 0) ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {Object.entries(insight.metrics).map(([name, vals]) => (
-                  <div key={name} className="metric-card">
-                    <div>
-                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 2 }}>{name}</div>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>
-                        {(vals[vals.length - 1] ?? 0).toFixed(1)}%
+                  vals.length > 0 ? (
+                    <div key={name} className="metric-card">
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 2 }}>{name}</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>
+                          {(vals[vals.length - 1] ?? 0).toFixed(1)}%
+                        </div>
                       </div>
+                      <Sparkline data={vals} />
                     </div>
-                    <Sparkline data={vals} />
-                  </div>
+                  ) : null
                 ))}
               </div>
             ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0', color: 'var(--text-2)', fontSize: 13 }}>
-                <div className="spinner" />
-                Fetching telemetry...
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0', color: 'var(--text-3)', fontSize: 13 }}>
+                No telemetry available for this resource type
               </div>
             )}
           </div>
@@ -661,7 +662,22 @@ function AIInsightsModal({ resource, onClose, insight, loading }: {
               </div>
             ) : (
               <div className="reco-box">
-                {insight?.recommendation ?? 'No recommendation available for this resource.'}
+                {insight?.recommendations && insight.recommendations.length > 0 ? (
+                  insight.recommendations.map((rec, i) => (
+                    <div key={i} style={{ padding: '8px 0', borderBottom: i < insight.recommendations.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: rec.category === 'delete' ? 'var(--danger-dim)' : rec.category === 'stop' ? 'var(--warning-dim)' : rec.category === 'rightsize' ? 'var(--accent-dim)' : 'var(--bg-surface)', color: rec.category === 'delete' ? 'var(--danger)' : rec.category === 'stop' ? 'var(--warning)' : 'var(--accent)' }}>
+                          {rec.category.toUpperCase()}
+                        </span>
+                        {rec.estimatedSavings > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>${rec.estimatedSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo</span>}
+                      </div>
+                      <div style={{ fontSize: 13, color: 'var(--text-1)', marginBottom: 4 }}>{rec.action}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{rec.rationale}</div>
+                    </div>
+                  ))
+                ) : (
+                  <span style={{ color: 'var(--text-3)', fontSize: 13 }}>No recommendations available for this resource.</span>
+                )}
               </div>
             )}
           </div>
@@ -859,7 +875,15 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [filterPresets, setFilterPresets] = useState<Array<{name: string; regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; showOrphanedOnly: boolean; showUnattachedDiskOnly: boolean; showUnassignedPIPOnly: boolean; showUnattachedNICOnly: boolean}>>(() => {
+    const saved = localStorage.getItem('cloudviz-filterPresets');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
+  const [dashboardOrder, setDashboardOrder] = useState<string[]>(() => {
+    const saved = localStorage.getItem('cloudviz-dashOrder');
+    return saved ? JSON.parse(saved) : ['insights', 'summary', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
+  });
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('cloudviz-theme');
@@ -867,7 +891,7 @@ export default function App() {
   });
 
   const [selectedResource, setSelectedResource] = useState<AzureResource | null>(null);
-  const [aiInsight, setAiInsight] = useState<{ metrics: MetricSeries; recommendation: string } | null>(null);
+  const [aiInsight, setAiInsight] = useState<{ metrics: MetricSeries; recommendations: Array<{category: string; action: string; estimatedSavings: number; savingsPercent: number; rationale: string; priority: number}> } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => {
@@ -891,6 +915,10 @@ export default function App() {
     const saved = localStorage.getItem('cloudviz-budget');
     return saved ? parseFloat(saved) : 0;
   });
+  const [trendZoom, setTrendZoom] = useState<{ left: number; right: number } | null>(null);
+  const [isSelectingZoom, setIsSelectingZoom] = useState(false);
+  const [zoomStart, setZoomStart] = useState<number | null>(null);
+  const [zoomEnd, setZoomEnd] = useState<number | null>(null);
   useEffect(() => { localStorage.setItem('cloudviz-budget', String(budgetLimit)); }, [budgetLimit]);
   useEffect(() => { localStorage.setItem('cloudviz-currentPage', String(currentPage)); }, [currentPage]);
   useEffect(() => { localStorage.setItem('cloudviz-costPeriod', costPeriod); }, [costPeriod]);
@@ -898,6 +926,8 @@ export default function App() {
   const [history, setHistory] = useState<ResourceChange[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [dragItem, setDragItem] = useState<string | null>(null);
+  const [dragOverItem, setDragOverItem] = useState<string | null>(null);
   const [commitmentSavings, setCommitmentSavings] = useState<any>(null);
   const [typeTrendData, setTypeTrendData] = useState<any>(null);
   const [envFilter, setEnvFilter] = useState(() => localStorage.getItem('cloudviz-envFilter') || '');
@@ -905,6 +935,7 @@ export default function App() {
   const [wasteData, setWasteData] = useState<any>(null);
   const [periodComparison, setPeriodComparison] = useState<any>(null);
   const [forecastData, setForecastData] = useState<{actualCost: number; forecastCost: number; periodDays: number} | null>(null);
+  const [anomalyData, setAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; ratio: number; change: number}>; threshold: number; periodStart: string; periodEnd: string} | null>(null);
 
   const [allPossibleFilters, setAllPossibleFilters] = useState<{ subs: string[]; locations: string[]; rgs: string[]; types: string[] }>({
     subs: [], locations: [], rgs: [], types: [],
@@ -934,6 +965,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-sort', JSON.stringify(sortConfig)); }, [sortConfig]);
   useEffect(() => { localStorage.setItem('cloudviz-tab', activeTab); }, [activeTab]);
   useEffect(() => { localStorage.setItem('cloudviz-sidebarCollapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
+  useEffect(() => { localStorage.setItem('cloudviz-dashOrder', JSON.stringify(dashboardOrder)); }, [dashboardOrder]);
 
   // Fetch filter options
   useEffect(() => {
@@ -1063,6 +1095,18 @@ export default function App() {
       .then(data => { if (!data.error && data.actualCost !== undefined) setForecastData(data); })
       .catch(() => {});
   }, [activeSubs, costPeriod]);
+
+  // Fetch cost anomalies from backend
+  useEffect(() => {
+    if (activeSubs.length === 0) return;
+    const params = new URLSearchParams();
+    activeSubs.forEach(s => params.append('subscriptionId', s));
+    fetch(`http://localhost:8080/api/costs/anomalies?${params}`)
+      .then(r => r.json())
+      .then(data => { if (data.anomalies) setAnomalyData(data); })
+      .catch(() => {});
+  }, [activeSubs]);
+
 
   const fetchAIInsights = async (resource: AzureResource) => {
     setAiLoading(true);
@@ -1742,6 +1786,34 @@ export default function App() {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
                     Settings
                   </button>
+                  <button className="btn" onClick={() => { const name = prompt('Preset name:'); if (!name) return; const preset = { name, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly }; const saved = JSON.parse(localStorage.getItem('cloudviz-filterPresets') || '[]'); localStorage.setItem('cloudviz-filterPresets', JSON.stringify([...saved, preset])); setFilterPresets([...filterPresets, preset]); }} title="Save current filters as preset">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
+                    Save Filters
+                  </button>
+                  {filterPresets.length > 0 && (
+                    <select
+                      onChange={e => {
+                        const idx = parseInt(e.target.value);
+                        if (idx === -1) return;
+                        const p = filterPresets[idx];
+                        setRegionFilter(p.regionFilter);
+                        setSubFilter(p.subFilter);
+                        setRgFilter(p.rgFilter);
+                        setTypeFilter(p.typeFilter);
+                        setShowOrphanedOnly(p.showOrphanedOnly);
+                        setShowUnattachedDiskOnly(p.showUnattachedDiskOnly);
+                        setShowUnassignedPIPOnly(p.showUnassignedPIPOnly);
+                        setShowUnattachedNICOnly(p.showUnattachedNICOnly);
+                        setCurrentPage(1);
+                        e.target.value = '-1';
+                      }}
+                      defaultValue="-1"
+                      style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 12, cursor: 'pointer' }}
+                    >
+                      <option value="-1">Load Preset...</option>
+                      {filterPresets.map((p, i) => <option key={i} value={i}>{p.name}</option>)}
+                    </select>
+                  )}
                 </div>
               </div>
 
@@ -2150,12 +2222,9 @@ export default function App() {
                   {topSpenders.length > 0 ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       {topSpenders.map((c, i) => {
-                        const maxCost = topSpenders[0]?.cost || 1;
-                        const percentage = maxCost > 0 ? (c.cost / maxCost) * 100 : 0;
                         return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); const rg = c.resourceGroup; if (rg) { setRgFilter([rg]); } else { setRgFilter([]); } setCurrentPage(1); }} onMouseEnter={e => { const s = e.currentTarget.style; s.borderColor = 'var(--danger)'; s.transform = 'translateX(4px)'; s.boxShadow = '0 4px 12px rgba(244, 63, 94, 0.15)'; }} onMouseLeave={e => { const s = e.currentTarget.style; s.borderColor = 'var(--border)'; s.transform = 'translateX(0)'; s.boxShadow = 'none'; }}>
-                            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `linear-gradient(90deg, ${COLORS[i % COLORS.length]}15, transparent)`, transition: 'width 0.5s ease' }} />
-                            <div style={{ width: 28, height: 28, borderRadius: '50%', background: `linear-gradient(135deg, ${COLORS[i % COLORS.length]}, ${COLORS[(i + 1) % COLORS.length]})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, zIndex: 1, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{i + 1}</div>
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative' }} onClick={() => { setActiveTab('resources'); const rg = c.resourceGroup; if (rg) { setRgFilter([rg]); } else { setRgFilter([]); } setCurrentPage(1); }} onMouseEnter={e => { const s = e.currentTarget.style; s.borderColor = COLORS[i % COLORS.length]; s.transform = 'translateX(4px)'; }} onMouseLeave={e => { const s = e.currentTarget.style; s.borderColor = 'var(--border)'; s.transform = 'translateX(0)'; }}>
+                            <div style={{ width: 28, height: 28, borderRadius: '50%', background: COLORS[i % COLORS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{i + 1}</div>
                             <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
                               <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.resourceGroup || 'Unknown'}</div>
                               <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(c.resourceType || '')}</div>
@@ -2381,15 +2450,22 @@ export default function App() {
                       ))}
                     </div>
                     <ResponsiveContainer width="100%" height={180}>
-                    <LineChart data={dailyCosts} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                    <LineChart data={dailyCosts} margin={{ top: 5, right: 20, left: 10, bottom: 5 }} onMouseDown={(e: any) => { if (e && e.activeLabelIndex !== undefined) { setIsSelectingZoom(true); setZoomStart(e.activeLabelIndex); setZoomEnd(null); } }} onMouseMove={(e: any) => { if (isSelectingZoom && e && e.activeLabelIndex !== undefined) setZoomEnd(e.activeLabelIndex); }} onMouseUp={() => { if (isSelectingZoom && zoomStart !== null && zoomEnd !== null && zoomStart !== zoomEnd) { const left = Math.min(zoomStart, zoomEnd); const right = Math.max(zoomStart, zoomEnd); setTrendZoom({ left, right }); } setIsSelectingZoom(false); setZoomStart(null); setZoomEnd(null); }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
                       <XAxis dataKey="date" tick={{ fill: 'var(--text-3)', fontSize: 9 }} tickFormatter={v => v ? v.slice(5) : ''} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: 'var(--text-3)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} labelFormatter={(l: unknown) => String(l)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
                       <Area type="monotone" dataKey="cost" stroke="transparent" fill="var(--accent)" fillOpacity={1} />
                       <Line type="monotone" dataKey="cost" stroke="var(--accent)" strokeWidth={2.5} dot={false} activeDot={{ r: 6, fill: 'var(--accent)', stroke: 'var(--bg-card)', strokeWidth: 3, style: { filter: 'drop-shadow(0 2px 6px rgba(16 185 129 / 0.4))' } }} />
+                      {isSelectingZoom && zoomStart !== null && zoomEnd !== null && <ReferenceArea x1={Math.min(zoomStart, zoomEnd)} x2={Math.max(zoomStart, zoomEnd)} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.15} />}
+                      {trendZoom && <Brush dataKey="date" height={24} stroke="var(--border)" fill="var(--bg-surface)" startIndex={trendZoom.left} endIndex={trendZoom.right} travellerWidth={8} />}
                     </LineChart>
                   </ResponsiveContainer>
+                  {trendZoom && (
+                    <button onClick={() => setTrendZoom(null)} style={{ marginTop: 6, padding: '3px 10px', fontSize: 10, fontWeight: 600, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-surface)', color: 'var(--text-2)', cursor: 'pointer' }}>
+                      Reset Zoom
+                    </button>
+                  )}
                   </>
                 ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3v18h18" /><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" /></svg>} message="No trend data available" />}
               </div>
@@ -2766,7 +2842,7 @@ export default function App() {
               )}
 
               {/* Cost Anomalies */}
-              {costAnomalies.length > 0 && (
+              {(costAnomalies.length > 0 || (anomalyData && anomalyData.anomalies.length > 0)) && (
                 <div className="card" style={{ padding: 24, borderLeft: '4px solid var(--danger)', background: 'linear-gradient(135deg, var(--bg-card) 0%, rgba(244 63 94 / 0.03) 100%)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
                     <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--danger-dim)', border: '1px solid rgba(244 63 94 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -2774,36 +2850,70 @@ export default function App() {
                     </div>
                     <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost Anomalies Detected</span>
                     <span style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 12, background: 'var(--danger-dim)', color: 'var(--danger)', fontSize: 11, fontWeight: 700 }}>
-                      {costAnomalies.length} spike{costAnomalies.length > 1 ? 's' : ''}
+                      {(anomalyData?.anomalies.length || costAnomalies.length)} spike{(anomalyData?.anomalies.length || costAnomalies.length) > 1 ? 's' : ''}
                     </span>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
-                    Resources with significant cost increases (&gt;50%) compared to previous period
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {costAnomalies.map((a, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.resourceGroup); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                        <div style={{
-                          width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                          background: a.severity === 'high' ? 'var(--danger-dim)' : 'var(--warning-dim)',
-                          color: a.severity === 'high' ? 'var(--danger)' : 'var(--warning)',
-                          fontSize: 12, fontWeight: 700
-                        }}>
-                          {a.severity === 'high' ? '!!' : '!'}
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.resourceGroup}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{friendlyType(a.resourceType)} · {a.location}</div>
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.spike.toFixed(0)}%</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-                            ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
-                          </div>
-                        </div>
+                  {anomalyData && anomalyData.anomalies.length > 0 ? (
+                    <>
+                      <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+                        Daily cost increases exceeding {anomalyData.threshold}x previous period · {anomalyData.periodStart} to {anomalyData.periodEnd}
                       </div>
-                    ))}
-                  </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {anomalyData.anomalies.slice(0, 8).map((a, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.subscriptionId); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                            <div style={{
+                              width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                              background: a.ratio >= 3 ? 'var(--danger-dim)' : 'var(--warning-dim)',
+                              color: a.ratio >= 3 ? 'var(--danger)' : 'var(--warning)',
+                              fontSize: 12, fontWeight: 700
+                            }}>
+                              {a.ratio >= 3 ? '!!' : '!'}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.subscriptionId.slice(0, 18)}...</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.change.toFixed(0)}%</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                                ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+                        Resources with significant cost increases (&gt;50%) compared to previous period
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {costAnomalies.map((a, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.resourceGroup); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                            <div style={{
+                              width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                              background: a.severity === 'high' ? 'var(--danger-dim)' : 'var(--warning-dim)',
+                              color: a.severity === 'high' ? 'var(--danger)' : 'var(--warning)',
+                              fontSize: 12, fontWeight: 700
+                            }}>
+                              {a.severity === 'high' ? '!!' : '!'}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.resourceGroup}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{friendlyType(a.resourceType)} · {a.location}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.spike.toFixed(0)}%</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                                ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -3555,6 +3665,62 @@ export default function App() {
                     >
                       {p} days
                     </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Dashboard Layout */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <label style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-2)' }}>
+                    Dashboard Layout
+                  </label>
+                  <button
+                    onClick={() => setDashboardOrder(['insights', 'summary', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'])}
+                    style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-3)', cursor: 'pointer' }}
+                  >
+                    Reset
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {[
+                    { id: 'insights', label: 'Quick Insights' },
+                    { id: 'summary', label: 'Summary Cards' },
+                    { id: 'costComparison', label: 'Cost Comparison' },
+                    { id: 'chartsRow', label: 'Charts Row' },
+                    { id: 'costBySub', label: 'Cost by Subscription' },
+                    { id: 'dailyTrends', label: 'Daily Cost Trends' },
+                    { id: 'optimization', label: 'Optimization' },
+                    { id: 'waste', label: 'Waste Detection' },
+                    { id: 'forecast', label: 'Cost Forecast' },
+                    { id: 'costAnomalies', label: 'Cost Anomalies' },
+                  ].map(item => (
+                    <div
+                      key={item.id}
+                      draggable
+                      onDragStart={() => setDragItem(item.id)}
+                      onDragOver={(e) => { e.preventDefault(); setDragOverItem(item.id); }}
+                      onDragEnd={() => { setDragItem(null); setDragOverItem(null); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (dragItem && dragItem !== item.id) {
+                          setDashboardOrder(prev => {
+                            const next = [...prev];
+                            const from = next.indexOf(dragItem);
+                            const to = next.indexOf(item.id);
+                            next.splice(from, 1);
+                            next.splice(to, 0, dragItem);
+                            return next;
+                          });
+                        }
+                        setDragItem(null);
+                        setDragOverItem(null);
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 8, background: dragItem === item.id ? 'var(--accent-dim)' : dragOverItem === item.id ? 'var(--bg-surface)' : 'var(--bg-surface)', border: `1px solid ${dragOverItem === item.id ? 'var(--accent)' : 'var(--border)'}`, opacity: dragItem && dragItem !== item.id ? 0.6 : 1, cursor: 'grab', transition: 'all 0.15s ease' }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ cursor: 'grab', flexShrink: 0 }}><path d="M5 9l4-4 4 4M5 15l4 4 4-4"/></svg>
+                      <span style={{ flex: 1, fontSize: 12, color: 'var(--text-1)' }}>{item.label}</span>
+                    </div>
                   ))}
                 </div>
               </div>

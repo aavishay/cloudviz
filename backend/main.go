@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -15,6 +17,7 @@ import (
 
 	"embed"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/costmanagement/armcostmanagement"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
 	"github.com/gin-contrib/cors"
@@ -23,6 +26,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/time/rate"
 	"io/fs"
+	"math"
 )
 
 //go:embed dist
@@ -385,9 +389,13 @@ func startServer(port string) {
 	// Cost anomaly detection endpoint
 	r.GET("/api/costs/anomalies", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
-		threshold := 2.0 // default: flag if cost is 2x or more of previous period
+		threshold := 2.0 // ratio threshold: flag if cost is threshold-x or more of previous period
+		zThreshold := 2.0 // z-score threshold: flag if cost is zThreshold std deviations above mean
 		if t := c.Query("threshold"); t != "" {
 			fmt.Sscanf(t, "%f", &threshold)
+		}
+		if z := c.Query("zscore"); z != "" {
+			fmt.Sscanf(z, "%f", &zThreshold)
 		}
 
 		now := time.Now()
@@ -428,7 +436,27 @@ func startServer(port string) {
 					}
 				}
 
-				// Compare each day in current period vs same day last period
+				// Compute current period mean and stddev for z-score
+				var currentVals []float64
+				for _, v := range currentMap {
+					currentVals = append(currentVals, v)
+				}
+				var currMean, currStdDev float64
+				if len(currentVals) > 1 {
+					sum := 0.0
+					for _, v := range currentVals {
+						sum += v
+					}
+					currMean = sum / float64(len(currentVals))
+					variance := 0.0
+					for _, v := range currentVals {
+						diff := v - currMean
+						variance += diff * diff
+					}
+					currStdDev = math.Sqrt(variance / float64(len(currentVals)))
+				}
+
+				// Compare each day in current period vs same day last period (ratio-based)
 				for date, currCost := range currentMap {
 					prevCost, exists := previousMap[date]
 					if !exists || prevCost == 0 {
@@ -444,8 +472,32 @@ func startServer(port string) {
 							"previousCost":   prevCost,
 							"ratio":          ratio,
 							"change":         (ratio - 1) * 100,
+							"type":           "ratio",
 						})
 						mu.Unlock()
+						continue
+					}
+					// Z-score based: within-period statistical anomaly
+					if currStdDev > 0 {
+						zScore := (currCost - currMean) / currStdDev
+						if zScore >= zThreshold {
+							changeVal := 0.0
+							if currMean > 0 {
+								changeVal = ((currCost - currMean) / currMean) * 100
+							}
+							mu.Lock()
+							anomalies = append(anomalies, map[string]any{
+								"subscriptionId": subID,
+								"date":           date,
+								"currentCost":    currCost,
+								"previousCost":   prevCost,
+								"ratio":          ratio,
+								"change":         changeVal,
+								"type":           "zscore",
+								"zscore":         zScore,
+							})
+							mu.Unlock()
+						}
 					}
 				}
 			}(sid)
@@ -455,6 +507,7 @@ func startServer(port string) {
 		c.JSON(200, map[string]any{
 			"anomalies":   anomalies,
 			"threshold":   threshold,
+			"zThreshold":  zThreshold,
 			"periodStart": currentStart.Format("2006-01-02"),
 			"periodEnd":   now.Format("2006-01-02"),
 		})
@@ -575,6 +628,99 @@ func startServer(port string) {
 			}
 		}
 		c.JSON(200, statuses)
+	})
+
+	// Alerts CRUD
+	r.GET("/api/alerts", func(c *gin.Context) {
+		rows, err := cache.db.Query("SELECT id, name, type, threshold, email, webhook_url, enabled, subscription_id, resource_group, period FROM alerts ORDER BY created_at DESC")
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		var alerts []map[string]any
+		for rows.Next() {
+			var id int
+			var name, alertType, email, webhook, subID, rg, period string
+			var threshold float64
+			var enabled int
+			if rows.Scan(&id, &name, &alertType, &threshold, &email, &webhook, &enabled, &subID, &rg, &period) == nil {
+				alerts = append(alerts, map[string]any{
+					"id": id, "name": name, "type": alertType, "threshold": threshold,
+					"email": email, "webhookUrl": webhook, "enabled": enabled == 1,
+					"subscriptionId": subID, "resourceGroup": rg, "period": period,
+				})
+			}
+		}
+		c.JSON(200, alerts)
+	})
+
+	r.POST("/api/alerts", func(c *gin.Context) {
+		var body struct {
+			Name           string  `json:"name"`
+			Type           string  `json:"type"`
+			Threshold      float64 `json:"threshold"`
+			Email          string  `json:"email"`
+			WebhookURL     string  `json:"webhookUrl"`
+			Enabled        bool    `json:"enabled"`
+			SubscriptionID string  `json:"subscriptionId"`
+			ResourceGroup  string  `json:"resourceGroup"`
+			Period         string  `json:"period"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		if body.Type == "" {
+			body.Type = "budget"
+		}
+		if body.Period == "" {
+			body.Period = "monthly"
+		}
+		enabledVal := 0
+		if body.Enabled {
+			enabledVal = 1
+		}
+		res, err := cache.db.Exec("INSERT INTO alerts (name, type, threshold, email, webhook_url, enabled, subscription_id, resource_group, period) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			body.Name, body.Type, body.Threshold, body.Email, body.WebhookURL, enabledVal, body.SubscriptionID, body.ResourceGroup, body.Period)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		id, _ := res.LastInsertId()
+		c.JSON(200, map[string]any{"id": id, "message": "Alert created"})
+	})
+
+	r.PUT("/api/alerts/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		var body struct {
+			Name           string  `json:"name"`
+			Type           string  `json:"type"`
+			Threshold      float64 `json:"threshold"`
+			Email          string  `json:"email"`
+			WebhookURL     string  `json:"webhookUrl"`
+			Enabled        bool    `json:"enabled"`
+			SubscriptionID string  `json:"subscriptionId"`
+			ResourceGroup  string  `json:"resourceGroup"`
+			Period         string  `json:"period"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		enabledVal := 0
+		if body.Enabled {
+			enabledVal = 1
+		}
+		cache.db.Exec("UPDATE alerts SET name=?, type=?, threshold=?, email=?, webhook_url=?, enabled=?, subscription_id=?, resource_group=?, period=? WHERE id=?",
+			body.Name, body.Type, body.Threshold, body.Email, body.WebhookURL, enabledVal, body.SubscriptionID, body.ResourceGroup, body.Period, id)
+		c.JSON(200, map[string]any{"message": "Alert updated"})
+	})
+
+	r.DELETE("/api/alerts/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		cache.db.Exec("DELETE FROM alerts WHERE id = ?", id)
+		c.JSON(200, map[string]any{"message": "Alert deleted"})
 	})
 
 	// Idle VM detection endpoint
@@ -699,6 +845,91 @@ func startServer(port string) {
 		}
 		wg.Wait()
 		c.JSON(200, recommendations)
+	})
+
+	// Azure Advisor recommendations
+	r.GET("/api/advisor/recommendations", func(c *gin.Context) {
+		category := c.DefaultQuery("category", "Cost")
+		subID := c.DefaultQuery("subscriptionId", "")
+
+		apiVersion := "2024-11-18-preview"
+		url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/providers/Microsoft.Advisor/recommendations?api-version=%s&$filter=properties/category eq '%s'",
+			subID, apiVersion, category)
+
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+
+		cred, _ := azidentity.NewDefaultAzureCredential(nil)
+		token, err := cred.GetToken(context.Background(), policy.TokenRequestOptions{Scopes: []string{"https://management.azure.com/.default"}})
+		if err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to get token: %v", err)})
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+token.Token)
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 {
+			c.JSON(resp.StatusCode, gin.H{"error": fmt.Sprintf("Advisor API returned %d: %s", resp.StatusCode, string(body))})
+			return
+		}
+
+		var result struct {
+			Value []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Properties struct {
+					Category        string `json:"category"`
+					Impact          string `json:"impact"`
+					ImpactedField   string `json:"impactedField"`
+					ImpactedValue   string `json:"impactedValue"`
+					ResourceGroup   string `json:"resourceGroup"`
+					ShortDescription struct {
+						Problem  string `json:"problem"`
+						Solution string `json:"solution"`
+					} `json:"shortDescription"`
+					ExtendedProperties  map[string]string `json:"extendedProperties"`
+					RecommendationTypeID string `json:"recommendationTypeId"`
+				} `json:"properties"`
+			} `json:"value"`
+		}
+
+		if err := json.Unmarshal(body, &result); err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to parse response: %v", err)})
+			return
+		}
+
+		var recommendations []map[string]any
+		for _, r := range result.Value {
+			rec := map[string]any{
+				"id":                   r.ID,
+				"category":             r.Properties.Category,
+				"impact":               r.Properties.Impact,
+				"impactedField":        r.Properties.ImpactedField,
+				"impactedValue":        r.Properties.ImpactedValue,
+				"resourceGroup":        r.Properties.ResourceGroup,
+				"problem":              r.Properties.ShortDescription.Problem,
+				"solution":             r.Properties.ShortDescription.Solution,
+				"extendedProperties":   r.Properties.ExtendedProperties,
+				"recommendationTypeId": r.Properties.RecommendationTypeID,
+			}
+			recommendations = append(recommendations, rec)
+		}
+
+		c.JSON(200, map[string]any{
+			"recommendations": recommendations,
+			"count":           len(recommendations),
+		})
 	})
 
 	// Commitment savings calculator
@@ -1105,6 +1336,73 @@ func startServer(port string) {
 		})
 	})
 
+	// Monthly cost trend (last 3 months)
+	r.GET("/api/costs/trend", func(c *gin.Context) {
+		subs := c.QueryArray("subscriptionId")
+		if len(subs) == 0 {
+			c.JSON(400, gin.H{"error": "at least one subscriptionId is required"})
+			return
+		}
+
+		type monthData struct {
+			Month string  `json:"month"`
+			Cost  float64 `json:"cost"`
+		}
+
+		// Get costs for last 90 days grouped by month
+		now := time.Now()
+		start := now.AddDate(0, -3, 0)
+
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 5)
+		monthlyCosts := make(map[string]float64)
+
+		for _, sid := range subs {
+			wg.Add(1)
+			go func(subID string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				daily, err := fetchDailyCosts(costClient, subID, start, now)
+				if err != nil {
+					return
+				}
+
+				mu.Lock()
+				for _, d := range daily {
+					if dateStr, ok := d["date"].(string); ok {
+						if len(dateStr) >= 7 {
+							monthKey := dateStr[:7] // "YYYY-MM"
+							cost, _ := d["cost"].(float64)
+							monthlyCosts[monthKey] += cost
+						}
+					}
+				}
+				mu.Unlock()
+			}(sid)
+		}
+		wg.Wait()
+
+		// Sort by month and return last 3
+		var months []string
+		for m := range monthlyCosts {
+			months = append(months, m)
+		}
+		sort.Strings(months)
+		if len(months) > 3 {
+			months = months[len(months)-3:]
+		}
+
+		var result []monthData
+		for _, m := range months {
+			result = append(result, monthData{Month: m, Cost: monthlyCosts[m]})
+		}
+
+		c.JSON(200, result)
+	})
+
 	// Cost forecast using Azure's AI-powered forecast API
 	r.GET("/api/costs/forecast", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
@@ -1228,21 +1526,50 @@ func startServer(port string) {
 			return
 		}
 
-		metrics, err := fetchHistoricalMetrics(c.Request.Context(), rid)
+		// 1. Get resource context (cost, RG, location, type)
+		resource, err := getResourceContext(c.Request.Context(), rid)
 		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
+			c.JSON(500, gin.H{"error": "failed to get resource context: " + err.Error()})
 			return
 		}
 
-		reco, err := getOllamaRecommendation(metrics, rid)
+		// 2. Fetch metrics
+		resourceType := resource.Type
+		metrics, err := fetchResourceMetrics(c.Request.Context(), rid, resourceType)
 		if err != nil {
-			// Fallback is handled inside getOllamaRecommendation
-			log.Printf("Ollama error: %v", err)
+			c.JSON(500, gin.H{"error": "failed to fetch metrics: " + err.Error()})
+			return
 		}
 
-		c.JSON(200, gin.H{
-			"metrics":        metrics,
-			"recommendation": reco,
+		// 3. Calculate statistics
+		stats := calculateMetricsStats(metrics)
+
+		// 4. Get Ollama recommendation
+		recommendations, confidence, overallCategory, ollamaErr := getOllamaRecommendation(metrics, rid, resource)
+
+		// 5. If Ollama failed, use rule-based fallback
+		if ollamaErr != nil || len(recommendations) == 0 {
+			recommendations = getRuleBasedRecommendation(resource, stats)
+			confidence = 0.5 // lower confidence for rule-based
+			if overallCategory == "" && len(recommendations) > 0 {
+				overallCategory = recommendations[0].Category
+			}
+		}
+
+		c.JSON(200, AIInsight{
+			ResourceID:       rid,
+			ResourceName:     resource.Name,
+			ResourceType:     resource.Type,
+			ResourceGroup:    resource.ResourceGroup,
+			Location:         resource.Location,
+			SubscriptionID:   resource.SubscriptionID,
+			MonthlyCost:      resource.Cost,
+			Metrics:          metrics,
+			MetricsSummary:   stats,
+			Recommendations:  recommendations,
+			Category:         overallCategory,
+			ConfidenceScore:  confidence,
+			OllamaAvailable:  ollamaErr == nil,
 		})
 	})
 
