@@ -4041,3 +4041,14 @@ button:focus-visible {
   0%, 100% { box-shadow: 0 2px 8px rgba(16 185 129 / 0.3); }
   50% { box-shadow: 0 2px 16px rgba(16 185 129 / 0.5); }
 }
+
+/* Panel drag-and-drop */
+.panel-drag {
+  position: relative;
+}
+.panel-drag:hover .panel-drag-handle {
+  opacity: 1 !important;
+}
+.panel-drag:active {
+  cursor: grabbing;
+}

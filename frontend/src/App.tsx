@@ -967,7 +967,1176 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-sidebarCollapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
   useEffect(() => { localStorage.setItem('cloudviz-dashOrder', JSON.stringify(dashboardOrder)); }, [dashboardOrder]);
 
-  // Fetch filter options
+  // ── Dashboard panel renderers ──────────────────────────────────────────────
+  const renderInsights = () => (
+    (lowScoreCount > 0 || orphanedCount > 0 || costAnomalies.length > 0) && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'linear-gradient(135deg, rgba(244 63 94 / 0.08) 0%, rgba(245 158 11 / 0.05) 100%)', borderRadius: 12, border: '1px solid rgba(244 63 94 / 0.15)' }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--danger-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+        </div>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>Action Required:</span>
+          {lowScoreCount > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--warning-dim)', borderRadius: 6, fontSize: 12, fontWeight: 500, color: 'var(--warning)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); }} onMouseEnter={e => { e.currentTarget.style.transform='scale(1.02)'; }} onMouseLeave={e => { e.currentTarget.style.transform='scale(1)'; }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
+              {lowScoreCount} low-score resources
+            </span>
+          )}
+          {orphanedCount > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--danger-dim)', borderRadius: 6, fontSize: 12, fontWeight: 500, color: 'var(--danger)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); setShowOrphanedOnly(true); }} onMouseEnter={e => { e.currentTarget.style.transform='scale(1.02)'; }} onMouseLeave={e => { e.currentTarget.style.transform='scale(1)'; }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+              {orphanedCount} orphaned
+            </span>
+          )}
+          {costAnomalies.length > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'rgba(245 158 11 / 0.15)', borderRadius: 6, fontSize: 12, fontWeight: 500, color: 'var(--warning)' }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
+              {costAnomalies.length} cost spike{costAnomalies.length > 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  );
+
+  const renderSummary = () => (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('costs')}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(16 185 129 / 0.2)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Total Cost</span>
+          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
+        </div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: budgetStatus?.status === 'over' ? 'var(--danger)' : budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>
+          {costsLoading ? <span style={{ opacity: 0.5 }}>—</span> : `$${totalCostsSum.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span>{costsLoading ? 'Loading...' : `${costs.length} cost entries`}</span>
+          {budgetStatus && !costsLoading && <span style={{ padding: '2px 8px', borderRadius: 12, background: budgetStatus.color === 'var(--accent)' ? 'var(--accent-dim)' : budgetStatus.color === 'var(--warning)' ? 'var(--warning-dim)' : 'var(--danger-dim)', color: budgetStatus.color, fontSize: 10, fontWeight: 600 }}>{budgetStatus.message}</span>}
+        </div>
+        {!costsLoading && periodComparison && (
+          <div style={{ fontSize: 11, color: periodComparison.delta?.percent > 0 ? 'var(--danger)' : 'var(--accent)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+            {periodComparison.delta?.percent > 0 ? '↑' : '↓'} {Math.abs(periodComparison.delta?.percent || 0).toFixed(1)}% vs prior {costPeriod}d period
+            <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>
+              ({periodComparison.delta?.absolute > 0 ? '+' : ''}${periodComparison.delta?.absolute?.toLocaleString(undefined, { maximumFractionDigits: 0 })})
+            </span>
+          </div>
+        )}
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: budgetStatus?.status === 'over' || budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', opacity: 0.6 }} />
+      </div>
+
+      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('resources')}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(59 130 246 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--blue-dim)', border: '1px solid rgba(59 130 246 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59 130 246 / 0.2)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Resources</span>
+          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
+        </div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>{totalResources.toLocaleString()}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{uniqueSubs.length} subscriptions</div>
+      </div>
+
+      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(245 158 11 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(245 158 11 / 0.12)', border: '1px solid rgba(245 158 11 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(245 158 11 / 0.2)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Optimization</span>
+            {lowScoreCount > 0 && <span style={{ padding: '2px 8px', borderRadius: 10, background: 'var(--warning-dim)', color: 'var(--warning)', fontSize: 10, fontWeight: 700 }}>{lowScoreCount}</span>}
+          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
+        </div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: lowScoreCount > 0 ? 'var(--warning)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>{lowScoreCount}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>resources with score &lt; 50</div>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: lowScoreCount > 0 ? 'var(--warning)' : 'var(--accent)', opacity: 0.6 }} />
+      </div>
+
+      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setShowOrphanedOnly(true); setCurrentPage(1); }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--danger-dim)', border: '1px solid rgba(244 63 94 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244 63 94 / 0.2)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Orphaned</span>
+            {orphanedCount > 0 && <span style={{ padding: '2px 8px', borderRadius: 10, background: 'var(--danger-dim)', color: 'var(--danger)', fontSize: 10, fontWeight: 700 }}>{orphanedCount}</span>}
+          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
+        </div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>{orphanedCount}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>unattached resources</div>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)', opacity: 0.6 }} />
+      </div>
+
+      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('costs')}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(139 92 246 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(139 92 246 / 0.12)', border: '1px solid rgba(139 92 246 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.2)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Forecast</span>
+          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
+        </div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: forecastedMonthlyCost && budgetLimit > 0 && forecastedMonthlyCost > budgetLimit ? 'var(--danger)' : 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>
+          {forecastedMonthlyCost ? `$${forecastedMonthlyCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>{forecastedMonthlyCost ? 'monthly estimate' : 'loading...'}</span>
+          {budgetLimit > 0 && forecastedMonthlyCost && <span style={{ padding: '2px 8px', borderRadius: 12, background: forecastedMonthlyCost > budgetLimit ? 'var(--danger-dim)' : 'var(--accent-dim)', color: forecastedMonthlyCost > budgetLimit ? 'var(--danger)' : 'var(--accent)', fontSize: 10, fontWeight: 600 }}>vs ${budgetLimit.toLocaleString()}</span>}
+        </div>
+      </div>
+
+      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { if (lowScoreCount + orphanedCount + costAnomalies.length > 0) { setActiveTab('resources'); if (orphanedCount > 0) setShowOrphanedOnly(true); } }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent-dim)' : 'var(--danger-dim)', border: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? '1px solid var(--accent-border)' : '1px solid rgba(244 63 94 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? '0 2px 8px rgba(16 185 129 / 0.2)' : '0 2px 8px rgba(244 63 94 / 0.2)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent)' : 'var(--danger)'} strokeWidth="2.5">{(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /> : <circle cx="12" cy="12" r="10" />}{(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 && <path d="M9 11l3 3L22 4" />}{(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) > 0 && <path d="M12 8v4M12 16h.01" />}</svg>
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Health</span>
+          </div>
+          {(lowScoreCount + orphanedCount + costAnomalies.length) > 0 && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>}
+        </div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent)' : (lowScoreCount + orphanedCount) > 5 ? 'var(--danger)' : 'var(--warning)', letterSpacing: '-0.03em', lineHeight: 1 }}>
+          {(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? '✓' : lowScoreCount + orphanedCount + costAnomalies.length}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+          {(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'All systems healthy' : 'issues need attention'}
+        </div>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent)' : 'var(--warning)', opacity: 0.6 }} />
+      </div>
+    </div>
+  );
+
+  const renderCostComparison = () => (
+    costComparison && (
+      <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }} onClick={() => setActiveTab('costs')}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: `radial-gradient(circle at top right, ${costComparison.isIncrease ? 'rgba(244 63 94 / 0.15)' : 'rgba(16 185 129 / 0.15)'} 0%, transparent 70%)`, borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59 130 246 / 0.3)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M23 6l-9.5 9.5-5-5L1 18" /><path d="M17 6h6v6" /></svg>
+            </div>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Month-over-Month</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Cost comparison</span>
+            </div>
+          </div>
+          <span style={{ fontSize: 10, fontWeight: 600, color: '#3b82f6', background: 'rgba(59 130 246 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(59 130 246 / 0.2)', cursor: 'pointer' }}>Click to view</span>
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)' }}>Current Period</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)' }}>Previous Period</span>
+          </div>
+          <div style={{ display: 'flex', gap: 4, height: 12, borderRadius: 6, background: 'var(--bg-surface)', overflow: 'hidden', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)' }}>
+            <div style={{ flex: costComparison.current, background: costComparison.isIncrease ? 'linear-gradient(90deg, #f43f5e 0%, #e11d48 100%)' : 'linear-gradient(90deg, #10b981 0%, #059669 100%)', borderRadius: 6, transition: 'width 0.5s ease', position: 'relative' }}>
+              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, rgba(255,255,255,0.2) 0%, transparent 100%)' }} />
+            </div>
+            <div style={{ flex: costComparison.previous, background: 'linear-gradient(90deg, var(--border-strong) 0%, var(--border) 100%)', borderRadius: 6, transition: 'width 0.5s ease' }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
+            <span style={{ fontSize: 20, fontWeight: 900, color: 'var(--text-1)' }}>${costComparison.current.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+            <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-2)' }}>${costComparison.previous.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 20, background: `linear-gradient(135deg, var(--bg-surface) 0%, ${costComparison.isIncrease ? 'rgba(244 63 94 / 0.05)' : 'rgba(16 185 129 / 0.05)'} 100%)`, borderRadius: 16, border: '1px solid var(--border)' }}>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', background: costComparison.isIncrease ? 'linear-gradient(135deg, var(--danger-dim) 0%, rgba(244 63 94 / 0.3) 100%)' : 'linear-gradient(135deg, var(--accent-dim) 0%, rgba(16 185 129 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)'}` }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)'} strokeWidth="2.5">{costComparison.isIncrease ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M19 12l-7 7-7-7" />}</svg>
+          </div>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)', lineHeight: 1 }}>
+              {costComparison.isIncrease ? '+' : ''}{costComparison.percentChange.toFixed(1)}%
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
+              {costComparison.isIncrease ? 'Increase' : 'Decrease'} of ${Math.abs(costComparison.change).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+          </div>
+        </div>
+        {biggestChanges.length > 0 && (
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 10 }}>Biggest Changes</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {biggestChanges.map((c, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setActiveTab('resources'); const rg = c.resourceGroup; if (rg) { setRgFilter([rg]); } else { setRgFilter([]); } setCurrentPage(1); }} onMouseEnter={e => { const s = e.currentTarget.style; s.borderColor='var(--border-strong)'; s.transform='translateX(4px)'; }} onMouseLeave={e => { const s = e.currentTarget.style; s.borderColor='var(--border)'; s.transform='translateX(0)'; }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 6, background: c.change > 0 ? 'var(--danger-dim)' : 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.change > 0 ? 'var(--danger)' : 'var(--accent)'} strokeWidth="2.5">{c.change > 0 ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M19 12l-7 7-7-7" />}</svg>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.resourceGroup || 'Unknown'}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)' }}>{friendlyType(c.resourceType || '')}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: c.change > 0 ? 'var(--danger)' : 'var(--accent)' }}>
+                      {c.change > 0 ? '+' : ''}{c.percentChange.toFixed(0)}%
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
+                      ${Math.abs(c.change).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  );
+
+  const renderChartsRow = () => (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 16 }}>
+      {/* Cost by Region (PieChart) */}
+      <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--blue-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--blue) 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59, 130, 246, 0.3)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>
+            </div>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Region</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsByRegion.length} regions</span>
+            </div>
+          </div>
+          <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: 'var(--blue)', background: 'var(--blue-dim)', padding: '4px 10px', borderRadius: 12, border: '1px solid var(--blue-border)' }}>Interactive</span>
+        </div>
+        {costsByRegion.length > 0 ? (
+          <>
+            <div style={{ position: 'relative' }}>
+              <ResponsiveContainer width="100%" height={160}>
+                <PieChart>
+                  <Pie
+                    data={costsByRegion}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={60}
+                    innerRadius={35}
+                    paddingAngle={2}
+                    onClick={(data: { name?: string; payload?: { name?: string } }) => { const name = data?.name || data?.payload?.name; if (name) { setActiveTab('resources'); setRegionFilter([String(name)]); setCurrentPage(1); } }}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    {costsByRegion.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', transition: 'all 0.2s ease', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />)}
+                  </Pie>
+                   <Tooltip
+                     formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
+                     labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
+                     itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
+                     contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
+                   />
+                </PieChart>
+              </ResponsiveContainer>
+              <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--text-1)' }}>${(totalCostsSum / 1000).toFixed(0)}k</div>
+                <div style={{ fontSize: 9, color: 'var(--text-3)', fontWeight: 500 }}>TOTAL</div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+              {costsByRegion.slice(0, 6).map((item, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onClick={() => { setActiveTab('resources'); setRegionFilter([item.name]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--blue)'; e.currentTarget.style.background='var(--blue-dim)'; e.currentTarget.style.transform='translateY(-1px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--bg-surface)'; e.currentTarget.style.transform='translateY(0)'; }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 3, background: COLORS[i % COLORS.length] }} />
+                  <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-2)' }}>{item.name}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
+      </div>
+
+      {/* Cost by Resource Type */}
+      <div className="card chart-card-clickable" style={{ padding: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>
+            </div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost by Resource Type</span>
+          </div>
+          <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click bars</span>
+        </div>
+        {costsByType.length > 0 ? (
+          <>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              {costsByType.slice(0, 3).map((item, i) => (
+                <div key={i} style={{ flex: 1, padding: '8px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setTypeFilter(item.raw); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor=COLORS[i % COLORS.length]; e.currentTarget.style.transform='translateY(-2px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0)'; }}>
+                  <div style={{ position: 'absolute', top: 0, left: 0, width: 4, bottom: 0, background: COLORS[i % COLORS.length] }} />
+                  <div style={{ paddingLeft: 4 }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-2)', marginBottom: 2 }}>#{i + 1}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ height: Math.max(120, costsByType.length * 24) }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={costsByType} layout="vertical" margin={{ left: 60, right: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
+                  <XAxis type="number" tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 10 }} width={80} axisLine={false} tickLine={false} />
+                   <Tooltip
+                     formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
+                     labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
+                     itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
+                     contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
+                     cursor={{ fill: 'var(--accent-dim)' }}
+                   />
+                  <Bar dataKey="value" radius={[0, 4, 4, 0]} onClick={(data: { raw?: string; payload?: { raw?: string } }) => { const raw = data?.raw || data?.payload?.raw; if (raw) { setActiveTab('resources'); setTypeFilter(raw); setCurrentPage(1); } }} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }}>
+                    {costsByType.map((_, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
+      </div>
+
+      {/* Cost by Type Trend (Stacked Area) */}
+      {typeTrendData?.dates && typeTrendData.types && typeTrendData.types.length > 0 && (
+        <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(99 102 241 / 0.12) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(99 102 241 / 0.3)' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M3 3v18h18" /><path d="M7 12l4-4 4 4 5-6" /></svg>
+              </div>
+              <div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Type Trend</span>
+                <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{typeTrendData.types.length} types · {costPeriod} day period</span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {(['7', '30', '90'] as const).map(p => (
+                <button key={p} onClick={() => setCostPeriod(p)} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: costPeriod === p ? 'var(--accent)' : 'var(--border)', borderRadius: 6, background: costPeriod === p ? 'var(--accent)' : 'transparent', color: costPeriod === p ? 'white' : 'var(--text-2)', cursor: 'pointer' }}>
+                  {p}d
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+            {typeTrendData.types.slice(0, 8).map((t: string, i: number) => (
+              <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text-2)' }}>
+                <div style={{ width: 8, height: 8, borderRadius: 2, background: COLORS[i % COLORS.length] }} />
+                <span>{t}</span>
+              </div>
+            ))}
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={typeTrendData.dates} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
+              <XAxis dataKey="date" tick={{ fill: 'var(--text-3)', fontSize: 9 }} tickFormatter={v => typeof v === 'string' ? v.slice(5) : ''} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: 'var(--text-3)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
+              <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} labelFormatter={(l: unknown) => String(l)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
+              {typeTrendData.types.slice(0, 8).map((t: string, i: number) => (
+                <Area key={t} type="monotone" dataKey={t} stackId="1" stroke="transparent" fill={COLORS[i % COLORS.length]} fillOpacity={1} />
+              ))}
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Top Spenders */}
+      <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: '#f43f5e', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244, 63 94, 0.3)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+            </div>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Top Cost Drivers</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Click to filter resources</span>
+            </div>
+          </div>
+          <div style={{ padding: '4px 10px', background: 'var(--danger-dim)', borderRadius: 12, border: '1px solid rgba(244 63 94 / 0.2)' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger)' }}>${topSpenders.reduce((s, c) => s + c.cost, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+          </div>
+        </div>
+        {topSpenders.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {topSpenders.map((c, i) => {
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative' }} onClick={() => { setActiveTab('resources'); const rg = c.resourceGroup; if (rg) { setRgFilter([rg]); } else { setRgFilter([]); } setCurrentPage(1); }} onMouseEnter={e => { const s = e.currentTarget.style; s.borderColor = COLORS[i % COLORS.length]; s.transform = 'translateX(4px)'; }} onMouseLeave={e => { const s = e.currentTarget.style; s.borderColor = 'var(--border)'; s.transform = 'translateX(0)'; }}>
+                  <div style={{ width: 28, height: 28, borderRadius: '50%', background: COLORS[i % COLORS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{i + 1}</div>
+                  <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.resourceGroup || 'Unknown'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(c.resourceType || '')}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', zIndex: 1 }}>
+                    <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 14 }}>${c.cost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{totalCostsSum > 0 ? ((c.cost / totalCostsSum) * 100).toFixed(1) : '0'}%</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
+      </div>
+    </div>
+  );
+
+  // ── DraggablePanel wrapper ────────────────────────────────────────────────────
+  const [dndDragId, setDndDragId] = useState<string | null>(null);
+  const [dndOverId, setDndOverId] = useState<string | null>(null);
+
+  const handleDragStart = (id: string) => setDndDragId(id);
+  const handleDragOver = (e: React.DragEvent, id: string) => { e.preventDefault(); setDndOverId(id); };
+  const handleDrop = (e: React.DragEvent, id: string) => {
+    e.preventDefault();
+    if (dndDragId && dndDragId !== id) {
+      setDashboardOrder(prev => {
+        const next = [...prev];
+        const from = next.indexOf(dndDragId);
+        const to = next.indexOf(id);
+        next.splice(from, 1);
+        next.splice(to, 0, dndDragId);
+        return next;
+      });
+    }
+    setDndDragId(null);
+    setDndOverId(null);
+  };
+  const handleDragEnd = () => { setDndDragId(null); setDndOverId(null); };
+
+  const PanelWrapper = ({ id, children }: { id: string; children: React.ReactNode }) => (
+    <div
+      draggable
+      onDragStart={() => handleDragStart(id)}
+      onDragOver={(e) => handleDragOver(e, id)}
+      onDrop={(e) => handleDrop(e, id)}
+      onDragEnd={handleDragEnd}
+      className="panel-drag"
+      style={{
+        opacity: dndDragId && dndDragId !== id ? 0.5 : 1,
+        border: dndOverId === id ? '2px solid var(--accent)' : '2px solid transparent',
+        borderRadius: 16,
+        transition: 'opacity 0.2s, border-color 0.15s',
+        cursor: 'grab',
+        overflow: 'auto',
+      }}
+    >
+      <div className="panel-drag-handle" style={{ position: 'absolute', top: 10, left: 10, zIndex: 10, cursor: 'grab', opacity: 0, transition: 'opacity 0.15s', display: 'flex', alignItems: 'center', gap: 4, padding: '2px 6px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 10, color: 'var(--text-3)', fontWeight: 600 }}>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 9l4-4 4 4M5 15l4 4 4-4"/></svg>
+        Drag
+      </div>
+      {children}
+    </div>
+  );
+
+  const dashboardPanels: { id: string; render: () => React.ReactNode }[] = [
+    { id: 'insights', render: renderInsights },
+    { id: 'summary', render: renderSummary },
+    { id: 'costComparison', render: renderCostComparison },
+    { id: 'chartsRow', render: renderChartsRow },
+    { id: 'costBySub', render: () => (
+      <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px var(--accent-dim)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+            </div>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Subscription</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsBySubscription.length} subscriptions</span>
+            </div>
+          </div>
+          <span className="chart-hint-badge">Interactive</span>
+        </div>
+        {costsBySubscription.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {costsBySubscription.slice(0, 5).map((sub, i) => {
+              const maxVal = costsBySubscription[0]?.value || 1;
+              const percentage = maxVal > 0 ? (sub.value / maxVal) * 100 : 0;
+              const color = COLORS[i % COLORS.length];
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { const fullId = uniqueSubs.find(s => s.startsWith(sub.name)); if (fullId) { setActiveTab('resources'); setSubFilter([fullId]); setCurrentPage(1); }}} onMouseEnter={e => { e.currentTarget.style.borderColor = color; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = `0 4px 12px ${color}20`; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                  <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `${color}15`, transition: 'width 0.5s ease' }} />
+                  <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{sub.name}</div>
+                  <div style={{ flex: 1, height: 8, background: 'var(--border)', borderRadius: 4, overflow: 'hidden', zIndex: 1 }}>
+                    <div style={{ height: '100%', width: `${percentage}%`, background: color, borderRadius: 4, transition: 'width 0.5s ease' }} />
+                  </div>
+                  <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 13, minWidth: 65, textAlign: 'right', zIndex: 1 }}>${(sub.value / 1000).toFixed(1)}k</div>
+                </div>
+              );
+            })}
+            {costsBySubscription.length > 5 && (
+              <div style={{ textAlign: 'center', padding: '10px', color: 'var(--text-3)', fontSize: 11, background: 'var(--bg-surface)', borderRadius: 8, border: '1px dashed var(--border)' }}>
+                +{costsBySubscription.length - 5} more subscriptions
+              </div>
+            )}
+          </div>
+        ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
+      </div>
+    ) },
+    { id: 'costByEnv', render: () => (
+      <>
+        {(loading || (costsByEnvironment.length > 0 && costsByEnvironment.some(e => e.name !== 'Untagged'))) && (
+          <div className="card chart-card-clickable" style={{ padding: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(236 72 153 / 0.3)' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
+                </div>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Environment</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Tagged resources</span>
+                </div>
+              </div>
+              <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#ec4899', background: 'rgba(236 72 153 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(236 72 153 / 0.2)' }}>Interactive</span>
+            </div>
+            <div style={{ display: 'flex', gap: 24, alignItems: 'center', minHeight: 180 }}>
+              <div style={{ position: 'relative', width: '40%', height: 160 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0)}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={70}
+                      innerRadius={45}
+                      paddingAngle={3}
+                      style={{ cursor: 'pointer' }}
+                      onClick={(data: any) => { if (data?.name) { setActiveTab('resources'); setTagFilter({ key: 'Environment', value: data.name }); setCurrentPage(1); } }}
+                    >
+                      {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).map((_, i) => (
+                        <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', outline: 'none' }} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
+                      labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
+                      itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
+                      contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-1)' }}>
+                    ${(costsByEnvironment.filter(e => e.name !== 'Untagged').reduce((acc, curr) => acc + curr.value, 0) / 1000).toFixed(0)}k
+                  </div>
+                  <div style={{ fontSize: 8, color: 'var(--text-3)', fontWeight: 600, letterSpacing: '0.05em' }}>TAGGED</div>
+                </div>
+              </div>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', paddingRight: 4 }}>
+                {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).slice(0, 8).map((env, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onClick={() => { setActiveTab('resources'); setTagFilter({ key: 'Environment', value: env.name }); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor=COLORS[i % COLORS.length]; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.background='var(--bg-hover)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.background='var(--bg-surface)'; }}>
+                    <div style={{ width: 10, height: 10, borderRadius: 3, background: COLORS[i % COLORS.length], flexShrink: 0 }} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{env.name}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(env.value / 1000).toFixed(1)}k</span>
+                  </div>
+                ))}
+                {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).length > 8 && (
+                  <div style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 10, padding: '4px 0' }}>
+                    +{costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).length - 8} more environments
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    ) },
+    { id: 'costTiers', render: () => (
+      <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, rgba(34 197 94 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(34 197 94 / 0.3)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5M2 12l10 5 10-5" /></svg>
+            </div>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Resources by Cost Tier</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Click to filter</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {resourceAgeDistribution.map((group, i) => {
+            const counts = resourceAgeDistribution.map(g => g.count);
+            const maxCount = counts.length > 0 ? Math.max(...counts) : 1;
+            const percentage = maxCount > 0 ? (group.count / maxCount) * 100 : 0;
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); }} onMouseEnter={e => { e.currentTarget.style.borderColor = group.color; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = `0 4px 12px ${group.color}25`; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `${group.color}15`, transition: 'width 0.5s ease' }} />
+                <div style={{ width: 14, height: 14, borderRadius: 4, background: group.color, flexShrink: 0, zIndex: 1 }} />
+                <div style={{ flex: 1, zIndex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)' }}>{group.label}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${percentage}%`, background: group.color, borderRadius: 2, transition: 'width 0.5s ease' }} />
+                    </div>
+                    <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{group.count}</span>
+                  </div>
+                </div>
+                <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 13, textAlign: 'right', zIndex: 1 }}>
+                  ${group.cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    ) },
+    { id: 'dailyTrends', render: () => (
+      <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(6 182 212 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(6 182 212 / 0.3)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
+            </div>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Daily Cost Trends</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>30-day rolling view</span>
+            </div>
+          </div>
+          <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#06b6d4', background: 'rgba(6 182 212 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(6 182 212 / 0.2)' }}>Interactive</span>
+        </div>
+        {Array.isArray(dailyCosts) && dailyCosts.length > 0 && (
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+            {(() => {
+              const costs = dailyCosts.map(d => d.cost);
+              const avg = costs.length > 0 ? costs.reduce((a, b) => a + b, 0) / costs.length : 0;
+              const max = costs.length > 0 ? Math.max(...costs) : 0;
+              const trend = costs.length > 1 && costs[0] > 0 ? ((costs[costs.length - 1] - costs[0]) / costs[0]) * 100 : 0;
+              return (
+                <>
+                  <div style={{ flex: 1, padding: '12px 14px', background: 'linear-gradient(135deg, var(--bg-surface) 0%, rgba(16 185 129 / 0.05) 100%)', borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: 'var(--accent-dim)', borderRadius: '0 8px 0 100%' }} />
+                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Average</div>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--text-1)', lineHeight: 1 }}>${avg.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>per day</div>
+                  </div>
+                  <div style={{ flex: 1, padding: '12px 14px', background: 'linear-gradient(135deg, var(--bg-surface) 0%, rgba(244 63 94 / 0.05) 100%)', borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 8px 0 100%' }} />
+                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Peak</div>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--danger)', lineHeight: 1 }}>${max.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>highest day</div>
+                  </div>
+                  <div style={{ flex: 1, padding: '12px 14px', background: `linear-gradient(135deg, var(--bg-surface) 0%, ${trend >= 0 ? 'rgba(244 63 94 / 0.05)' : 'rgba(16 185 129 / 0.05)'} 100%)`, borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: trend >= 0 ? 'var(--danger-dim)' : 'var(--accent-dim)', borderRadius: '0 8px 0 100%' }} />
+                    <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Trend</div>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: trend >= 0 ? 'var(--danger)' : 'var(--accent)', lineHeight: 1 }}>
+                      {trend >= 0 ? '+' : ''}{trend.toFixed(1)}%
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>vs start</div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        )}
+        {Array.isArray(dailyCosts) && dailyCosts.length > 0 ? (
+          <>
+            <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+              {(['7', '30', '90'] as const).map(p => (
+                <button key={p} onClick={() => setCostPeriod(p)} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: costPeriod === p ? 'var(--accent)' : 'var(--border)', borderRadius: 6, background: costPeriod === p ? 'var(--accent)' : 'transparent', color: costPeriod === p ? 'white' : 'var(--text-2)', cursor: 'pointer' }}>
+                  {p}d
+                </button>
+              ))}
+            </div>
+            <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={dailyCosts} margin={{ top: 5, right: 20, left: 10, bottom: 5 }} onMouseDown={(e: any) => { if (e && e.activeLabelIndex !== undefined) { setIsSelectingZoom(true); setZoomStart(e.activeLabelIndex); setZoomEnd(null); } }} onMouseMove={(e: any) => { if (isSelectingZoom && e && e.activeLabelIndex !== undefined) setZoomEnd(e.activeLabelIndex); }} onMouseUp={() => { if (isSelectingZoom && zoomStart !== null && zoomEnd !== null && zoomStart !== zoomEnd) { const left = Math.min(zoomStart, zoomEnd); const right = Math.max(zoomStart, zoomEnd); setTrendZoom({ left, right }); } setIsSelectingZoom(false); setZoomStart(null); setZoomEnd(null); }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
+              <XAxis dataKey="date" tick={{ fill: 'var(--text-3)', fontSize: 9 }} tickFormatter={v => v ? v.slice(5) : ''} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: 'var(--text-3)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
+              <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} labelFormatter={(l: unknown) => String(l)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
+              <Area type="monotone" dataKey="cost" stroke="transparent" fill="var(--accent)" fillOpacity={1} />
+              <Line type="monotone" dataKey="cost" stroke="var(--accent)" strokeWidth={2.5} dot={false} activeDot={{ r: 6, fill: 'var(--accent)', stroke: 'var(--bg-card)', strokeWidth: 3, style: { filter: 'drop-shadow(0 2px 6px rgba(16 185 129 / 0.4))' } }} />
+              {isSelectingZoom && zoomStart !== null && zoomEnd !== null && <ReferenceArea x1={Math.min(zoomStart, zoomEnd)} x2={Math.max(zoomStart, zoomEnd)} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.15} />}
+              {trendZoom && <Brush dataKey="date" height={24} stroke="var(--border)" fill="var(--bg-surface)" startIndex={trendZoom.left} endIndex={trendZoom.right} travellerWidth={8} />}
+            </LineChart>
+          </ResponsiveContainer>
+          {trendZoom && (
+            <button onClick={() => setTrendZoom(null)} style={{ marginTop: 6, padding: '3px 10px', fontSize: 10, fontWeight: 600, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-surface)', color: 'var(--text-2)', cursor: 'pointer' }}>
+              Reset Zoom
+            </button>
+          )}
+          </>
+        ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3v18h18" /><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" /></svg>} message="No trend data available" />}
+      </div>
+    ) },
+    { id: 'optimization', render: () => (
+      <>
+        {optimizationOpportunities.length > 0 && (
+          <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden', borderLeft: lowScoreCount + orphanedCount > 5 ? '4px solid var(--danger)' : '4px solid var(--warning)' }}>
+            <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: '#f43f5e', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244 63 94 / 0.3)' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
+                </div>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Optimization Opportunities</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{optimizationOpportunities.length} items need attention</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(16 185 129 / 0.3)' }}>
+                  ${totalPotentialSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
+                </span>
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {optimizationOpportunities.slice(0, 5).map((o, i) => {
+                const maxSavings = optimizationOpportunities[0]?.potentialSavings || 1;
+                const percentage = maxSavings > 0 ? (o.potentialSavings / maxSavings) * 100 : 0;
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(o.resource.name); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                    <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: 'linear-gradient(90deg, rgba(244 63 94 / 0.08), transparent)', transition: 'width 0.5s ease' }} />
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, var(--danger-dim) 0%, rgba(244 63 94 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, zIndex: 1, border: '1px solid rgba(244 63 94 / 0.2)' }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2"><path d="M12 9v2M12 13h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.resource.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{o.reason}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', zIndex: 1 }}>
+                      <div style={{ fontWeight: 700, color: 'var(--danger)', fontSize: 16 }}>${o.potentialSavings.toFixed(0)}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text-3)' }}>per month</div>
+                    </div>
+                  </div>
+                );
+              })}
+              {optimizationOpportunities.length > 5 && (
+                <div style={{ textAlign: 'center', padding: '10px', color: 'var(--text-3)', fontSize: 11, background: 'var(--bg-surface)', borderRadius: 8, border: '1px dashed var(--border)' }}>
+                  +{optimizationOpportunities.length - 5} more opportunities
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </>
+    ) },
+    { id: 'waste', render: () => (
+      <>
+        {wasteData && wasteData.items && wasteData.items.length > 0 && (
+          <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden', borderLeft: '4px solid var(--warning)' }}>
+            <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--warning-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--warning) 0%, #d97706 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                </div>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Waste Detection</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{wasteData.totalCount} non-production workloads running 24/7</span>
+                </div>
+              </div>
+              <span style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--warning) 0%, #d97706 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
+                ${(wasteData.totalWaste || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo waste
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {wasteData.items.slice(0, 5).map((w: any, i: number) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(w.name); setCurrentPage(1); }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(245 158 11 / 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{w.resourceGroup} · {w.environment}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--warning)', fontSize: 14 }}>${w.monthlyCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>per month</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </>
+    ) },
+    { id: 'forecast', render: () => (
+      <>
+        {periodComparison && (
+          <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(59 130 246 / 0.12) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(99 102 241 / 0.3)' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M3 3v18h18" /><path d="M9 17V9M15 17V5M21 17v-4" /></svg>
+                </div>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Month-End Forecast</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Based on {periodComparison.currentPeriod?.days || 30} days of data</span>
+                </div>
+              </div>
+              {budgetLimit > 0 && (
+                <div style={{ textAlign: 'right' }}>
+                  {(() => {
+                    const currentTotal = periodComparison.currentPeriod?.totalCost || 0;
+                    const projectedMonthly = periodComparison.currentPeriod?.days > 0
+                      ? (currentTotal / Number(periodComparison.currentPeriod.days)) * 30
+                      : 0;
+                    const budgetPct = (projectedMonthly / budgetLimit) * 100;
+                    const overBudget = projectedMonthly > budgetLimit;
+                    return (
+                      <div style={{ padding: '6px 12px', borderRadius: 8, background: overBudget ? 'var(--danger-dim)' : budgetPct > 80 ? 'var(--warning-dim)' : 'var(--accent-dim)', border: `1px solid ${overBudget ? 'var(--danger)' : budgetPct > 80 ? 'var(--warning)' : 'var(--accent)'}` }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: overBudget ? 'var(--danger)' : budgetPct > 80 ? 'var(--warning)' : 'var(--accent)' }}>
+                          {overBudget ? 'Over Budget' : budgetPct > 80 ? 'Near Limit' : 'On Track'}
+                        </div>
+                        <div style={{ fontSize: 10, color: overBudget ? 'var(--danger)' : 'var(--text-2)' }}>
+                          ${projectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })} projected
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+            {(() => {
+              const currentTotal = forecastData ? forecastData.actualCost : (periodComparison.currentPeriod?.totalCost || 0);
+              const forecastTotal = forecastData ? forecastData.forecastCost : 0;
+              const projectedMonthly = currentTotal + forecastTotal;
+              const dayOfMonth = new Date().getDate();
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+                  {[
+                    { label: 'Actual', value: `$${currentTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'incurred', color: 'var(--text-1)' },
+                    { label: 'Forecast', value: `$${forecastTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'remaining', color: 'var(--accent)' },
+                    { label: 'Month-End', value: `$${projectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'est. total', color: 'var(--text-1)' },
+                    { label: 'On Track', value: budgetLimit > 0 ? `${((budgetLimit / projectedMonthly) * 100 / 30 * dayOfMonth).toFixed(0)}%` : 'N/A', sub: 'of budget used', color: budgetLimit > 0 && projectedMonthly > budgetLimit ? 'var(--danger)' : 'var(--text-1)' },
+                  ].map((stat, i) => (
+                    <div key={i} style={{ padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{stat.label}</div>
+                      <div style={{ fontSize: 18, fontWeight: 900, color: stat.color, lineHeight: 1 }}>{stat.value}</div>
+                      <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 3 }}>{stat.sub}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </>
+    ) },
+    { id: 'commitment', render: () => (
+      <>
+        {commitmentSavings && (
+          <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden', borderLeft: '4px solid var(--accent)' }}>
+            <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, position: 'relative' }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(16 185 129 / 0.3)' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+              </div>
+              <div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Commitment Savings Calculator</span>
+                <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{commitmentSavings.vmCount} VMs · ${commitmentSavings.onDemandMonthly?.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo on-demand</span>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, position: 'relative' }}>
+              {/* 1-Year RI */}
+              <div style={{ padding: 16, background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>1-Year Reserved Instance</div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--accent)', lineHeight: 1, marginBottom: 4 }}>-{(commitmentSavings.oneYearRI?.savingsPercent || 0).toFixed(0)}%</div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 12 }}>vs on-demand pricing</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Monthly rate</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>${(commitmentSavings.oneYearRI?.monthlyRate || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Savings / month</span>
+                    <span style={{ fontWeight: 700, color: 'var(--accent)' }}>+${(commitmentSavings.oneYearRI?.savingsMonthly || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Savings / year</span>
+                    <span style={{ fontWeight: 700, color: 'var(--accent)' }}>+${(commitmentSavings.oneYearRI?.savingsYear1 || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Break-even</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{commitmentSavings.oneYearRI?.breakEvenMonths || 6} months</span>
+                  </div>
+                </div>
+              </div>
+              {/* 3-Year RI */}
+              <div style={{ padding: 16, background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>3-Year Reserved Instance</div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--warning)', lineHeight: 1, marginBottom: 4 }}>-{(commitmentSavings.threeYearRI?.savingsPercent || 0).toFixed(0)}%</div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 12 }}>vs on-demand pricing</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Monthly rate</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>${(commitmentSavings.threeYearRI?.monthlyRate || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Savings / month</span>
+                    <span style={{ fontWeight: 700, color: 'var(--warning)' }}>+${(commitmentSavings.threeYearRI?.savingsMonthly || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Savings / 3 years</span>
+                    <span style={{ fontWeight: 700, color: 'var(--warning)' }}>+${(commitmentSavings.threeYearRI?.savingsYear3 || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-2)' }}>Break-even</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{commitmentSavings.threeYearRI?.breakEvenMonths || 6} months</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    ) },
+    { id: 'topology', render: () => (
+      <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(245 158 11 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="4" /><line x1="12" y1="2" x2="12" y2="4" /><line x1="12" y1="20" x2="12" y2="22" /><line x1="2" y1="12" x2="4" y2="12" /><line x1="20" y1="12" x2="22" y2="12" /></svg>
+            </div>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Resource Topology</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>By resource group</span>
+            </div>
+          </div>
+          <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', background: 'rgba(245 158 11 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(245 158 11 / 0.2)' }}>Interactive</span>
+        </div>
+        {resourceTopology.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+            {resourceTopology.slice(0, 6).map((rg, i) => {
+              const maxCost = resourceTopology[0]?.cost || 1;
+              const costPercent = maxCost > 0 ? (rg.cost / maxCost) * 100 : 0;
+              return (
+                <div key={i} style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 14, border: '1px solid var(--border)', transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)', cursor: 'pointer', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setRgFilter([rg.name]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='#f59e0b'; e.currentTarget.style.transform='translateY(-3px) scale(1.01)'; e.currentTarget.style.boxShadow='0 8px 24px rgba(245 158 11 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0) scale(1)'; e.currentTarget.style.boxShadow='none'; }}>
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, rgba(245 158 11 / 0.8), rgba(245 158 11 / ${costPercent / 100 * 0.4}))` }} />
+                  <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rg.name}>{rg.name}</div>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
+                    {rg.types.slice(0, 3).map((t, j) => (
+                      <span key={j} style={{ fontSize: 10, background: 'var(--accent-dim)', color: 'var(--accent)', padding: '3px 8px', borderRadius: 4, fontWeight: 500, transition: 'all 0.2s ease' }}>{t.type} ({t.count})</span>
+                    ))}
+                    {rg.types.length > 3 && <span style={{ fontSize: 10, background: 'var(--bg-hover)', color: 'var(--text-3)', padding: '3px 8px', borderRadius: 4 }}>+{rg.types.length - 3}</span>}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'var(--text-2)', paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+                      {rg.count}
+                    </div>
+                    <span style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 12 }}>${rg.cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo</span>
+                  </div>
+                </div>
+              );
+            })}
+            {resourceTopology.length > 6 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-surface)', borderRadius: 12, padding: 14, border: '1px dashed var(--border)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--border-strong)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; }}>
+                <span style={{ fontSize: 13, color: 'var(--text-2)' }}>+{resourceTopology.length - 6} more groups</span>
+              </div>
+            )}
+          </div>
+        ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /></svg>} message="No resources loaded" />}
+      </div>
+    ) },
+    { id: 'tagAnalysis', render: () => (
+      <>
+        {(() => {
+          const tagged = resources.filter(r => r.tags && Object.keys(r.tags).length > 0);
+          const untagged = resources.filter(r => !r.tags || Object.keys(r.tags).length === 0);
+          const pct = resources.length > 0 ? (tagged.length / resources.length) * 100 : 0;
+          const tagCounts = new Map<string, number>();
+          resources.forEach(r => {
+            if (r.tags) {
+              Object.keys(r.tags).forEach(k => tagCounts.set(k, (tagCounts.get(k) || 0) + 1));
+            }
+          });
+          const topTags = Array.from(tagCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 6);
+          return (
+            <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(139 92 246 / 0.12) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.3)' }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Tag Completeness</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{resources.length} total resources</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: pct > 70 ? 'var(--accent)' : pct > 40 ? 'var(--warning)' : 'var(--danger)' }}>{pct.toFixed(0)}%</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>tagged</div>
+                  </div>
+                </div>
+              </div>
+              <div style={{ height: 6, borderRadius: 3, background: 'var(--border)', overflow: 'hidden', marginBottom: 16 }}>
+                <div style={{ height: '100%', width: `${pct}%`, background: pct > 70 ? 'var(--accent)' : pct > 40 ? 'var(--warning)' : 'var(--danger)', borderRadius: 3, transition: 'width 0.5s ease' }} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div style={{ padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--accent)' }}>{tagged.length}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>Tagged</div>
+                </div>
+                <div style={{ padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--danger)' }}>{untagged.length}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>Untagged</div>
+                </div>
+              </div>
+              {topTags.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>Top Tags Used</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {topTags.map(([tag, count]) => (
+                      <div key={tag} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 11 }}>
+                        <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{tag}</span>
+                        <span style={{ color: 'var(--text-3)' }}>{count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+      </>
+    ) },
+    { id: 'riRecommendations', render: () => (
+      <>
+        {riRecommendations.length > 0 && (
+          <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(59 130 246 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59 130 246 / 0.3)' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+                </div>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Reserved Instance Savings</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Up to 72% cost reduction</span>
+                </div>
+              </div>
+              <div style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(16 185 129 / 0.3)' }}>
+                ${riRecommendations.reduce((s, r) => s + r.yearlySavings, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+              💡 Resources with consistent usage could benefit from Azure Reserved Instances
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {riRecommendations.map((r, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setRgFilter([r.resourceGroup]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='#3b82f6'; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(59 130 246 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 10, background: 'linear-gradient(135deg, var(--blue-dim) 0%, rgba(59 130 246 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid rgba(59 130 246 / 0.2)' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.resourceGroup}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.region}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>Save ${r.yearlySavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>${r.monthlyCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo current</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </>
+    ) },
+    { id: 'costAnomalies', render: () => (
+      <>
+        {(costAnomalies.length > 0 || (anomalyData && anomalyData.anomalies.length > 0)) && (
+          <div className="card" style={{ padding: 24, borderLeft: '4px solid var(--danger)', background: 'linear-gradient(135deg, var(--bg-card) 0%, rgba(244 63 94 / 0.03) 100%)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--danger-dim)', border: '1px solid rgba(244 63 94 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
+              </div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost Anomalies Detected</span>
+              <span style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 12, background: 'var(--danger-dim)', color: 'var(--danger)', fontSize: 11, fontWeight: 700 }}>
+                {(anomalyData?.anomalies.length || costAnomalies.length)} spike{(anomalyData?.anomalies.length || costAnomalies.length) > 1 ? 's' : ''}
+              </span>
+            </div>
+            {anomalyData && anomalyData.anomalies.length > 0 ? (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+                  Daily cost increases exceeding {anomalyData.threshold}x previous period · {anomalyData.periodStart} to {anomalyData.periodEnd}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {anomalyData.anomalies.slice(0, 8).map((a, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.subscriptionId); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                      <div style={{
+                        width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                        background: a.ratio >= 3 ? 'var(--danger-dim)' : 'var(--warning-dim)',
+                        color: a.ratio >= 3 ? 'var(--danger)' : 'var(--warning)',
+                        fontSize: 12, fontWeight: 700
+                      }}>
+                        {a.ratio >= 3 ? '!!' : '!'}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.subscriptionId.slice(0, 18)}...</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date}</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.change.toFixed(0)}%</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                          ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+                  Resources with significant cost increases (&gt;50%) compared to previous period
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {costAnomalies.map((a, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.resourceGroup); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                      <div style={{
+                        width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                        background: a.severity === 'high' ? 'var(--danger-dim)' : 'var(--warning-dim)',
+                        color: a.severity === 'high' ? 'var(--danger)' : 'var(--warning)',
+                        fontSize: 12, fontWeight: 700
+                      }}>
+                        {a.severity === 'high' ? '!!' : '!'}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.resourceGroup}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{friendlyType(a.resourceType)} · {a.location}</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.spike.toFixed(0)}%</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                          ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </>
+    ) },
+  ];
+
+  // ── Fetch filter options
   useEffect(() => {
     fetch('http://localhost:8080/api/filters')
       .then(r => r.json())
@@ -1817,1105 +2986,13 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Quick Insights Bar */}
-              {(lowScoreCount > 0 || orphanedCount > 0 || costAnomalies.length > 0) && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'linear-gradient(135deg, rgba(244 63 94 / 0.08) 0%, rgba(245 158 11 / 0.05) 100%)', borderRadius: 12, border: '1px solid rgba(244 63 94 / 0.15)' }}>
-                  <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--danger-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                  </div>
-                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>Action Required:</span>
-                    {lowScoreCount > 0 && (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--warning-dim)', borderRadius: 6, fontSize: 12, fontWeight: 500, color: 'var(--warning)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); }} onMouseEnter={e => { e.currentTarget.style.transform='scale(1.02)'; }} onMouseLeave={e => { e.currentTarget.style.transform='scale(1)'; }}>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
-                        {lowScoreCount} low-score resources
-                      </span>
-                    )}
-                    {orphanedCount > 0 && (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--danger-dim)', borderRadius: 6, fontSize: 12, fontWeight: 500, color: 'var(--danger)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); setShowOrphanedOnly(true); }} onMouseEnter={e => { e.currentTarget.style.transform='scale(1.02)'; }} onMouseLeave={e => { e.currentTarget.style.transform='scale(1)'; }}>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
-                        {orphanedCount} orphaned
-                      </span>
-                    )}
-                    {costAnomalies.length > 0 && (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'rgba(245 158 11 / 0.15)', borderRadius: 6, fontSize: 12, fontWeight: 500, color: 'var(--warning)' }}>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
-                        {costAnomalies.length} cost spike{costAnomalies.length > 1 ? 's' : ''}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
+              {/* Dashboard panels */}
+              {dashboardPanels.map(({ id, render }) => (
+                <PanelWrapper key={id} id={id}>
+                  {render()}
+                </PanelWrapper>
+              ))}
 
-              {/* Summary Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
-                <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('costs')}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(16 185 129 / 0.2)' }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Total Cost</span>
-                    </div>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900, color: budgetStatus?.status === 'over' ? 'var(--danger)' : budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>
-                    {costsLoading ? <span style={{ opacity: 0.5 }}>—</span> : `$${totalCostsSum.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <span>{costsLoading ? 'Loading...' : `${costs.length} cost entries`}</span>
-                    {budgetStatus && !costsLoading && <span style={{ padding: '2px 8px', borderRadius: 12, background: budgetStatus.color === 'var(--accent)' ? 'var(--accent-dim)' : budgetStatus.color === 'var(--warning)' ? 'var(--warning-dim)' : 'var(--danger-dim)', color: budgetStatus.color, fontSize: 10, fontWeight: 600 }}>{budgetStatus.message}</span>}
-                  </div>
-                  {!costsLoading && periodComparison && (
-                    <div style={{ fontSize: 11, color: periodComparison.delta?.percent > 0 ? 'var(--danger)' : 'var(--accent)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      {periodComparison.delta?.percent > 0 ? '↑' : '↓'} {Math.abs(periodComparison.delta?.percent || 0).toFixed(1)}% vs prior {costPeriod}d period
-                      <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>
-                        ({periodComparison.delta?.absolute > 0 ? '+' : ''}${periodComparison.delta?.absolute?.toLocaleString(undefined, { maximumFractionDigits: 0 })})
-                      </span>
-                    </div>
-                  )}
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: budgetStatus?.status === 'over' || budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', opacity: 0.6 }} />
-                </div>
-
-                <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('resources')}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(59 130 246 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--blue-dim)', border: '1px solid rgba(59 130 246 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59 130 246 / 0.2)' }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Resources</span>
-                    </div>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>{totalResources.toLocaleString()}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{uniqueSubs.length} subscriptions</div>
-                </div>
-
-                <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(245 158 11 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(245 158 11 / 0.12)', border: '1px solid rgba(245 158 11 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(245 158 11 / 0.2)' }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Optimization</span>
-                      {lowScoreCount > 0 && <span style={{ padding: '2px 8px', borderRadius: 10, background: 'var(--warning-dim)', color: 'var(--warning)', fontSize: 10, fontWeight: 700 }}>{lowScoreCount}</span>}
-                    </div>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900, color: lowScoreCount > 0 ? 'var(--warning)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>{lowScoreCount}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)' }}>resources with score &lt; 50</div>
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: lowScoreCount > 0 ? 'var(--warning)' : 'var(--accent)', opacity: 0.6 }} />
-                </div>
-
-                <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setShowOrphanedOnly(true); setCurrentPage(1); }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--danger-dim)', border: '1px solid rgba(244 63 94 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244 63 94 / 0.2)' }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Orphaned</span>
-                      {orphanedCount > 0 && <span style={{ padding: '2px 8px', borderRadius: 10, background: 'var(--danger-dim)', color: 'var(--danger)', fontSize: 10, fontWeight: 700 }}>{orphanedCount}</span>}
-                    </div>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900, color: orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>{orphanedCount}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)' }}>unattached resources</div>
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)', opacity: 0.6 }} />
-                </div>
-
-                <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('costs')}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(139 92 246 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(139 92 246 / 0.12)', border: '1px solid rgba(139 92 246 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.2)' }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Forecast</span>
-                    </div>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900, color: forecastedMonthlyCost && budgetLimit > 0 && forecastedMonthlyCost > budgetLimit ? 'var(--danger)' : 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>
-                    {forecastedMonthlyCost ? `$${forecastedMonthlyCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>{forecastedMonthlyCost ? 'monthly estimate' : 'loading...'}</span>
-                    {budgetLimit > 0 && forecastedMonthlyCost && <span style={{ padding: '2px 8px', borderRadius: 12, background: forecastedMonthlyCost > budgetLimit ? 'var(--danger-dim)' : 'var(--accent-dim)', color: forecastedMonthlyCost > budgetLimit ? 'var(--danger)' : 'var(--accent)', fontSize: 10, fontWeight: 600 }}>vs ${budgetLimit.toLocaleString()}</span>}
-                  </div>
-                </div>
-
-                <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { if (lowScoreCount + orphanedCount + costAnomalies.length > 0) { setActiveTab('resources'); if (orphanedCount > 0) setShowOrphanedOnly(true); } }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent-dim)' : 'var(--danger-dim)', border: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? '1px solid var(--accent-border)' : '1px solid rgba(244 63 94 / 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? '0 2px 8px rgba(16 185 129 / 0.2)' : '0 2px 8px rgba(244 63 94 / 0.2)' }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent)' : 'var(--danger)'} strokeWidth="2.5">{(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /> : <circle cx="12" cy="12" r="10" />}{(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 && <path d="M9 11l3 3L22 4" />}{(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) > 0 && <path d="M12 8v4M12 16h.01" />}</svg>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Health</span>
-                    </div>
-                    {(lowScoreCount + orphanedCount + costAnomalies.length) > 0 && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>}
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 900, color: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent)' : (lowScoreCount + orphanedCount) > 5 ? 'var(--danger)' : 'var(--warning)', letterSpacing: '-0.03em', lineHeight: 1 }}>
-                    {(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? '✓' : lowScoreCount + orphanedCount + costAnomalies.length}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                    {(lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'All systems healthy' : 'issues need attention'}
-                  </div>
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent)' : 'var(--warning)', opacity: 0.6 }} />
-                </div>
-              </div>
-
-              {/* Cost Comparison */}
-              {costComparison && (
-                <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }} onClick={() => setActiveTab('costs')}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: `radial-gradient(circle at top right, ${costComparison.isIncrease ? 'rgba(244 63 94 / 0.15)' : 'rgba(16 185 129 / 0.15)'} 0%, transparent 70%)`, borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, position: 'relative' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59 130 246 / 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M23 6l-9.5 9.5-5-5L1 18" /><path d="M17 6h6v6" /></svg>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Month-over-Month</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Cost comparison</span>
-                      </div>
-                    </div>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: '#3b82f6', background: 'rgba(59 130 246 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(59 130 246 / 0.2)', cursor: 'pointer' }}>Click to view</span>
-                  </div>
-
-                  {/* Visual comparison bar */}
-                  <div style={{ marginBottom: 20 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)' }}>Current Period</span>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)' }}>Previous Period</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 4, height: 12, borderRadius: 6, background: 'var(--bg-surface)', overflow: 'hidden', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)' }}>
-                      <div style={{ flex: costComparison.current, background: costComparison.isIncrease ? 'linear-gradient(90deg, #f43f5e 0%, #e11d48 100%)' : 'linear-gradient(90deg, #10b981 0%, #059669 100%)', borderRadius: 6, transition: 'width 0.5s ease', position: 'relative' }}>
-                        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, rgba(255,255,255,0.2) 0%, transparent 100%)' }} />
-                      </div>
-                      <div style={{ flex: costComparison.previous, background: 'linear-gradient(90deg, var(--border-strong) 0%, var(--border) 100%)', borderRadius: 6, transition: 'width 0.5s ease' }} />
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-                      <span style={{ fontSize: 20, fontWeight: 900, color: 'var(--text-1)' }}>${costComparison.current.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                      <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-2)' }}>${costComparison.previous.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                    </div>
-                  </div>
-
-                  {/* Change indicator */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 20, background: `linear-gradient(135deg, var(--bg-surface) 0%, ${costComparison.isIncrease ? 'rgba(244 63 94 / 0.05)' : 'rgba(16 185 129 / 0.05)'} 100%)`, borderRadius: 16, border: '1px solid var(--border)' }}>
-                    <div style={{ width: 48, height: 48, borderRadius: '50%', background: costComparison.isIncrease ? 'linear-gradient(135deg, var(--danger-dim) 0%, rgba(244 63 94 / 0.3) 100%)' : 'linear-gradient(135deg, var(--accent-dim) 0%, rgba(16 185 129 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)'}` }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)'} strokeWidth="2.5">{costComparison.isIncrease ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M19 12l-7 7-7-7" />}</svg>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 32, fontWeight: 900, color: costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)', lineHeight: 1 }}>
-                        {costComparison.isIncrease ? '+' : ''}{costComparison.percentChange.toFixed(1)}%
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
-                        {costComparison.isIncrease ? 'Increase' : 'Decrease'} of ${Math.abs(costComparison.change).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                      </div>
-                    </div>
-                  </div>
-
-                  {biggestChanges.length > 0 && (
-                    <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 16 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 10 }}>Biggest Changes</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {biggestChanges.map((c, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); setActiveTab('resources'); const rg = c.resourceGroup; if (rg) { setRgFilter([rg]); } else { setRgFilter([]); } setCurrentPage(1); }} onMouseEnter={e => { const s = e.currentTarget.style; s.borderColor='var(--border-strong)'; s.transform='translateX(4px)'; }} onMouseLeave={e => { const s = e.currentTarget.style; s.borderColor='var(--border)'; s.transform='translateX(0)'; }}>
-                            <div style={{ width: 28, height: 28, borderRadius: 6, background: c.change > 0 ? 'var(--danger-dim)' : 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.change > 0 ? 'var(--danger)' : 'var(--accent)'} strokeWidth="2.5">{c.change > 0 ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M19 12l-7 7-7-7" />}</svg>
-                            </div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.resourceGroup || 'Unknown'}</div>
-                              <div style={{ fontSize: 10, color: 'var(--text-2)' }}>{friendlyType(c.resourceType || '')}</div>
-                            </div>
-                            <div style={{ textAlign: 'right' }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: c.change > 0 ? 'var(--danger)' : 'var(--accent)' }}>
-                                {c.change > 0 ? '+' : ''}{c.percentChange.toFixed(0)}%
-                              </div>
-                              <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
-                                ${Math.abs(c.change).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Charts Row */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 16 }}>
-                {/* Cost by Region (PieChart) */}
-                <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--blue-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--blue) 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59, 130, 246, 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Region</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsByRegion.length} regions</span>
-                      </div>
-                    </div>
-                    <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: 'var(--blue)', background: 'var(--blue-dim)', padding: '4px 10px', borderRadius: 12, border: '1px solid var(--blue-border)' }}>Interactive</span>
-                  </div>
-                  {costsByRegion.length > 0 ? (
-                    <>
-                      <div style={{ position: 'relative' }}>
-                        <ResponsiveContainer width="100%" height={160}>
-                          <PieChart>
-                            <Pie
-                              data={costsByRegion}
-                              dataKey="value"
-                              nameKey="name"
-                              cx="50%"
-                              cy="50%"
-                              outerRadius={60}
-                              innerRadius={35}
-                              paddingAngle={2}
-                              onClick={(data: { name?: string; payload?: { name?: string } }) => { const name = data?.name || data?.payload?.name; if (name) { setActiveTab('resources'); setRegionFilter([String(name)]); setCurrentPage(1); } }}
-                              style={{ cursor: 'pointer' }}
-                            >
-                              {costsByRegion.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', transition: 'all 0.2s ease', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />)}
-                            </Pie>
-                             <Tooltip
-                               formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
-                               labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
-                               itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
-                               contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
-                             />
-                          </PieChart>
-                        </ResponsiveContainer>
-                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                          <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--text-1)' }}>${(totalCostsSum / 1000).toFixed(0)}k</div>
-                          <div style={{ fontSize: 9, color: 'var(--text-3)', fontWeight: 500 }}>TOTAL</div>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                        {costsByRegion.slice(0, 6).map((item, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onClick={() => { setActiveTab('resources'); setRegionFilter([item.name]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--blue)'; e.currentTarget.style.background='var(--blue-dim)'; e.currentTarget.style.transform='translateY(-1px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--bg-surface)'; e.currentTarget.style.transform='translateY(0)'; }}>
-                            <div style={{ width: 10, height: 10, borderRadius: 3, background: COLORS[i % COLORS.length] }} />
-                            <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-2)' }}>{item.name}</span>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</span>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
-                </div>
-
-                <div className="card chart-card-clickable" style={{ padding: 24 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>
-                      </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost by Resource Type</span>
-                    </div>
-                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click bars</span>
-                  </div>
-                  {costsByType.length > 0 ? (
-                    <>
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                        {costsByType.slice(0, 3).map((item, i) => (
-                          <div key={i} style={{ flex: 1, padding: '8px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setTypeFilter(item.raw); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor=COLORS[i % COLORS.length]; e.currentTarget.style.transform='translateY(-2px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0)'; }}>
-                            <div style={{ position: 'absolute', top: 0, left: 0, width: 4, bottom: 0, background: COLORS[i % COLORS.length] }} />
-                            <div style={{ paddingLeft: 4 }}>
-                              <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-2)', marginBottom: 2 }}>#{i + 1}</div>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(item.value / 1000).toFixed(1)}k</div>
-                              <div style={{ fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <div style={{ height: Math.max(120, costsByType.length * 24) }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={costsByType} layout="vertical" margin={{ left: 60, right: 10 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
-                            <XAxis type="number" tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                            <YAxis type="category" dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 10 }} width={80} axisLine={false} tickLine={false} />
-                             <Tooltip
-                               formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
-                               labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
-                               itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
-                               contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
-                               cursor={{ fill: 'var(--accent-dim)' }}
-                             />
-                            <Bar dataKey="value" radius={[0, 4, 4, 0]} onClick={(data: { raw?: string; payload?: { raw?: string } }) => { const raw = data?.raw || data?.payload?.raw; if (raw) { setActiveTab('resources'); setTypeFilter(raw); setCurrentPage(1); } }} style={{ cursor: 'pointer', transition: 'all 0.2s ease' }}>
-                              {costsByType.map((_, index) => (
-                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                              ))}
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </>
-                  ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
-                </div>
-
-                {/* Cost by Type Trend (Stacked Area) */}
-                {typeTrendData?.dates && typeTrendData.types && typeTrendData.types.length > 0 && (
-                  <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                    <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(99 102 241 / 0.12) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ width: 32, height: 32, borderRadius: 8, background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(99 102 241 / 0.3)' }}>
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M3 3v18h18" /><path d="M7 12l4-4 4 4 5-6" /></svg>
-                        </div>
-                        <div>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Type Trend</span>
-                          <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{typeTrendData.types.length} types · {costPeriod} day period</span>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        {(['7', '30', '90'] as const).map(p => (
-                          <button key={p} onClick={() => setCostPeriod(p)} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: costPeriod === p ? 'var(--accent)' : 'var(--border)', borderRadius: 6, background: costPeriod === p ? 'var(--accent)' : 'transparent', color: costPeriod === p ? 'white' : 'var(--text-2)', cursor: 'pointer' }}>
-                            {p}d
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-                      {typeTrendData.types.slice(0, 8).map((t: string, i: number) => (
-                        <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text-2)' }}>
-                          <div style={{ width: 8, height: 8, borderRadius: 2, background: COLORS[i % COLORS.length] }} />
-                          <span>{t}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <AreaChart data={typeTrendData.dates} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
-                        <XAxis dataKey="date" tick={{ fill: 'var(--text-3)', fontSize: 9 }} tickFormatter={v => typeof v === 'string' ? v.slice(5) : ''} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fill: 'var(--text-3)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                        <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} labelFormatter={(l: unknown) => String(l)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
-                        {typeTrendData.types.slice(0, 8).map((t: string, i: number) => (
-                          <Area key={t} type="monotone" dataKey={t} stackId="1" stroke="transparent" fill={COLORS[i % COLORS.length]} fillOpacity={1} />
-                        ))}
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-
-                {/* Top Spenders */}
-                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: '#f43f5e', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244, 63, 94, 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Top Cost Drivers</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Click to filter resources</span>
-                      </div>
-                    </div>
-                    <div style={{ padding: '4px 10px', background: 'var(--danger-dim)', borderRadius: 12, border: '1px solid rgba(244, 63, 94, 0.2)' }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger)' }}>${topSpenders.reduce((s, c) => s + c.cost, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                    </div>
-                  </div>
-                  {topSpenders.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {topSpenders.map((c, i) => {
-                        return (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative' }} onClick={() => { setActiveTab('resources'); const rg = c.resourceGroup; if (rg) { setRgFilter([rg]); } else { setRgFilter([]); } setCurrentPage(1); }} onMouseEnter={e => { const s = e.currentTarget.style; s.borderColor = COLORS[i % COLORS.length]; s.transform = 'translateX(4px)'; }} onMouseLeave={e => { const s = e.currentTarget.style; s.borderColor = 'var(--border)'; s.transform = 'translateX(0)'; }}>
-                            <div style={{ width: 28, height: 28, borderRadius: '50%', background: COLORS[i % COLORS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{i + 1}</div>
-                            <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
-                              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.resourceGroup || 'Unknown'}</div>
-                              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(c.resourceType || '')}</div>
-                            </div>
-                            <div style={{ textAlign: 'right', zIndex: 1 }}>
-                              <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 14 }}>${c.cost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
-                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{totalCostsSum > 0 ? ((c.cost / totalCostsSum) * 100).toFixed(1) : '0'}%</div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
-                </div>
-              </div>
-
-              {/* Cost by Subscription */}
-              <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px var(--accent-dim)' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Subscription</span>
-                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{costsBySubscription.length} subscriptions</span>
-                    </div>
-                  </div>
-                  <span className="chart-hint-badge">Interactive</span>
-                </div>
-                {costsBySubscription.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {costsBySubscription.slice(0, 5).map((sub, i) => {
-                      const maxVal = costsBySubscription[0]?.value || 1;
-                      const percentage = maxVal > 0 ? (sub.value / maxVal) * 100 : 0;
-                      const color = COLORS[i % COLORS.length];
-                      return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { const fullId = uniqueSubs.find(s => s.startsWith(sub.name)); if (fullId) { setActiveTab('resources'); setSubFilter([fullId]); setCurrentPage(1); }}} onMouseEnter={e => { e.currentTarget.style.borderColor = color; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = `0 4px 12px ${color}20`; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
-                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `${color}15`, transition: 'width 0.5s ease' }} />
-                          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{sub.name}</div>
-                          <div style={{ flex: 1, height: 8, background: 'var(--border)', borderRadius: 4, overflow: 'hidden', zIndex: 1 }}>
-                            <div style={{ height: '100%', width: `${percentage}%`, background: color, borderRadius: 4, transition: 'width 0.5s ease' }} />
-                          </div>
-                          <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 13, minWidth: 65, textAlign: 'right', zIndex: 1 }}>${(sub.value / 1000).toFixed(1)}k</div>
-                        </div>
-                      );
-                    })}
-                    {costsBySubscription.length > 5 && (
-                      <div style={{ textAlign: 'center', padding: '10px', color: 'var(--text-3)', fontSize: 11, background: 'var(--bg-surface)', borderRadius: 8, border: '1px dashed var(--border)' }}>
-                        +{costsBySubscription.length - 5} more subscriptions
-                      </div>
-                    )}
-                  </div>
-                ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>} message="No cost data available" />}
-              </div>
-
-              {/* Cost by Environment Tag */}
-              {(loading || (costsByEnvironment.length > 0 && costsByEnvironment.some(e => e.name !== 'Untagged'))) && (
-                <div className="card chart-card-clickable" style={{ padding: 24 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(236 72 153 / 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Cost by Environment</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Tagged resources</span>
-                      </div>
-                    </div>
-                    <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#ec4899', background: 'rgba(236 72 153 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(236 72 153 / 0.2)' }}>Interactive</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 24, alignItems: 'center', minHeight: 180 }}>
-                    <div style={{ position: 'relative', width: '40%', height: 160 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie 
-                            data={costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0)} 
-                            dataKey="value" 
-                            nameKey="name" 
-                            cx="50%" 
-                            cy="50%" 
-                            outerRadius={70} 
-                            innerRadius={45} 
-                            paddingAngle={3}
-                            style={{ cursor: 'pointer' }}
-                            onClick={(data: any) => { if (data?.name) { setActiveTab('resources'); setTagFilter({ key: 'Environment', value: data.name }); setCurrentPage(1); } }}
-                          >
-                            {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).map((_, i) => (
-                              <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="var(--bg-card)" strokeWidth={2} style={{ cursor: 'pointer', outline: 'none' }} />
-                            ))}
-                          </Pie>
-                          <Tooltip
-                            formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
-                            labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
-                            itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
-                            contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                        <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-1)' }}>
-                          ${(costsByEnvironment.filter(e => e.name !== 'Untagged').reduce((acc, curr) => acc + curr.value, 0) / 1000).toFixed(0)}k
-                        </div>
-                        <div style={{ fontSize: 8, color: 'var(--text-3)', fontWeight: 600, letterSpacing: '0.05em' }}>TAGGED</div>
-                      </div>
-                    </div>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', paddingRight: 4 }}>
-                      {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).slice(0, 8).map((env, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)' }} onClick={() => { setActiveTab('resources'); setTagFilter({ key: 'Environment', value: env.name }); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor=COLORS[i % COLORS.length]; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.background='var(--bg-hover)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.background='var(--bg-surface)'; }}>
-                          <div style={{ width: 10, height: 10, borderRadius: 3, background: COLORS[i % COLORS.length], flexShrink: 0 }} />
-                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{env.name}</span>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>${(env.value / 1000).toFixed(1)}k</span>
-                        </div>
-                      ))}
-                      {costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).length > 8 && (
-                        <div style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 10, padding: '4px 0' }}>
-                          +{costsByEnvironment.filter(e => e.name !== 'Untagged' && e.value > 0).length - 8} more environments
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Resource Distribution by Cost Tier */}
-              <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', top: 0, right: 0, width: 80, height: 80, background: 'radial-gradient(circle at top right, rgba(34 197 94 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(34 197 94 / 0.3)' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5M2 12l10 5 10-5" /></svg>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Resources by Cost Tier</span>
-                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Click to filter</span>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {resourceAgeDistribution.map((group, i) => {
-                    const counts = resourceAgeDistribution.map(g => g.count);
-                    const maxCount = counts.length > 0 ? Math.max(...counts) : 1;
-                    const percentage = maxCount > 0 ? (group.count / maxCount) * 100 : 0;
-                    return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.2s ease', border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); }} onMouseEnter={e => { e.currentTarget.style.borderColor = group.color; e.currentTarget.style.transform = 'translateX(4px)'; e.currentTarget.style.boxShadow = `0 4px 12px ${group.color}25`; }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
-                        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: `${group.color}15`, transition: 'width 0.5s ease' }} />
-                        <div style={{ width: 14, height: 14, borderRadius: 4, background: group.color, flexShrink: 0, zIndex: 1 }} />
-                        <div style={{ flex: 1, zIndex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)' }}>{group.label}</div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                            <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
-                              <div style={{ height: '100%', width: `${percentage}%`, background: group.color, borderRadius: 2, transition: 'width 0.5s ease' }} />
-                            </div>
-                            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{group.count}</span>
-                          </div>
-                        </div>
-                        <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 13, textAlign: 'right', zIndex: 1 }}>
-                          ${group.cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Daily Cost Trends */}
-              <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(6 182 212 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(6 182 212 / 0.3)' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Daily Cost Trends</span>
-                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>30-day rolling view</span>
-                    </div>
-                  </div>
-                  <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#06b6d4', background: 'rgba(6 182 212 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(6 182 212 / 0.2)' }}>Interactive</span>
-                </div>
-                {Array.isArray(dailyCosts) && dailyCosts.length > 0 && (
-                  <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-                    {(() => {
-                      const costs = dailyCosts.map(d => d.cost);
-                      const avg = costs.length > 0 ? costs.reduce((a, b) => a + b, 0) / costs.length : 0;
-                      const max = costs.length > 0 ? Math.max(...costs) : 0;
-                      const trend = costs.length > 1 && costs[0] > 0 ? ((costs[costs.length - 1] - costs[0]) / costs[0]) * 100 : 0;
-                      return (
-                        <>
-                          <div style={{ flex: 1, padding: '12px 14px', background: 'linear-gradient(135deg, var(--bg-surface) 0%, rgba(16 185 129 / 0.05) 100%)', borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
-                            <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: 'var(--accent-dim)', borderRadius: '0 8px 0 100%' }} />
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Average</div>
-                            <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--text-1)', lineHeight: 1 }}>${avg.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>per day</div>
-                          </div>
-                          <div style={{ flex: 1, padding: '12px 14px', background: 'linear-gradient(135deg, var(--bg-surface) 0%, rgba(244 63 94 / 0.05) 100%)', borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
-                            <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 8px 0 100%' }} />
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Peak</div>
-                            <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--danger)', lineHeight: 1 }}>${max.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>highest day</div>
-                          </div>
-                          <div style={{ flex: 1, padding: '12px 14px', background: `linear-gradient(135deg, var(--bg-surface) 0%, ${trend >= 0 ? 'rgba(244 63 94 / 0.05)' : 'rgba(16 185 129 / 0.05)'} 100%)`, borderRadius: 10, border: '1px solid var(--border)', position: 'relative', overflow: 'hidden' }}>
-                            <div style={{ position: 'absolute', top: 0, right: 0, width: 40, height: 40, background: trend >= 0 ? 'var(--danger-dim)' : 'var(--accent-dim)', borderRadius: '0 8px 0 100%' }} />
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Trend</div>
-                            <div style={{ fontSize: 20, fontWeight: 900, color: trend >= 0 ? 'var(--danger)' : 'var(--accent)', lineHeight: 1 }}>
-                              {trend >= 0 ? '+' : ''}{trend.toFixed(1)}%
-                            </div>
-                            <div style={{ fontSize: 10, color: 'var(--text-2)', marginTop: 2 }}>vs start</div>
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </div>
-                )}
-                {Array.isArray(dailyCosts) && dailyCosts.length > 0 ? (
-                  <>
-                    <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-                      {(['7', '30', '90'] as const).map(p => (
-                        <button key={p} onClick={() => setCostPeriod(p)} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: costPeriod === p ? 'var(--accent)' : 'var(--border)', borderRadius: 6, background: costPeriod === p ? 'var(--accent)' : 'transparent', color: costPeriod === p ? 'white' : 'var(--text-2)', cursor: 'pointer' }}>
-                          {p}d
-                        </button>
-                      ))}
-                    </div>
-                    <ResponsiveContainer width="100%" height={180}>
-                    <LineChart data={dailyCosts} margin={{ top: 5, right: 20, left: 10, bottom: 5 }} onMouseDown={(e: any) => { if (e && e.activeLabelIndex !== undefined) { setIsSelectingZoom(true); setZoomStart(e.activeLabelIndex); setZoomEnd(null); } }} onMouseMove={(e: any) => { if (isSelectingZoom && e && e.activeLabelIndex !== undefined) setZoomEnd(e.activeLabelIndex); }} onMouseUp={() => { if (isSelectingZoom && zoomStart !== null && zoomEnd !== null && zoomStart !== zoomEnd) { const left = Math.min(zoomStart, zoomEnd); const right = Math.max(zoomStart, zoomEnd); setTrendZoom({ left, right }); } setIsSelectingZoom(false); setZoomStart(null); setZoomEnd(null); }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
-                      <XAxis dataKey="date" tick={{ fill: 'var(--text-3)', fontSize: 9 }} tickFormatter={v => v ? v.slice(5) : ''} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: 'var(--text-3)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                      <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} labelFormatter={(l: unknown) => String(l)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
-                      <Area type="monotone" dataKey="cost" stroke="transparent" fill="var(--accent)" fillOpacity={1} />
-                      <Line type="monotone" dataKey="cost" stroke="var(--accent)" strokeWidth={2.5} dot={false} activeDot={{ r: 6, fill: 'var(--accent)', stroke: 'var(--bg-card)', strokeWidth: 3, style: { filter: 'drop-shadow(0 2px 6px rgba(16 185 129 / 0.4))' } }} />
-                      {isSelectingZoom && zoomStart !== null && zoomEnd !== null && <ReferenceArea x1={Math.min(zoomStart, zoomEnd)} x2={Math.max(zoomStart, zoomEnd)} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.15} />}
-                      {trendZoom && <Brush dataKey="date" height={24} stroke="var(--border)" fill="var(--bg-surface)" startIndex={trendZoom.left} endIndex={trendZoom.right} travellerWidth={8} />}
-                    </LineChart>
-                  </ResponsiveContainer>
-                  {trendZoom && (
-                    <button onClick={() => setTrendZoom(null)} style={{ marginTop: 6, padding: '3px 10px', fontSize: 10, fontWeight: 600, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-surface)', color: 'var(--text-2)', cursor: 'pointer' }}>
-                      Reset Zoom
-                    </button>
-                  )}
-                  </>
-                ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3v18h18" /><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" /></svg>} message="No trend data available" />}
-              </div>
-
-              {/* Optimization Opportunities */}
-              {optimizationOpportunities.length > 0 && (
-                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden', borderLeft: lowScoreCount + orphanedCount > 5 ? '4px solid var(--danger)' : '4px solid var(--warning)' }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: '#f43f5e', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(244 63 94 / 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Optimization Opportunities</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{optimizationOpportunities.length} items need attention</span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(16 185 129 / 0.3)' }}>
-                        ${totalPotentialSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
-                      </span>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {optimizationOpportunities.slice(0, 5).map((o, i) => {
-                      const maxSavings = optimizationOpportunities[0]?.potentialSavings || 1;
-                      const percentage = maxSavings > 0 ? (o.potentialSavings / maxSavings) * 100 : 0;
-                      return (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', cursor: 'pointer', transition: 'all 0.2s ease', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setSearchQuery(o.resource.name); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(244 63 94 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
-                          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${percentage}%`, background: 'linear-gradient(90deg, rgba(244 63 94 / 0.08), transparent)', transition: 'width 0.5s ease' }} />
-                          <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, var(--danger-dim) 0%, rgba(244 63 94 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, zIndex: 1, border: '1px solid rgba(244 63 94 / 0.2)' }}>
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2"><path d="M12 9v2M12 13h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0, zIndex: 1 }}>
-                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.resource.name}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{o.reason}</div>
-                          </div>
-                          <div style={{ textAlign: 'right', zIndex: 1 }}>
-                            <div style={{ fontWeight: 700, color: 'var(--danger)', fontSize: 16 }}>${o.potentialSavings.toFixed(0)}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-3)' }}>per month</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {optimizationOpportunities.length > 5 && (
-                      <div style={{ textAlign: 'center', padding: '10px', color: 'var(--text-3)', fontSize: 11, background: 'var(--bg-surface)', borderRadius: 8, border: '1px dashed var(--border)' }}>
-                        +{optimizationOpportunities.length - 5} more opportunities
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Waste Detection */}
-              {wasteData && wasteData.items && wasteData.items.length > 0 && (
-                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden', borderLeft: '4px solid var(--warning)' }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, var(--warning-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--warning) 0%, #d97706 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Waste Detection</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{wasteData.totalCount} non-production workloads running 24/7</span>
-                      </div>
-                    </div>
-                    <span style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--warning) 0%, #d97706 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
-                      ${(wasteData.totalWaste || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo waste
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {wasteData.items.slice(0, 5).map((w: any, i: number) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(w.name); setCurrentPage(1); }}>
-                        <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(245 158 11 / 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>
-                          <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{w.resourceGroup} · {w.environment}</div>
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontWeight: 700, color: 'var(--warning)', fontSize: 14 }}>${w.monthlyCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                          <div style={{ fontSize: 10, color: 'var(--text-3)' }}>per month</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Cost Forecasting */}
-              {periodComparison && (
-                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(59 130 246 / 0.12) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(99 102 241 / 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M3 3v18h18" /><path d="M9 17V9M15 17V5M21 17v-4" /></svg>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Month-End Forecast</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Based on {periodComparison.currentPeriod?.days || 30} days of data</span>
-                      </div>
-                    </div>
-                    {budgetLimit > 0 && (
-                      <div style={{ textAlign: 'right' }}>
-                        {(() => {
-                          const currentTotal = periodComparison.currentPeriod?.totalCost || 0;
-                          const projectedMonthly = periodComparison.currentPeriod?.days > 0
-                            ? (currentTotal / Number(periodComparison.currentPeriod.days)) * 30
-                            : 0;
-                          const budgetPct = (projectedMonthly / budgetLimit) * 100;
-                          const overBudget = projectedMonthly > budgetLimit;
-                          return (
-                            <div style={{ padding: '6px 12px', borderRadius: 8, background: overBudget ? 'var(--danger-dim)' : budgetPct > 80 ? 'var(--warning-dim)' : 'var(--accent-dim)', border: `1px solid ${overBudget ? 'var(--danger)' : budgetPct > 80 ? 'var(--warning)' : 'var(--accent)'}` }}>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: overBudget ? 'var(--danger)' : budgetPct > 80 ? 'var(--warning)' : 'var(--accent)' }}>
-                                {overBudget ? 'Over Budget' : budgetPct > 80 ? 'Near Limit' : 'On Track'}
-                              </div>
-                              <div style={{ fontSize: 10, color: overBudget ? 'var(--danger)' : 'var(--text-2)' }}>
-                                ${projectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })} projected
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                  {(() => {
-                    const currentTotal = forecastData ? forecastData.actualCost : (periodComparison.currentPeriod?.totalCost || 0);
-                    const forecastTotal = forecastData ? forecastData.forecastCost : 0;
-                    const projectedMonthly = currentTotal + forecastTotal;
-                    const dayOfMonth = new Date().getDate();
-                    return (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-                        {[
-                          { label: 'Actual', value: `$${currentTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'incurred', color: 'var(--text-1)' },
-                          { label: 'Forecast', value: `$${forecastTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'remaining', color: 'var(--accent)' },
-                          { label: 'Month-End', value: `$${projectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'est. total', color: 'var(--text-1)' },
-                          { label: 'On Track', value: budgetLimit > 0 ? `${((budgetLimit / projectedMonthly) * 100 / 30 * dayOfMonth).toFixed(0)}%` : 'N/A', sub: 'of budget used', color: budgetLimit > 0 && projectedMonthly > budgetLimit ? 'var(--danger)' : 'var(--text-1)' },
-                        ].map((stat, i) => (
-                          <div key={i} style={{ padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
-                            <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{stat.label}</div>
-                            <div style={{ fontSize: 18, fontWeight: 900, color: stat.color, lineHeight: 1 }}>{stat.value}</div>
-                            <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 3 }}>{stat.sub}</div>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-
-              {/* Commitment Savings Calculator */}
-              {commitmentSavings && (
-                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden', borderLeft: '4px solid var(--accent)' }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, position: 'relative' }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(16 185 129 / 0.3)' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Commitment Savings Calculator</span>
-                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{commitmentSavings.vmCount} VMs · ${commitmentSavings.onDemandMonthly?.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo on-demand</span>
-                    </div>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, position: 'relative' }}>
-                    {/* 1-Year RI */}
-                    <div style={{ padding: 16, background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>1-Year Reserved Instance</div>
-                      <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--accent)', lineHeight: 1, marginBottom: 4 }}>-{(commitmentSavings.oneYearRI?.savingsPercent || 0).toFixed(0)}%</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 12 }}>vs on-demand pricing</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-2)' }}>Monthly rate</span>
-                          <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>${(commitmentSavings.oneYearRI?.monthlyRate || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-2)' }}>Savings / month</span>
-                          <span style={{ fontWeight: 700, color: 'var(--accent)' }}>+${(commitmentSavings.oneYearRI?.savingsMonthly || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-2)' }}>Savings / year</span>
-                          <span style={{ fontWeight: 700, color: 'var(--accent)' }}>+${(commitmentSavings.oneYearRI?.savingsYear1 || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-2)' }}>Break-even</span>
-                          <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{commitmentSavings.oneYearRI?.breakEvenMonths || 6} months</span>
-                        </div>
-                      </div>
-                    </div>
-                    {/* 3-Year RI */}
-                    <div style={{ padding: 16, background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>3-Year Reserved Instance</div>
-                      <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--warning)', lineHeight: 1, marginBottom: 4 }}>-{(commitmentSavings.threeYearRI?.savingsPercent || 0).toFixed(0)}%</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 12 }}>vs on-demand pricing</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-2)' }}>Monthly rate</span>
-                          <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>${(commitmentSavings.threeYearRI?.monthlyRate || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-2)' }}>Savings / month</span>
-                          <span style={{ fontWeight: 700, color: 'var(--warning)' }}>+${(commitmentSavings.threeYearRI?.savingsMonthly || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-2)' }}>Savings / 3 years</span>
-                          <span style={{ fontWeight: 700, color: 'var(--warning)' }}>+${(commitmentSavings.threeYearRI?.savingsYear3 || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-2)' }}>Break-even</span>
-                          <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{commitmentSavings.threeYearRI?.breakEvenMonths || 6} months</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Resource Topology */}
-              <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(245 158 11 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="4" /><line x1="12" y1="2" x2="12" y2="4" /><line x1="12" y1="20" x2="12" y2="22" /><line x1="2" y1="12" x2="4" y2="12" /><line x1="20" y1="12" x2="22" y2="12" /></svg>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Resource Topology</span>
-                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>By resource group</span>
-                    </div>
-                  </div>
-                  <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', background: 'rgba(245 158 11 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(245 158 11 / 0.2)' }}>Interactive</span>
-                </div>
-                {resourceTopology.length > 0 ? (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-                    {resourceTopology.slice(0, 6).map((rg, i) => {
-                      const maxCost = resourceTopology[0]?.cost || 1;
-                      const costPercent = maxCost > 0 ? (rg.cost / maxCost) * 100 : 0;
-                      return (
-                        <div key={i} style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 14, border: '1px solid var(--border)', transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)', cursor: 'pointer', position: 'relative', overflow: 'hidden' }} onClick={() => { setActiveTab('resources'); setRgFilter([rg.name]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='#f59e0b'; e.currentTarget.style.transform='translateY(-3px) scale(1.01)'; e.currentTarget.style.boxShadow='0 8px 24px rgba(245 158 11 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateY(0) scale(1)'; e.currentTarget.style.boxShadow='none'; }}>
-                          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, rgba(245 158 11 / 0.8), rgba(245 158 11 / ${costPercent / 100 * 0.4}))` }} />
-                          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rg.name}>{rg.name}</div>
-                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
-                            {rg.types.slice(0, 3).map((t, j) => (
-                              <span key={j} style={{ fontSize: 10, background: 'var(--accent-dim)', color: 'var(--accent)', padding: '3px 8px', borderRadius: 4, fontWeight: 500, transition: 'all 0.2s ease' }}>{t.type} ({t.count})</span>
-                            ))}
-                            {rg.types.length > 3 && <span style={{ fontSize: 10, background: 'var(--bg-hover)', color: 'var(--text-3)', padding: '3px 8px', borderRadius: 4 }}>+{rg.types.length - 3}</span>}
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'var(--text-2)', paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
-                              {rg.count}
-                            </div>
-                            <span style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 12 }}>${rg.cost.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {resourceTopology.length > 6 && (
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-surface)', borderRadius: 12, padding: 14, border: '1px dashed var(--border)', cursor: 'pointer', transition: 'all 0.2s ease' }} onClick={() => { setActiveTab('resources'); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--border-strong)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; }}>
-                        <span style={{ fontSize: 13, color: 'var(--text-2)' }}>+{resourceTopology.length - 6} more groups</span>
-                      </div>
-                    )}
-                  </div>
-                ) : <EmptyState icon={<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /></svg>} message="No resources loaded" />}
-              </div>
-
-              {/* Tag Completeness Analysis */}
-              {(() => {
-                const tagged = resources.filter(r => r.tags && Object.keys(r.tags).length > 0);
-                const untagged = resources.filter(r => !r.tags || Object.keys(r.tags).length === 0);
-                const pct = resources.length > 0 ? (tagged.length / resources.length) * 100 : 0;
-                // Top missing recommended tags
-                
-                const tagCounts = new Map<string, number>();
-                resources.forEach(r => {
-                  if (r.tags) {
-                    Object.keys(r.tags).forEach(k => tagCounts.set(k, (tagCounts.get(k) || 0) + 1));
-                  }
-                });
-                const topTags = Array.from(tagCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 6);
-                return (
-                  <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                    <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(139 92 246 / 0.12) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.3)' }}>
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
-                        </div>
-                        <div>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Tag Completeness</span>
-                          <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{resources.length} total resources</span>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: 20, fontWeight: 900, color: pct > 70 ? 'var(--accent)' : pct > 40 ? 'var(--warning)' : 'var(--danger)' }}>{pct.toFixed(0)}%</div>
-                          <div style={{ fontSize: 10, color: 'var(--text-3)' }}>tagged</div>
-                        </div>
-                      </div>
-                    </div>
-                    {/* Progress bar */}
-                    <div style={{ height: 6, borderRadius: 3, background: 'var(--border)', overflow: 'hidden', marginBottom: 16 }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: pct > 70 ? 'var(--accent)' : pct > 40 ? 'var(--warning)' : 'var(--danger)', borderRadius: 3, transition: 'width 0.5s ease' }} />
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                      <div style={{ padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
-                        <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--accent)' }}>{tagged.length}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>Tagged</div>
-                      </div>
-                      <div style={{ padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
-                        <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--danger)' }}>{untagged.length}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>Untagged</div>
-                      </div>
-                    </div>
-                    {topTags.length > 0 && (
-                      <div style={{ marginTop: 12 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>Top Tags Used</div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                          {topTags.map(([tag, count]) => (
-                            <div key={tag} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 11 }}>
-                              <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{tag}</span>
-                              <span style={{ color: 'var(--text-3)' }}>{count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* Reserved Instance Recommendations */}
-              {riRecommendations.length > 0 && (
-                <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
-                  <div style={{ position: 'absolute', top: 0, right: 0, width: 100, height: 100, background: 'radial-gradient(circle at top right, rgba(59 130 246 / 0.15) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, position: 'relative' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(59 130 246 / 0.3)' }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Reserved Instance Savings</span>
-                        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Up to 72% cost reduction</span>
-                      </div>
-                    </div>
-                    <div style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--accent) 0%, #059669 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(16 185 129 / 0.3)' }}>
-                      ${riRecommendations.reduce((s, r) => s + r.yearlySavings, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14, padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                    💡 Resources with consistent usage could benefit from Azure Reserved Instances
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {riRecommendations.map((r, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setRgFilter([r.resourceGroup]); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='#3b82f6'; e.currentTarget.style.transform='translateX(4px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(59 130 246 / 0.15)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
-                        <div style={{ width: 40, height: 40, borderRadius: 10, background: 'linear-gradient(135deg, var(--blue-dim) 0%, rgba(59 130 246 / 0.3) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid rgba(59 130 246 / 0.2)' }}>
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.resourceGroup}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{r.region}</div>
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>Save ${r.yearlySavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/yr</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-2)' }}>${r.monthlyCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo current</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Cost Anomalies */}
-              {(costAnomalies.length > 0 || (anomalyData && anomalyData.anomalies.length > 0)) && (
-                <div className="card" style={{ padding: 24, borderLeft: '4px solid var(--danger)', background: 'linear-gradient(135deg, var(--bg-card) 0%, rgba(244 63 94 / 0.03) 100%)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--danger-dim)', border: '1px solid rgba(244 63 94 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
-                    </div>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost Anomalies Detected</span>
-                    <span style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 12, background: 'var(--danger-dim)', color: 'var(--danger)', fontSize: 11, fontWeight: 700 }}>
-                      {(anomalyData?.anomalies.length || costAnomalies.length)} spike{(anomalyData?.anomalies.length || costAnomalies.length) > 1 ? 's' : ''}
-                    </span>
-                  </div>
-                  {anomalyData && anomalyData.anomalies.length > 0 ? (
-                    <>
-                      <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
-                        Daily cost increases exceeding {anomalyData.threshold}x previous period · {anomalyData.periodStart} to {anomalyData.periodEnd}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                        {anomalyData.anomalies.slice(0, 8).map((a, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.subscriptionId); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                            <div style={{
-                              width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                              background: a.ratio >= 3 ? 'var(--danger-dim)' : 'var(--warning-dim)',
-                              color: a.ratio >= 3 ? 'var(--danger)' : 'var(--warning)',
-                              fontSize: 12, fontWeight: 700
-                            }}>
-                              {a.ratio >= 3 ? '!!' : '!'}
-                            </div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.subscriptionId.slice(0, 18)}...</div>
-                              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date}</div>
-                            </div>
-                            <div style={{ textAlign: 'right' }}>
-                              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.change.toFixed(0)}%</div>
-                              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-                                ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
-                        Resources with significant cost increases (&gt;50%) compared to previous period
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                        {costAnomalies.map((a, i) => (
-                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.resourceGroup); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                            <div style={{
-                              width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                              background: a.severity === 'high' ? 'var(--danger-dim)' : 'var(--warning-dim)',
-                              color: a.severity === 'high' ? 'var(--danger)' : 'var(--warning)',
-                              fontSize: 12, fontWeight: 700
-                            }}>
-                              {a.severity === 'high' ? '!!' : '!'}
-                            </div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.resourceGroup}</div>
-                              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{friendlyType(a.resourceType)} · {a.location}</div>
-                            </div>
-                            <div style={{ textAlign: 'right' }}>
-                              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.spike.toFixed(0)}%</div>
-                              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-                                ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
             </div>
           ) : activeTab === 'resources' ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -3689,10 +3766,16 @@ export default function App() {
                     { id: 'costComparison', label: 'Cost Comparison' },
                     { id: 'chartsRow', label: 'Charts Row' },
                     { id: 'costBySub', label: 'Cost by Subscription' },
+                    { id: 'costByEnv', label: 'Cost by Environment' },
+                    { id: 'costTiers', label: 'Cost Tiers' },
                     { id: 'dailyTrends', label: 'Daily Cost Trends' },
                     { id: 'optimization', label: 'Optimization' },
                     { id: 'waste', label: 'Waste Detection' },
                     { id: 'forecast', label: 'Cost Forecast' },
+                    { id: 'commitment', label: 'Commitment Savings' },
+                    { id: 'topology', label: 'Resource Topology' },
+                    { id: 'tagAnalysis', label: 'Tag Analysis' },
+                    { id: 'riRecommendations', label: 'RI Recommendations' },
                     { id: 'costAnomalies', label: 'Cost Anomalies' },
                   ].map(item => (
                     <div
