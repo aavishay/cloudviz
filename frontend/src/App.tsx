@@ -44,6 +44,46 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
+// Keyboard shortcut definitions
+interface ShortcutConfig {
+  key: string;
+  ctrl?: boolean;
+  shift?: boolean;
+  alt?: boolean;
+  description: string;
+  action: () => void;
+}
+
+function useKeyboardShortcuts(shortcuts: ShortcutConfig[], enabled: boolean = true) {
+  useEffect(() => {
+    if (!enabled) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in input fields
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        // Allow Escape key even in inputs
+        if (e.key !== 'Escape') return;
+      }
+
+      for (const shortcut of shortcuts) {
+        const isCtrl = shortcut.ctrl ? (e.ctrlKey || e.metaKey) : !e.ctrlKey && !e.metaKey;
+        const isShift = shortcut.shift ? e.shiftKey : !e.shiftKey;
+        const isAlt = shortcut.alt ? e.altKey : !e.altKey;
+
+        if (e.key.toLowerCase() === shortcut.key.toLowerCase() && isCtrl && isShift && isAlt) {
+          e.preventDefault();
+          shortcut.action();
+          break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [shortcuts, enabled]);
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface AzureResource {
@@ -284,18 +324,16 @@ function FilterDropdown({ label, options, selected, onToggle }: {
   const filtered = options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
   const hasValue = selected.length > 0;
 
-  const dropdownStyle = useMemo(() => {
-    const rect = ref.current?.getBoundingClientRect();
-    return {
-      position: 'fixed' as const,
-      top: (rect?.bottom ?? 0) + 4,
-      left: rect?.left ?? 0,
-      width: Math.max(rect?.width ?? 0, 220),
-      maxHeight: 300,
-      zIndex: 900,
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ref.current, open]);
+  // Compute dropdown position based on current ref position
+  const rect = ref.current?.getBoundingClientRect();
+  const dropdownStyle = {
+    position: 'fixed' as const,
+    top: (rect?.bottom ?? 0) + 4,
+    left: rect?.left ?? 0,
+    width: Math.max(rect?.width ?? 0, 220),
+    maxHeight: 300,
+    zIndex: 900,
+  };
 
   return (
     <div className="sidebar-section" ref={ref}>
@@ -356,18 +394,16 @@ function SingleFilterDropdown({ label, options, selected, onSelect, getLabel }: 
   const filtered = options.filter(o => display(o).toLowerCase().includes(search.toLowerCase()));
   const hasValue = !!selected;
 
-  const dropdownStyle = useMemo(() => {
-    const rect = ref.current?.getBoundingClientRect();
-    return {
-      position: 'fixed' as const,
-      top: (rect?.bottom ?? 0) + 4,
-      left: rect?.left ?? 0,
-      width: Math.max(rect?.width ?? 0, 220),
-      maxHeight: 300,
-      zIndex: 900,
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ref.current, open]);
+  // Compute dropdown position based on current ref position
+  const rect = ref.current?.getBoundingClientRect();
+  const dropdownStyle = {
+    position: 'fixed' as const,
+    top: (rect?.bottom ?? 0) + 4,
+    left: rect?.left ?? 0,
+    width: Math.max(rect?.width ?? 0, 220),
+    maxHeight: 300,
+    zIndex: 900,
+  };
 
   return (
     <div className="sidebar-section" ref={ref}>
@@ -572,8 +608,8 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
 
 // ─── AIInsightsModal ──────────────────────────────────────────────────────────
 
-function AIInsightsModal({ resource, onClose, insight, loading }: {
-  resource: AzureResource; onClose: () => void; insight: { metrics: MetricSeries; recommendations: Array<{category: string; action: string; estimatedSavings: number; savingsPercent: number; rationale: string; priority: number}> } | null; loading: boolean;
+function AIInsightsModal({ resource, onClose, insight, loading, onViewDependencies }: {
+  resource: AzureResource; onClose: () => void; insight: { metrics: MetricSeries; recommendations: Array<{category: string; action: string; estimatedSavings: number; savingsPercent: number; rationale: string; priority: number}> } | null; loading: boolean; onViewDependencies?: () => void;
 }) {
   return (
     <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -591,9 +627,26 @@ function AIInsightsModal({ resource, onClose, insight, loading }: {
               {resource.status && <StatusDot status={resource.status} />}
             </div>
           </div>
-          <button className="modal-close" onClick={onClose}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {onViewDependencies && (
+              <button
+                onClick={onViewDependencies}
+                className="btn btn-secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="5" r="3" />
+                  <circle cx="5" cy="19" r="3" />
+                  <circle cx="19" cy="19" r="3" />
+                  <path d="M12 8v3M7 16h6m4 0h-6" />
+                </svg>
+                View Dependencies
+              </button>
+            )}
+            <button className="modal-close" onClick={onClose}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+            </button>
+          </div>
         </div>
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div className="info-grid">
@@ -681,6 +734,193 @@ function AIInsightsModal({ resource, onClose, insight, loading }: {
               </div>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── DependencyGraphModal ─────────────────────────────────────────────────────
+
+interface ResourceDependency {
+  id: string;
+  name: string;
+  type: string;
+  relationship: 'network' | 'storage' | 'parent' | 'reference' | 'identity';
+  direction: 'inbound' | 'outbound';
+  properties?: Record<string, any>;
+}
+
+interface DependencyGraph {
+  resourceId: string;
+  resourceName: string;
+  resourceType: string;
+  dependencies: ResourceDependency[];
+  dependents: ResourceDependency[];
+  relationships: number;
+  generatedAt: string;
+}
+
+function DependencyGraphModal({ resource, onClose }: { resource: AzureResource; onClose: () => void }) {
+  const [graph, setGraph] = useState<DependencyGraph | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/resources/${encodeURIComponent(resource.id)}/dependencies`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.error);
+        setGraph(data);
+        setLoading(false);
+      })
+      .catch(e => {
+        setError(e.message);
+        setLoading(false);
+      });
+  }, [resource.id]);
+
+  const getRelationshipColor = (rel: string) => {
+    switch (rel) {
+      case 'network': return 'var(--accent)';
+      case 'storage': return 'var(--warning)';
+      case 'parent': return 'var(--text-3)';
+      default: return 'var(--text-2)';
+    }
+  };
+
+  const getRelationshipIcon = (rel: string) => {
+    switch (rel) {
+      case 'network': return '🔗';
+      case 'storage': return '💾';
+      case 'parent': return '📁';
+      default: return '🔗';
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 700, maxHeight: '85vh' }}>
+        <div className="modal-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2">
+                <circle cx="12" cy="5" r="3" />
+                <circle cx="5" cy="19" r="3" />
+                <circle cx="19" cy="19" r="3" />
+                <path d="M12 8v3M7 16h6m4 0h-6" />
+              </svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-1)' }}>Dependency Graph</div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{resource.name}</div>
+            </div>
+          </div>
+          <button className="modal-close" onClick={onClose}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+          </button>
+        </div>
+
+        <div className="modal-body" style={{ overflow: 'auto' }}>
+          {loading ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 60, gap: 12 }}>
+              <div className="spinner" />
+              <span style={{ color: 'var(--text-2)' }}>Analyzing dependencies...</span>
+            </div>
+          ) : error ? (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--danger)' }}>
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ margin: '0 auto 16px', opacity: 0.5 }}>
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 8v4M12 16h.01" />
+              </svg>
+              <div style={{ fontSize: 14 }}>Failed to load dependencies</div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>{error}</div>
+            </div>
+          ) : graph ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              {/* Summary */}
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 120, padding: 16, borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Dependencies</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--accent)', marginTop: 4 }}>{graph.dependencies.length}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>Resources this depends on</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 120, padding: 16, borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Dependents</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--warning)', marginTop: 4 }}>{graph.dependents.length}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>Resources depending on this</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 120, padding: 16, borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--text-1)', marginTop: 4 }}>{graph.relationships}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>Relationships found</div>
+                </div>
+              </div>
+
+              {/* Dependencies (outbound) */}
+              {graph.dependencies.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Dependencies ({graph.dependencies.length})
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {graph.dependencies.map((dep, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 10, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                        <span style={{ fontSize: 20 }}>{getRelationshipIcon(dep.relationship)}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(dep.type)}</div>
+                        </div>
+                        <span style={{ padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: getRelationshipColor(dep.relationship) + '20', color: getRelationshipColor(dep.relationship) }}>
+                          {dep.relationship}
+                        </span>
+                        {dep.properties?.role && (
+                          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{dep.properties.role}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Dependents (inbound) */}
+              {graph.dependents.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Dependents ({graph.dependents.length})
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {graph.dependents.map((dep, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 10, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                        <span style={{ fontSize: 20 }}>{getRelationshipIcon(dep.relationship)}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(dep.type)}</div>
+                        </div>
+                        <span style={{ padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: getRelationshipColor(dep.relationship) + '20', color: getRelationshipColor(dep.relationship) }}>
+                          {dep.relationship}
+                        </span>
+                        {dep.properties?.role && (
+                          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{dep.properties.role}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {graph.dependencies.length === 0 && graph.dependents.length === 0 && (
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-3)' }}>
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ margin: '0 auto 16px', opacity: 0.5 }}>
+                    <circle cx="12" cy="5" r="3" />
+                    <circle cx="5" cy="19" r="3" />
+                    <circle cx="19" cy="19" r="3" />
+                  </svg>
+                  <div>No dependencies found for this resource</div>
+                </div>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -882,7 +1122,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
   const [dashboardOrder, setDashboardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-dashOrder');
-    return saved ? JSON.parse(saved) : ['insights', 'summary', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
+    return saved ? JSON.parse(saved) : ['insights', 'summary', 'costComparison', 'rgComparison', 'subComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
   });
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -891,6 +1131,7 @@ export default function App() {
   });
 
   const [selectedResource, setSelectedResource] = useState<AzureResource | null>(null);
+  const [showDependencyGraph, setShowDependencyGraph] = useState(false);
   const [aiInsight, setAiInsight] = useState<{ metrics: MetricSeries; recommendations: Array<{category: string; action: string; estimatedSavings: number; savingsPercent: number; rationale: string; priority: number}> } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
@@ -915,11 +1156,15 @@ export default function App() {
     const saved = localStorage.getItem('cloudviz-budget');
     return saved ? parseFloat(saved) : 0;
   });
+  const [webhookUrl, setWebhookUrl] = useState<string>(() => {
+    return localStorage.getItem('cloudviz-webhook-url') || '';
+  });
   const [trendZoom, setTrendZoom] = useState<{ left: number; right: number } | null>(null);
   const [isSelectingZoom, setIsSelectingZoom] = useState(false);
   const [zoomStart, setZoomStart] = useState<number | null>(null);
   const [zoomEnd, setZoomEnd] = useState<number | null>(null);
   useEffect(() => { localStorage.setItem('cloudviz-budget', String(budgetLimit)); }, [budgetLimit]);
+  useEffect(() => { localStorage.setItem('cloudviz-webhook-url', webhookUrl); }, [webhookUrl]);
   useEffect(() => { localStorage.setItem('cloudviz-currentPage', String(currentPage)); }, [currentPage]);
   useEffect(() => { localStorage.setItem('cloudviz-costPeriod', costPeriod); }, [costPeriod]);
   useEffect(() => { localStorage.setItem('cloudviz-costSearchQuery', costSearchQuery); }, [costSearchQuery]);
@@ -937,6 +1182,28 @@ export default function App() {
   const [forecastData, setForecastData] = useState<{actualCost: number; forecastCost: number; periodDays: number} | null>(null);
   const [anomalyData, setAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; ratio: number; change: number}>; threshold: number; periodStart: string; periodEnd: string} | null>(null);
 
+  // Resource group comparison state
+  const [rgComparison, setRgComparison] = useState<{
+    rg1: { resourceGroup: string; subscriptionId: string; resourceCount: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}> };
+    rg2: { resourceGroup: string; subscriptionId: string; resourceCount: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}> };
+    comparison: { resourceCountDelta: number; costDelta: number; scoreDelta: number; winner: string };
+  } | null>(null);
+  const [rgCompareLoading, setRgCompareLoading] = useState(false);
+  const [rgCompareOpen, setRgCompareOpen] = useState(false);
+  const [rg1Selection, setRg1Selection] = useState<{rg: string; sub: string} | null>(null);
+  const [rg2Selection, setRg2Selection] = useState<{rg: string; sub: string} | null>(null);
+
+  // Subscription comparison state
+  const [subComparison, setSubComparison] = useState<{
+    sub1: { subscriptionId: string; resourceCount: number; resourceGroups: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}>; locationBreakdown: Array<{location: string; count: number; cost: number; percent: number; costPercent: number}> };
+    sub2: { subscriptionId: string; resourceCount: number; resourceGroups: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}>; locationBreakdown: Array<{location: string; count: number; cost: number; percent: number; costPercent: number}> };
+    comparison: { resourceCountDelta: number; costDelta: number; scoreDelta: number; rgDelta: number; winner: string };
+  } | null>(null);
+  const [subCompareLoading, setSubCompareLoading] = useState(false);
+  const [subCompareOpen, setSubCompareOpen] = useState(false);
+  const [sub1Selection, setSub1Selection] = useState<string | null>(null);
+  const [sub2Selection, setSub2Selection] = useState<string | null>(null);
+
   const [allPossibleFilters, setAllPossibleFilters] = useState<{ subs: string[]; locations: string[]; rgs: string[]; types: string[] }>({
     subs: [], locations: [], rgs: [], types: [],
   });
@@ -944,6 +1211,87 @@ export default function App() {
   const [filteredTotalCost, setFilteredTotalCost] = useState(0);
 
   const debouncedSearch = useDebounce(searchQuery, 500);
+
+  // Keyboard shortcuts state
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Define keyboard shortcuts
+  const shortcuts: ShortcutConfig[] = useMemo(() => [
+    {
+      key: 'k',
+      ctrl: true,
+      description: 'Focus search',
+      action: () => searchInputRef.current?.focus(),
+    },
+    {
+      key: 'r',
+      ctrl: true,
+      description: 'Refresh data',
+      action: () => window.location.reload(),
+    },
+    {
+      key: 'e',
+      ctrl: true,
+      description: 'Export CSV',
+      action: () => exportCSV(),
+    },
+    {
+      key: 'd',
+      ctrl: true,
+      description: 'Toggle dark mode',
+      action: () => setIsDarkMode(prev => !prev),
+    },
+    {
+      key: '1',
+      ctrl: true,
+      description: 'Dashboard tab',
+      action: () => setActiveTab('dashboard'),
+    },
+    {
+      key: '2',
+      ctrl: true,
+      description: 'Resources tab',
+      action: () => setActiveTab('resources'),
+    },
+    {
+      key: '3',
+      ctrl: true,
+      description: 'Costs tab',
+      action: () => setActiveTab('costs'),
+    },
+    {
+      key: '4',
+      ctrl: true,
+      description: 'History tab',
+      action: () => setActiveTab('history'),
+    },
+    {
+      key: 's',
+      ctrl: true,
+      description: 'Open settings',
+      action: () => setShowSettings(true),
+    },
+    {
+      key: '?',
+      description: 'Show keyboard shortcuts',
+      action: () => setShowShortcutsHelp(true),
+    },
+    {
+      key: 'Escape',
+      description: 'Close modals',
+      action: () => {
+        setShowShortcutsHelp(false);
+        setShowSettings(false);
+        setSidebarOpen(false);
+        setSelectedResource(null);
+        setSelectedCost(null);
+      },
+    },
+  ], [setIsDarkMode, setActiveTab]);
+
+  // Apply keyboard shortcuts
+  useKeyboardShortcuts(shortcuts);
 
   // Apply theme to <html>
   useEffect(() => {
@@ -1196,6 +1544,424 @@ export default function App() {
     )
   );
 
+  const renderRGComparison = () => (
+    <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139, 92, 246, 0.3)' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M9 17V7m0 10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m0 10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m0 10V7m0 10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2" /></svg>
+          </div>
+          <div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Resource Group Comparison</span>
+            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Compare two resource groups side-by-side</span>
+          </div>
+        </div>
+        <button
+          onClick={() => setRgCompareOpen(true)}
+          style={{ padding: '8px 16px', borderRadius: 8, background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', color: 'white', border: 'none', fontWeight: 600, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 4v16m8-8H4" /></svg>
+          Compare Groups
+        </button>
+      </div>
+
+      {rgComparison ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'stretch' }}>
+          {/* RG1 */}
+          <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>1</span>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rgComparison.rg1.resourceGroup}</div>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'monospace' }}>{rgComparison.rg1.subscriptionId.slice(0, 8)}...</div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{rgComparison.rg1.resourceCount}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${rgComparison.rg1.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg1.efficiencyScore >= 80 ? 'var(--accent)' : rgComparison.rg1.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{rgComparison.rg1.efficiencyScore}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Orphaned</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg1.orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)' }}>{rgComparison.rg1.orphanedCount}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* VS indicator */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>VS</div>
+            {rgComparison.comparison.winner !== 'tie' && (
+              <div style={{ padding: '6px 12px', borderRadius: 12, background: rgComparison.comparison.winner === 'rg1' ? 'var(--blue-dim)' : 'var(--accent-dim)', fontSize: 10, fontWeight: 700, color: rgComparison.comparison.winner === 'rg1' ? 'var(--blue)' : 'var(--accent)' }}>
+                {rgComparison.comparison.winner === 'rg1' ? 'Winner' : 'Runner-up'}
+              </div>
+            )}
+          </div>
+
+          {/* RG2 */}
+          <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>2</span>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rgComparison.rg2.resourceGroup}</div>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'monospace' }}>{rgComparison.rg2.subscriptionId.slice(0, 8)}...</div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{rgComparison.rg2.resourceCount}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${rgComparison.rg2.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg2.efficiencyScore >= 80 ? 'var(--accent)' : rgComparison.rg2.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{rgComparison.rg2.efficiencyScore}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Orphaned</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg2.orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)' }}>{rgComparison.rg2.orphanedCount}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-3)' }}>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: 12, opacity: 0.5 }}><path d="M9 17V7m0 10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m0 10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m0 10V7m0 10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2" /></svg>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>No comparison selected</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Click "Compare Groups" to analyze two resource groups</div>
+        </div>
+      )}
+
+      {/* Comparison Modal */}
+      {rgCompareOpen && (
+        <Portal>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRgCompareOpen(false)}>
+            <div style={{ background: 'var(--bg-card)', borderRadius: 16, padding: 24, width: '90%', maxWidth: 500, maxHeight: '80vh', overflow: 'auto', border: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-lg)' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-1)' }}>Compare Resource Groups</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>Select two resource groups to compare</div>
+                </div>
+                <button onClick={() => setRgCompareOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4 }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {/* RG1 Selection */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 8 }}>Resource Group 1</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <select
+                      value={rg1Selection?.rg || ''}
+                      onChange={(e) => {
+                        const rg = e.target.value;
+                        const matchingResource = resources.find(r => r.resourceGroup === rg);
+                        const sub = matchingResource?.subscriptionId || '';
+                        setRg1Selection(rg ? { rg, sub } : null);
+                      }}
+                      style={{ flex: 1, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 13 }}
+                    >
+                      <option value="">Select resource group...</option>
+                      {allPossibleFilters.rgs.map(rg => (
+                        <option key={rg} value={rg}>{rg}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* RG2 Selection */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 8 }}>Resource Group 2</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <select
+                      value={rg2Selection?.rg || ''}
+                      onChange={(e) => {
+                        const rg = e.target.value;
+                        const matchingResource = resources.find(r => r.resourceGroup === rg);
+                        const sub = matchingResource?.subscriptionId || '';
+                        setRg2Selection(rg ? { rg, sub } : null);
+                      }}
+                      style={{ flex: 1, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 13 }}
+                    >
+                      <option value="">Select resource group...</option>
+                      {allPossibleFilters.rgs.map(rg => (
+                        <option key={rg} value={rg}>{rg}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                  <button
+                    onClick={async () => {
+                      if (!rg1Selection || !rg2Selection) return;
+                      setRgCompareLoading(true);
+                      try {
+                        const params = new URLSearchParams({
+                          rg1: rg1Selection.rg,
+                          rg2: rg2Selection.rg,
+                          sub1: rg1Selection.sub,
+                          sub2: rg2Selection.sub,
+                        });
+                        const res = await fetch(`/api/resource-groups/comparison?${params}`);
+                        const data = await res.json();
+                        if (data.rg1 && data.rg2) {
+                          setRgComparison(data);
+                          setRgCompareOpen(false);
+                        }
+                      } catch (err) {
+                        console.error('Failed to fetch RG comparison:', err);
+                      } finally {
+                        setRgCompareLoading(false);
+                      }
+                    }}
+                    disabled={!rg1Selection || !rg2Selection || rgCompareLoading}
+                    style={{
+                      flex: 1,
+                      padding: '12px 20px',
+                      borderRadius: 8,
+                      background: (!rg1Selection || !rg2Selection) ? 'var(--border)' : 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+                      color: 'white',
+                      border: 'none',
+                      fontWeight: 600,
+                      fontSize: 14,
+                      cursor: (!rg1Selection || !rg2Selection) ? 'not-allowed' : 'pointer',
+                      opacity: (!rg1Selection || !rg2Selection) ? 0.6 : 1,
+                    }}
+                  >
+                    {rgCompareLoading ? 'Loading...' : 'Compare'}
+                  </button>
+                  <button
+                    onClick={() => { setRg1Selection(null); setRg2Selection(null); setRgCompareOpen(false); }}
+                    style={{ padding: '12px 20px', borderRadius: 8, background: 'var(--bg-surface)', color: 'var(--text-1)', border: '1px solid var(--border)', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+    </div>
+  );
+
+  const renderSubComparison = () => (
+    <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(6, 182, 212, 0.3)' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+          </div>
+          <div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Subscription Comparison</span>
+            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Compare two subscriptions side-by-side</span>
+          </div>
+        </div>
+        <button
+          onClick={() => setSubCompareOpen(true)}
+          style={{ padding: '8px 16px', borderRadius: 8, background: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)', color: 'white', border: 'none', fontWeight: 600, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 4v16m8-8H4" /></svg>
+          Compare Subscriptions
+        </button>
+      </div>
+
+      {subComparison ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'stretch' }}>
+          {/* Sub1 */}
+          <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>1</span>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{subComparison.sub1.subscriptionId}</div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub1.resourceCount.toLocaleString()}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${subComparison.sub1.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: subComparison.sub1.efficiencyScore >= 80 ? 'var(--accent)' : subComparison.sub1.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{subComparison.sub1.efficiencyScore}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>R Groups</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub1.resourceGroups}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* VS indicator */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>VS</div>
+            {subComparison.comparison.winner !== 'tie' && (
+              <div style={{ padding: '6px 12px', borderRadius: 12, background: subComparison.comparison.winner === 'sub1' ? 'var(--blue-dim)' : 'var(--accent-dim)', fontSize: 10, fontWeight: 700, color: subComparison.comparison.winner === 'sub1' ? 'var(--blue)' : 'var(--accent)' }}>
+                {subComparison.comparison.winner === 'sub1' ? 'Winner' : 'Runner-up'}
+              </div>
+            )}
+          </div>
+
+          {/* Sub2 */}
+          <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>2</span>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{subComparison.sub2.subscriptionId}</div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub2.resourceCount.toLocaleString()}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${subComparison.sub2.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: subComparison.sub2.efficiencyScore >= 80 ? 'var(--accent)' : subComparison.sub2.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{subComparison.sub2.efficiencyScore}</div>
+              </div>
+              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>R Groups</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub2.resourceGroups}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-3)' }}>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: 12, opacity: 0.5 }}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>No comparison selected</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Click "Compare Subscriptions" to analyze two subscriptions</div>
+        </div>
+      )}
+
+      {/* Comparison Modal */}
+      {subCompareOpen && (
+        <Portal>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setSubCompareOpen(false)}>
+            <div style={{ background: 'var(--bg-card)', borderRadius: 16, padding: 24, width: '90%', maxWidth: 500, maxHeight: '80vh', overflow: 'auto', border: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-lg)' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-1)' }}>Compare Subscriptions</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>Select two subscriptions to compare</div>
+                </div>
+                <button onClick={() => setSubCompareOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4 }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {/* Sub1 Selection */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 8 }}>Subscription 1</div>
+                  <select
+                    value={sub1Selection || ''}
+                    onChange={(e) => setSub1Selection(e.target.value || null)}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 13, fontFamily: 'monospace' }}
+                  >
+                    <option value="">Select subscription...</option>
+                    {allPossibleFilters.subs.map(sub => (
+                      <option key={sub} value={sub}>{sub}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Sub2 Selection */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 8 }}>Subscription 2</div>
+                  <select
+                    value={sub2Selection || ''}
+                    onChange={(e) => setSub2Selection(e.target.value || null)}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 13, fontFamily: 'monospace' }}
+                  >
+                    <option value="">Select subscription...</option>
+                    {allPossibleFilters.subs.map(sub => (
+                      <option key={sub} value={sub}>{sub}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                  <button
+                    onClick={async () => {
+                      if (!sub1Selection || !sub2Selection) return;
+                      setSubCompareLoading(true);
+                      try {
+                        const params = new URLSearchParams({
+                          sub1: sub1Selection,
+                          sub2: sub2Selection,
+                        });
+                        const res = await fetch(`/api/subscriptions/comparison?${params}`);
+                        const data = await res.json();
+                        if (data.sub1 && data.sub2) {
+                          setSubComparison(data);
+                          setSubCompareOpen(false);
+                        }
+                      } catch (err) {
+                        console.error('Failed to fetch subscription comparison:', err);
+                      } finally {
+                        setSubCompareLoading(false);
+                      }
+                    }}
+                    disabled={!sub1Selection || !sub2Selection || subCompareLoading}
+                    style={{
+                      flex: 1,
+                      padding: '12px 20px',
+                      borderRadius: 8,
+                      background: (!sub1Selection || !sub2Selection) ? 'var(--border)' : 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
+                      color: 'white',
+                      border: 'none',
+                      fontWeight: 600,
+                      fontSize: 14,
+                      cursor: (!sub1Selection || !sub2Selection) ? 'not-allowed' : 'pointer',
+                      opacity: (!sub1Selection || !sub2Selection) ? 0.6 : 1,
+                    }}
+                  >
+                    {subCompareLoading ? 'Loading...' : 'Compare'}
+                  </button>
+                  <button
+                    onClick={() => { setSub1Selection(null); setSub2Selection(null); setSubCompareOpen(false); }}
+                    style={{ padding: '12px 20px', borderRadius: 8, background: 'var(--bg-surface)', color: 'var(--text-1)', border: '1px solid var(--border)', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+    </div>
+  );
+
   const renderChartsRow = () => (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 16 }}>
       {/* Cost by Region (PieChart) */}
@@ -1444,6 +2210,8 @@ export default function App() {
     { id: 'insights', render: renderInsights },
     { id: 'summary', render: renderSummary },
     { id: 'costComparison', render: renderCostComparison },
+    { id: 'rgComparison', render: renderRGComparison },
+    { id: 'subComparison', render: renderSubComparison },
     { id: 'chartsRow', render: renderChartsRow },
     { id: 'costBySub', render: () => (
       <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
@@ -2539,7 +3307,7 @@ export default function App() {
     );
   }, [costs, debouncedCostSearch]);
 
-  const totalCostsSum = costs.reduce((s, c) => s + c.cost, 0);
+  const totalCostsSum = useMemo(() => costs.reduce((s, c) => s + c.cost, 0), [costs]);
 
   // Dashboard computed values
   const costsByType = useMemo(() => {
@@ -2673,8 +3441,11 @@ export default function App() {
 
   // Month-over-month cost comparison
   const costComparison = useMemo(() => {
-    const currentTotal = costs.reduce((s, c) => s + c.cost, 0);
-    const previousTotal = costs.reduce((s, c) => s + (c.previousCost || 0), 0);
+    let currentTotal = 0, previousTotal = 0;
+    costs.forEach(c => {
+      currentTotal += c.cost;
+      previousTotal += c.previousCost || 0;
+    });
     if (previousTotal === 0) return null;
     const change = currentTotal - previousTotal;
     const percentChange = ((change / previousTotal) * 100);
@@ -2951,9 +3722,13 @@ export default function App() {
                       )}
                     </div>
                   )}
-                  <button className="btn" onClick={() => setShowSettings(true)}>
+                  <button className="btn" onClick={() => setShowSettings(true)} title="Settings (⌘S / Ctrl+S)">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
                     Settings
+                  </button>
+                  <button className="btn" onClick={() => setShowShortcutsHelp(true)} title="Keyboard shortcuts (?)" style={{ padding: '8px 10px' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M6 8h.01M6 12h.01M6 16h.01" /></svg>
+                    <kbd style={{ fontSize: 11, fontFamily: 'monospace', background: 'var(--bg-surface)', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)' }}>?</kbd>
                   </button>
                   <button className="btn" onClick={() => { const name = prompt('Preset name:'); if (!name) return; const preset = { name, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly }; const saved = JSON.parse(localStorage.getItem('cloudviz-filterPresets') || '[]'); localStorage.setItem('cloudviz-filterPresets', JSON.stringify([...saved, preset])); setFilterPresets([...filterPresets, preset]); }} title="Save current filters as preset">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
@@ -3002,6 +3777,7 @@ export default function App() {
                 <div className="search-input-wrap" style={{ maxWidth: 340 }}>
                   <svg className="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>
                   <input
+                    ref={searchInputRef}
                     className="search-input"
                     type="text"
                     placeholder="Search by name, type, resource group..."
@@ -3615,6 +4391,15 @@ export default function App() {
           onClose={() => setSelectedResource(null)}
           insight={aiInsight}
           loading={aiLoading}
+          onViewDependencies={() => setShowDependencyGraph(true)}
+        />
+      )}
+
+      {/* ── Dependency Graph modal ── */}
+      {selectedResource && showDependencyGraph && (
+        <DependencyGraphModal
+          resource={selectedResource}
+          onClose={() => setShowDependencyGraph(false)}
         />
       )}
 
@@ -3655,6 +4440,25 @@ export default function App() {
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
                   Set your monthly cloud budget to receive alerts when approaching the limit
+                </div>
+              </div>
+
+              {/* Webhook URL */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-2)', display: 'block', marginBottom: 8 }}>
+                  Webhook URL for Alerts
+                </label>
+                <input
+                  type="url"
+                  value={webhookUrl}
+                  onChange={e => setWebhookUrl(e.target.value)}
+                  placeholder="https://hooks.slack.com/services/..."
+                  style={{ width: '100%', padding: '12px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 14, transition: 'border-color 0.2s ease, box-shadow 0.2s ease' }}
+                  onFocus={e => { e.target.style.borderColor = 'var(--accent)'; e.target.style.boxShadow = '0 0 0 3px var(--accent-dim)'; }}
+                  onBlur={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.boxShadow = 'none'; }}
+                />
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                  Optional: Receive webhook notifications when budget alerts are triggered (Slack, Teams, custom URL)
                 </div>
               </div>
 
@@ -3869,6 +4673,58 @@ export default function App() {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5" /></svg>
                 Done
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Keyboard Shortcuts Help Modal ── */}
+      {showShortcutsHelp && (
+        <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && setShowShortcutsHelp(false)}>
+          <div className="modal" style={{ maxWidth: 480 }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2"><path d="M3 7h18M3 12h18M3 17h12" /><rect x="2" y="4" width="20" height="16" rx="2" /></svg>
+                </div>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-1)' }}>Keyboard Shortcuts</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>Power user shortcuts for quick navigation</div>
+                </div>
+              </div>
+              <button className="modal-close" onClick={() => setShowShortcutsHelp(false)}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div style={{ display: 'grid', gap: 8 }}>
+                {[
+                  { key: '⌘K / Ctrl+K', desc: 'Focus search input' },
+                  { key: '⌘R / Ctrl+R', desc: 'Refresh page data' },
+                  { key: '⌘E / Ctrl+E', desc: 'Export CSV' },
+                  { key: '⌘D / Ctrl+D', desc: 'Toggle dark mode' },
+                  { key: '⌘S / Ctrl+S', desc: 'Open settings' },
+                  { key: '⌘1 / Ctrl+1', desc: 'Switch to Dashboard' },
+                  { key: '⌘2 / Ctrl+2', desc: 'Switch to Resources' },
+                  { key: '⌘3 / Ctrl+3', desc: 'Switch to Costs' },
+                  { key: '⌘4 / Ctrl+4', desc: 'Switch to History' },
+                  { key: '?', desc: 'Show this help dialog' },
+                  { key: 'Esc', desc: 'Close modals/panels' },
+                ].map((shortcut, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', borderRadius: 8, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: 13, color: 'var(--text-1)' }}>{shortcut.desc}</span>
+                    <kbd style={{ padding: '4px 10px', borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border-strong)', fontSize: 12, fontWeight: 700, color: 'var(--text-1)', fontFamily: 'monospace', minWidth: 100, textAlign: 'center' }}>
+                      {shortcut.key}
+                    </kbd>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 16, padding: 12, borderRadius: 8, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
+                  <span>Shortcuts are disabled when typing in input fields</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>

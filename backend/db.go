@@ -34,8 +34,12 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_sub_period ON costs(subscription_id, period)`)
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_resource_id ON costs(resource_id)`)
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_sub_period ON costs(subscription_id, period)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_resource_id ON costs(resource_id)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
+	}
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS resources (
 		id TEXT PRIMARY KEY,
@@ -51,7 +55,9 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_resources_sub ON resources(subscription_id)`)
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_resources_sub ON resources(subscription_id)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
+	}
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS resource_history (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,8 +72,12 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_resource ON resource_history(resource_id)`)
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON resource_history(timestamp)`)
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_resource ON resource_history(resource_id)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON resource_history(timestamp)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
+	}
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS budgets (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,10 +103,14 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_type_daily_key ON cost_type_daily(cache_key)`)
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_type_daily_key ON cost_type_daily(cache_key)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
+	}
 
 	// Migrate old per-sub schema to new composite-key schema
-	db.Exec(`ALTER TABLE cost_type_daily ADD COLUMN cache_key TEXT`)
+	if _, err := db.Exec(`ALTER TABLE cost_type_daily ADD COLUMN cache_key TEXT`); err != nil {
+		// Column may already exist, ignore error
+	}
 	var oldCount int
 	row := db.QueryRow("SELECT COUNT(*) FROM cost_type_daily WHERE cache_key IS NULL OR cache_key = ''")
 	if row != nil {
@@ -104,21 +118,26 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	}
 	if oldCount > 0 {
 		// Old rows exist; drop and recreate clean
-		db.Exec("DROP TABLE IF EXISTS cost_type_daily")
-		db.Exec(`CREATE TABLE IF NOT EXISTS cost_type_daily (
+		if _, err := db.Exec("DROP TABLE IF EXISTS cost_type_daily"); err != nil {
+			log.Printf("Warning: failed to drop old table: %v", err)
+		}
+		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS cost_type_daily (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			cache_key TEXT,
 			dates TEXT,
 			types TEXT,
 			fetched_at DATETIME
-		)`)
-		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_type_daily_key ON cost_type_daily(cache_key)`)
+		)`); err != nil {
+			return nil, err
+		}
+		if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_type_daily_key ON cost_type_daily(cache_key)`); err != nil {
+			log.Printf("Warning: failed to create index: %v", err)
+		}
 		log.Println("Migrated cost_type_daily schema: dropped", oldCount, "old rows")
 	}
-	if err != nil {
-		return nil, err
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_budgets_sub ON budgets(subscription_id)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
 	}
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_budgets_sub ON budgets(subscription_id)`)
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS alerts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,7 +152,20 @@ func newDBCache(dbPath string) (*dbCache, error) {
 		period TEXT DEFAULT 'monthly',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
+	if err != nil {
+		return nil, err
+	}
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_alerts_sub ON alerts(subscription_id)`)
+
+	// Create webhook deliveries table
+	if err := CreateWebhookDeliveriesTable(db); err != nil {
+		return nil, err
+	}
+
+	// Create dependencies table
+	if err := CreateDependenciesTable(db); err != nil {
+		return nil, err
+	}
 
 	return &dbCache{db: db}, nil
 }
@@ -172,16 +204,20 @@ func (dc *dbCache) set(subID string, period string, data armcostmanagement.Query
 		return
 	}
 
-	dc.db.Exec("DELETE FROM costs WHERE subscription_id = ? AND period = ?", subID, period)
+	if _, err := dc.db.Exec("DELETE FROM costs WHERE subscription_id = ? AND period = ?", subID, period); err != nil {
+		log.Printf("Warning: failed to delete old costs: %v", err)
+	}
 
 	tx, err := dc.db.Begin()
 	if err != nil {
+		log.Printf("Error: failed to begin transaction: %v", err)
 		return
 	}
+	defer tx.Rollback()
 
 	stmt, err := tx.Prepare("INSERT INTO costs (subscription_id, resource_id, resource_group, resource_type, resource_location, cost, period, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
 	if err != nil {
-		tx.Rollback()
+		log.Printf("Error: failed to prepare statement: %v", err)
 		return
 	}
 	defer stmt.Close()
@@ -226,20 +262,7 @@ func (dc *dbCache) set(subID string, period string, data armcostmanagement.Query
 
 		var cost float64
 		if colCost < len(row) {
-			switch v := row[colCost].(type) {
-			case float64:
-				cost = v
-			case float32:
-				cost = float64(v)
-			case int64:
-				cost = float64(v)
-			case int:
-				cost = float64(v)
-			default:
-				if s, ok := v.(string); ok {
-					fmt.Sscanf(s, "%f", &cost)
-				}
-			}
+			cost = parseFloatVal(row[colCost])
 		}
 
 		rid := getVal(colId)
@@ -247,9 +270,13 @@ func (dc *dbCache) set(subID string, period string, data armcostmanagement.Query
 		rt := strings.ToLower(getVal(colType))
 		rl := normalizeLocation(getVal(colLoc))
 
-		stmt.Exec(subID, rid, rg, rt, rl, cost, period, now)
+		if _, err := stmt.Exec(subID, rid, rg, rt, rl, cost, period, now); err != nil {
+			log.Printf("Warning: failed to insert cost: %v", err)
+		}
 	}
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		log.Printf("Error: failed to commit transaction: %v", err)
+	}
 }
 
 func (dc *dbCache) getTypeDaily(cacheKey string) (dates []map[string]any, types []string, ok bool) {
@@ -259,26 +286,46 @@ func (dc *dbCache) getTypeDaily(cacheKey string) (dates []map[string]any, types 
 	if err != nil || time.Since(fetchedAt) > 6*time.Hour {
 		return nil, nil, false
 	}
-	json.Unmarshal([]byte(datesJSON), &dates)
-	json.Unmarshal([]byte(typesJSON), &types)
+	if err := json.Unmarshal([]byte(datesJSON), &dates); err != nil {
+		log.Printf("Warning: failed to unmarshal dates: %v", err)
+		return nil, nil, false
+	}
+	if err := json.Unmarshal([]byte(typesJSON), &types); err != nil {
+		log.Printf("Warning: failed to unmarshal types: %v", err)
+		return nil, nil, false
+	}
 	return dates, types, true
 }
 
 func (dc *dbCache) setTypeDaily(cacheKey string, dates []map[string]any, types []string) {
 	now := time.Now()
-	datesJSON, _ := json.Marshal(dates)
-	typesJSON, _ := json.Marshal(types)
-	dc.db.Exec("DELETE FROM cost_type_daily WHERE cache_key = ?", cacheKey)
-	dc.db.Exec("INSERT INTO cost_type_daily (cache_key, dates, types, fetched_at) VALUES (?, ?, ?, ?)",
-		cacheKey, string(datesJSON), string(typesJSON), now)
+	datesJSON, err := json.Marshal(dates)
+	if err != nil {
+		log.Printf("Warning: failed to marshal dates: %v", err)
+		return
+	}
+	typesJSON, err := json.Marshal(types)
+	if err != nil {
+		log.Printf("Warning: failed to marshal types: %v", err)
+		return
+	}
+	if _, err := dc.db.Exec("DELETE FROM cost_type_daily WHERE cache_key = ?", cacheKey); err != nil {
+		log.Printf("Warning: failed to delete old daily costs: %v", err)
+	}
+	if _, err := dc.db.Exec("INSERT INTO cost_type_daily (cache_key, dates, types, fetched_at) VALUES (?, ?, ?, ?)",
+		cacheKey, string(datesJSON), string(typesJSON), now); err != nil {
+		log.Printf("Warning: failed to insert daily costs: %v", err)
+	}
 }
 
 func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	now := time.Now()
 	rows, err := db.Query("SELECT id, name, type, location, subscription_id, resource_group, tags, status FROM resources")
 	if err != nil {
+		log.Printf("Warning: failed to query resources: %v", err)
 		return
 	}
+	defer rows.Close()
 
 	oldMap := make(map[string]AzureResource)
 	for rows.Next() {
@@ -286,57 +333,101 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 		var tagsJSON string
 		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.Location, &r.SubscriptionID, &r.ResourceGroup, &tagsJSON, &r.Status); err == nil {
 			if tagsJSON != "" {
-				json.Unmarshal([]byte(tagsJSON), &r.Tags)
+				if err := json.Unmarshal([]byte(tagsJSON), &r.Tags); err != nil {
+					log.Printf("Warning: failed to unmarshal tags: %v", err)
+				}
 			}
 			oldMap[r.ID] = r
 		}
 	}
-	rows.Close()
+
+	// Use a single transaction for all changes
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("Error: failed to begin transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+
+	changeStmt, err := tx.Prepare(`INSERT INTO resource_history (resource_id, resource_name, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		log.Printf("Error: failed to prepare change statement: %v", err)
+		return
+	}
+	defer changeStmt.Close()
 
 	newMap := make(map[string]AzureResource)
 	for _, r := range newResources {
 		newMap[r.ID] = r
 		if old, exists := oldMap[r.ID]; exists {
 			if old.Name != r.Name {
-				recordChange(db, r.ID, r.Name, "modified", "name", old.Name, r.Name)
+				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "name", old.Name, r.Name)
 			}
 			if old.Status != r.Status {
-				recordChange(db, r.ID, r.Name, "modified", "status", old.Status, r.Status)
+				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "status", old.Status, r.Status)
 			}
 			if old.Location != r.Location {
-				recordChange(db, r.ID, r.Name, "modified", "location", old.Location, r.Location)
+				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "location", old.Location, r.Location)
 			}
 			if old.ResourceGroup != r.ResourceGroup {
-				recordChange(db, r.ID, r.Name, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup)
+				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup)
 			}
 			if old.Type != r.Type {
-				recordChange(db, r.ID, r.Name, "modified", "type", old.Type, r.Type)
+				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "type", old.Type, r.Type)
 			}
 			oldTagsJSON, _ := json.Marshal(old.Tags)
 			newTagsJSON, _ := json.Marshal(r.Tags)
 			if string(oldTagsJSON) != string(newTagsJSON) {
-				recordChange(db, r.ID, r.Name, "modified", "tags", string(oldTagsJSON), string(newTagsJSON))
+				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "tags", string(oldTagsJSON), string(newTagsJSON))
 			}
 		} else {
-			recordChange(db, r.ID, r.Name, "created", "", "", "")
+			recordChangeStmt(changeStmt, r.ID, r.Name, "created", "", "", "")
 		}
 	}
 
 	for id, old := range oldMap {
 		if _, exists := newMap[id]; !exists {
-			recordChange(db, id, old.Name, "deleted", "", "", "")
+			recordChangeStmt(changeStmt, id, old.Name, "deleted", "", "", "")
 		}
 	}
 
-	db.Exec("DELETE FROM resources")
+	if _, err := tx.Exec("DELETE FROM resources"); err != nil {
+		log.Printf("Warning: failed to delete old resources: %v", err)
+	}
+
+	resourceStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, name, type, location, subscription_id, resource_group, tags, status, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+	if err != nil {
+		log.Printf("Error: failed to prepare resource statement: %v", err)
+		return
+	}
+	defer resourceStmt.Close()
+
 	for _, r := range newResources {
-		tagsJSON, _ := json.Marshal(r.Tags)
-		db.Exec("INSERT OR REPLACE INTO resources (id, name, type, location, subscription_id, resource_group, tags, status, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			r.ID, r.Name, r.Type, r.Location, r.SubscriptionID, r.ResourceGroup, string(tagsJSON), r.Status, now)
+		tagsJSON, err := json.Marshal(r.Tags)
+		if err != nil {
+			log.Printf("Warning: failed to marshal tags: %v", err)
+			tagsJSON = []byte("{}")
+		}
+		if _, err := resourceStmt.Exec(r.ID, r.Name, r.Type, r.Location, r.SubscriptionID, r.ResourceGroup, string(tagsJSON), r.Status, now); err != nil {
+			log.Printf("Warning: failed to insert resource: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("Error: failed to commit transaction: %v", err)
+	}
+}
+
+// recordChangeStmt records a change using a prepared statement
+func recordChangeStmt(stmt *sql.Stmt, resourceID, resourceName, changeType, field, oldVal, newVal string) {
+	if _, err := stmt.Exec(resourceID, resourceName, changeType, field, oldVal, newVal, time.Now()); err != nil {
+		log.Printf("Warning: failed to record change: %v", err)
 	}
 }
 
 func recordChange(db *sql.DB, resourceID, resourceName, changeType, field, oldVal, newVal string) {
-	db.Exec(`INSERT INTO resource_history (resource_id, resource_name, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		resourceID, resourceName, changeType, field, oldVal, newVal, time.Now())
+	if _, err := db.Exec(`INSERT INTO resource_history (resource_id, resource_name, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		resourceID, resourceName, changeType, field, oldVal, newVal, time.Now()); err != nil {
+		log.Printf("Warning: failed to record change: %v", err)
+	}
 }

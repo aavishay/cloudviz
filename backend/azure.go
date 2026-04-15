@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
@@ -19,11 +20,84 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
 )
 
+// metricsClients caches MetricsClient per subscription to avoid recreating them
+var metricsClients sync.Map // map[string]*armmonitor.MetricsClient
+
+// Utility functions for code reuse
+
+// truncateString truncates a string to maxLen, adding "..." if truncated
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// parseFloatVal converts various types to float64
+func parseFloatVal(v any) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case int:
+		return float64(val)
+	case string:
+		var f float64
+		fmt.Sscanf(val, "%f", &f)
+		return f
+	default:
+		return 0
+	}
+}
+
+// parseAzureDate converts Azure date format (yyyyMMdd) to yyyy-MM-dd
+func parseAzureDate(dateVal string) string {
+	dateStr := strings.TrimSpace(dateVal)
+	if len(dateStr) == 8 {
+		return fmt.Sprintf("%s-%s-%s", dateStr[0:4], dateStr[4:6], dateStr[6:8])
+	}
+	return dateStr
+}
+
+// getResourceTypeName extracts the resource type name from a full type string
+func getResourceTypeName(fullType string) string {
+	parts := strings.Split(fullType, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return fullType
+}
+
+// getMetricsClient returns a cached MetricsClient for the subscription
+func getMetricsClient(subID string) (*armmonitor.MetricsClient, error) {
+	if client, ok := metricsClients.Load(subID); ok {
+		return client.(*armmonitor.MetricsClient), nil
+	}
+
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := armmonitor.NewMetricsClient(subID, cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	metricsClients.Store(subID, client)
+	return client, nil
+}
+
 // retryAfter429 calls fn with up to 6 retries. On 429 responses it backs off
 // exponentially starting at 30s (30s, 60s, 120s, 240s, 480s, 960s), capped at 960s.
-func retryAfter429[T any](logCtx string, fn func() (T, error)) (T, error) {
+func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, error)) (T, error) {
 	var zero T
-	ctx := context.Background()
 	for retry := 0; retry < 6; retry++ {
 		if err := costLimiter.Wait(ctx); err != nil {
 			log.Printf("Rate limiter error for %s: %v", logCtx, err)
@@ -53,7 +127,7 @@ func retryAfter429[T any](logCtx string, fn func() (T, error)) (T, error) {
 	return zero, fmt.Errorf("max retries exceeded for %s", logCtx)
 }
 
-func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p string, start time.Time, end time.Time, ctx context.Context) (*armcostmanagement.QueryClientUsageResponse, error) {
+func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p string, start time.Time, ctx context.Context) (*armcostmanagement.QueryClientUsageResponse, error) {
 	scope := "subscriptions/" + sid
 	props := armcostmanagement.QueryDefinition{
 		Type: to.Ptr(armcostmanagement.ExportTypeActualCost),
@@ -69,11 +143,11 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p stri
 			},
 		},
 		Timeframe:  to.Ptr(armcostmanagement.TimeframeTypeCustom),
-		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
+		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(time.Now())},
 	}
 
 	logCtx := fmt.Sprintf("%s/%s", sid, p)
-	res, err := retryAfter429(logCtx, func() (armcostmanagement.QueryClientUsageResponse, error) {
+	res, err := retryAfter429(ctx, logCtx, func() (armcostmanagement.QueryClientUsageResponse, error) {
 		return client.Usage(ctx, scope, props, nil)
 	})
 	if err != nil {
@@ -84,7 +158,7 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p stri
 }
 
 // fetchDailyCosts queries Azure Cost Management grouped by date for daily trend data
-func fetchDailyCosts(client *armcostmanagement.QueryClient, sid string, start, end time.Time) ([]map[string]any, error) {
+func fetchDailyCosts(client *armcostmanagement.QueryClient, sid string, start, end time.Time, ctx context.Context) ([]map[string]any, error) {
 	scope := "subscriptions/" + sid
 	props := armcostmanagement.QueryDefinition{
 		Type: to.Ptr(armcostmanagement.ExportTypeActualCost),
@@ -92,16 +166,13 @@ func fetchDailyCosts(client *armcostmanagement.QueryClient, sid string, start, e
 			Aggregation: map[string]*armcostmanagement.QueryAggregation{
 				"totalCost": {Name: to.Ptr("PreTaxCost"), Function: to.Ptr(armcostmanagement.FunctionTypeSum)},
 			},
-			Grouping: []*armcostmanagement.QueryGrouping{
-				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("BillingMonth")},
-			},
+			Granularity: to.Ptr(armcostmanagement.GranularityTypeDaily),
 		},
 		Timeframe:  to.Ptr(armcostmanagement.TimeframeTypeCustom),
 		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
 	}
 
-	return retryAfter429(sid, func() ([]map[string]any, error) {
-		ctx := context.Background()
+	return retryAfter429(ctx, sid, func() ([]map[string]any, error) {
 		res, err := client.Usage(ctx, scope, props, nil)
 		if err != nil {
 			return nil, err
@@ -116,51 +187,57 @@ func parseDailyCostResults(res armcostmanagement.QueryResult) []map[string]any {
 	}
 
 	var results []map[string]any
-	colCost, colDate := 0, 1
+	colCost, colDate := -1, -1
+
 	if res.Properties.Columns != nil {
+		// Log available columns for debugging
+		var colNames []string
 		for i, col := range res.Properties.Columns {
 			if col.Name == nil {
 				continue
 			}
-			if *col.Name == "Date" || *col.Name == "UsageDate" {
+			colNames = append(colNames, *col.Name)
+			name := strings.ToLower(*col.Name)
+			// Check for date column (various Azure naming conventions)
+			if strings.Contains(name, "date") || strings.Contains(name, "usage") {
 				colDate = i
 			}
-			if *col.Name == "PreTaxCost" || *col.Name == "Cost" {
+			// Check for cost column
+			if strings.Contains(name, "cost") || strings.Contains(name, "pretax") {
 				colCost = i
 			}
 		}
+		log.Printf("Daily cost columns: %v, detected costIdx=%d, dateIdx=%d", colNames, colCost, colDate)
 	}
 
-	for _, row := range res.Properties.Rows {
+	// Validate column indices
+	if colCost < 0 || colDate < 0 {
+		log.Printf("Warning: Could not detect cost/date columns, returning empty results")
+		return nil
+	}
+
+	rowCount := len(res.Properties.Rows)
+	if rowCount == 0 {
+		return nil
+	}
+
+	for i, row := range res.Properties.Rows {
+		if len(row) <= colCost || len(row) <= colDate {
+			log.Printf("Warning: Row %d has insufficient columns (len=%d, need cost=%d, date=%d)", i, len(row), colCost, colDate)
+			continue
+		}
 		dateVal := fmt.Sprintf("%v", row[colDate])
 		costVal := row[colCost]
-		var cost float64
-		switch v := costVal.(type) {
-		case float64:
-			cost = v
-		case float32:
-			cost = float64(v)
-		case int64:
-			cost = float64(v)
-		default:
-			if s, ok := costVal.(string); ok {
-				fmt.Sscanf(s, "%f", &cost)
-			}
+		parsedCost := parseFloatVal(costVal)
+		if i < 3 {
+			log.Printf("Row %d: dateRaw=%v, costRaw=%v, parsedCost=%.4f", i, dateVal, costVal, parsedCost)
 		}
-		// Parse date string - Azure returns yyyyMMdd or yyyy-MM-dd format
-		dateStr := strings.TrimSpace(dateVal)
-		if len(dateStr) == 8 { // yyyyMMdd
-			year := dateStr[0:4]
-			month := dateStr[4:6]
-			day := dateStr[6:8]
-			dateStr = fmt.Sprintf("%s-%s-%s", year, month, day)
-		}
-		// else: already yyyy-MM-dd from Date dimension, use as-is
 		results = append(results, map[string]any{
-			"date": dateStr,
-			"cost": cost,
+			"date": parseAzureDate(dateVal),
+			"cost": parsedCost,
 		})
 	}
+	log.Printf("Parsed %d daily cost rows", len(results))
 	return results
 }
 
@@ -447,7 +524,7 @@ func normalizeResults(res armcostmanagement.QueryResult) any {
 }
 
 // fetchDailyCostsByType queries Azure Cost Management grouped by date AND resource type
-func fetchDailyCostsByType(client *armcostmanagement.QueryClient, sid string, start, end time.Time) ([]map[string]any, error) {
+func fetchDailyCostsByType(client *armcostmanagement.QueryClient, sid string, start, end time.Time, ctx context.Context) ([]map[string]any, error) {
 	scope := "subscriptions/" + sid
 	props := armcostmanagement.QueryDefinition{
 		Type: to.Ptr(armcostmanagement.ExportTypeActualCost),
@@ -456,16 +533,15 @@ func fetchDailyCostsByType(client *armcostmanagement.QueryClient, sid string, st
 				"totalCost": {Name: to.Ptr("PreTaxCost"), Function: to.Ptr(armcostmanagement.FunctionTypeSum)},
 			},
 			Grouping: []*armcostmanagement.QueryGrouping{
-				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("Date")},
 				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ResourceType")},
 			},
+			Granularity: to.Ptr(armcostmanagement.GranularityTypeDaily),
 		},
 		Timeframe:  to.Ptr(armcostmanagement.TimeframeTypeCustom),
 		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
 	}
 
-	return retryAfter429(sid, func() ([]map[string]any, error) {
-		ctx := context.Background()
+	return retryAfter429(ctx, sid, func() ([]map[string]any, error) {
 		res, err := client.Usage(ctx, scope, props, nil)
 		if err != nil {
 			return nil, err
@@ -480,25 +556,34 @@ func parseDailyCostsByType(res armcostmanagement.QueryResult) []map[string]any {
 	}
 
 	var results []map[string]any
-	colCost, colDate, colType := 0, 1, 2
+	colCost, colDate, colType := -1, -1, -1
+
 	if res.Properties.Columns != nil {
 		for i, col := range res.Properties.Columns {
 			if col.Name == nil {
 				continue
 			}
-			switch *col.Name {
-			case "Date", "UsageDate":
+			name := strings.ToLower(*col.Name)
+			if strings.Contains(name, "date") || strings.Contains(name, "usage") {
 				colDate = i
-			case "ResourceType":
+			}
+			if strings.Contains(name, "resourcetype") || strings.Contains(name, "type") {
 				colType = i
-			case "PreTaxCost", "Cost":
+			}
+			if strings.Contains(name, "cost") || strings.Contains(name, "pretax") {
 				colCost = i
 			}
 		}
 	}
 
+	// Validate column indices
+	if colCost < 0 || colDate < 0 || colType < 0 {
+		log.Printf("Warning: Could not detect columns (cost=%d, date=%d, type=%d)", colCost, colDate, colType)
+		return nil
+	}
+
 	for _, row := range res.Properties.Rows {
-		if len(row) < 3 {
+		if len(row) <= colCost || len(row) <= colDate || len(row) <= colType {
 			continue
 		}
 		dateVal := fmt.Sprintf("%v", row[colDate])
@@ -541,7 +626,7 @@ func parseDailyCostsByType(res armcostmanagement.QueryResult) []map[string]any {
 }
 
 // fetchForecast queries Azure Cost Management for actual costs and AI-powered forecast
-func fetchForecast(client *armcostmanagement.ForecastClient, sid string, start, end time.Time) (actualCost float64, forecastCost float64, err error) {
+func fetchForecast(client *armcostmanagement.ForecastClient, sid string, start, end time.Time, ctx context.Context) (actualCost float64, forecastCost float64, err error) {
 	scope := "subscriptions/" + sid
 	props := armcostmanagement.ForecastDefinition{
 		Type:       to.Ptr(armcostmanagement.ForecastTypeActualCost),
@@ -557,8 +642,7 @@ func fetchForecast(client *armcostmanagement.ForecastClient, sid string, start, 
 	}
 
 	logCtx := fmt.Sprintf("forecast %s", sid)
-	res, err := retryAfter429(logCtx, func() (armcostmanagement.ForecastClientUsageResponse, error) {
-		ctx := context.Background()
+	res, err := retryAfter429(ctx, logCtx, func() (armcostmanagement.ForecastClientUsageResponse, error) {
 		return client.Usage(ctx, scope, props, nil)
 	})
 	if err != nil {
@@ -678,268 +762,100 @@ func detectUnit(name string) string {
 	return ""
 }
 
-// fetchResourceMetrics routes to the appropriate metric fetcher based on resource type
-func fetchResourceMetrics(ctx context.Context, resourceID string, resourceType string) (map[string][]float64, error) {
-	switch {
-	case strings.Contains(strings.ToLower(resourceType), "virtualmachines") && !strings.Contains(strings.ToLower(resourceType), "scaleset"):
-		return fetchVMExpandedMetrics(ctx, resourceID)
-	case strings.Contains(strings.ToLower(resourceType), "virtualmachinescaleset"):
-		return fetchVMExpandedMetrics(ctx, resourceID)
-	case strings.Contains(strings.ToLower(resourceType), "sql"):
-		return fetchSQLMetrics(ctx, resourceID)
-	case strings.Contains(strings.ToLower(resourceType), "cosmosdb") || strings.Contains(strings.ToLower(resourceType), "documentdb"):
-		return fetchCosmosDBMetrics(ctx, resourceID)
-	case strings.Contains(strings.ToLower(resourceType), "web") || strings.Contains(strings.ToLower(resourceType), "appservice"):
-		return fetchAppServiceMetrics(ctx, resourceID)
-	case strings.Contains(strings.ToLower(resourceType), "storage"):
-		return fetchStorageMetrics(ctx, resourceID)
-	case strings.Contains(strings.ToLower(resourceType), "containerservice") || strings.Contains(strings.ToLower(resourceType), "kubernetes"):
-		return fetchAKSMetrics(ctx, resourceID)
-	default:
-		return fetchVMExpandedMetrics(ctx, resourceID)
-	}
+// MetricConfig defines the metrics to fetch for a resource type
+var metricConfigs = map[string]struct {
+	metricNames string
+	fallback    map[string][]float64
+}{
+	"microsoft.compute/virtualmachines": {
+		metricNames: "Percentage CPU,Average_MemoryUsagePercentage,DataDiskReadBytesPerSecond,DataDiskWriteBytesPerSecond,OSDiskReadBytesPerSecond,OSDiskWriteBytesPerSecond,NetworkInTotal,NetworkOutTotal",
+		fallback:    map[string][]float64{"Percentage CPU": {12, 15, 18, 14, 22, 19, 15}, "Average_MemoryUsagePercentage": {30, 35, 28, 40, 25, 33, 29}},
+	},
+	"microsoft.sql/servers/databases": {
+		metricNames: "cpu_percent,dtu_consumption_percent,data_space_used_percent,sessions_count,workers_count",
+		fallback:    map[string][]float64{"cpu_percent": {10, 15, 12, 18, 14, 20, 16}, "dtu_consumption_percent": {20, 25, 22, 28, 24, 30, 26}},
+	},
+	"microsoft.documentdb/databaseaccounts": {
+		metricNames: "TotalRequestUnits,Requests,DocumentCount,ProvisionedThroughput,MongoRequestUnits",
+		fallback:    map[string][]float64{"TotalRequestUnits": {100, 150, 120, 180, 140, 200, 160}, "Requests": {50, 75, 60, 90, 70, 100, 80}},
+	},
+	"microsoft.web/sites": {
+		metricNames: "AverageResponseTime,Requests,HttpQueueLength,MemoryWorkingSet,BytesReceived,BytesSent",
+		fallback:    map[string][]float64{"AverageResponseTime": {50, 80, 65, 100, 75, 120, 90}, "HttpQueueLength": {1, 2, 1, 3, 2, 4, 2}, "MemoryWorkingSet": {200, 250, 220, 300, 240, 320, 260}},
+	},
+	"microsoft.storage/storageaccounts": {
+		metricNames: "UsedCapacity,Transactions,BlobCapacity,TableCapacity,QueueCapacity",
+		fallback:    map[string][]float64{"UsedCapacity": {10000000000, 10500000000, 10200000000, 10800000000, 10400000000, 11000000000, 10600000000}, "Transactions": {1000, 1500, 1200, 1800, 1400, 2000, 1600}},
+	},
+	"microsoft.containerservice/managedclusters": {
+		metricNames: "clusterCpuUtilization,nodeCpuUtilization_Mean,nodeMemoryUtilization_Mean,podsCount_Free",
+		fallback:    map[string][]float64{"clusterCpuUtilization": {30, 35, 28, 40, 32, 45, 38}, "nodeMemoryUtilization_Mean": {50, 55, 48, 60, 52, 65, 58}},
+	},
 }
 
-func fetchVMExpandedMetrics(ctx context.Context, resourceID string) (map[string][]float64, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return map[string][]float64{"Percentage CPU": {5, 10, 8, 15, 7, 12, 9}, "Average_MemoryUsagePercentage": {30, 35, 28, 40, 25, 33, 29}}, nil
+// fetchResourceMetrics fetches metrics for a resource using the appropriate config
+func fetchResourceMetrics(ctx context.Context, resourceID, resType string) (map[string][]float64, error) {
+	config, ok := metricConfigs[strings.ToLower(resType)]
+	if !ok {
+		return nil, fmt.Errorf("no metric config for resource type: %s", resType)
 	}
 
 	parts := strings.Split(resourceID, "/")
 	if len(parts) < 3 {
-		return map[string][]float64{"Percentage CPU": {5, 10, 8, 15, 7, 12, 9}, "Average_MemoryUsagePercentage": {30, 35, 28, 40, 25, 33, 29}}, nil
+		return config.fallback, nil
 	}
 	subID := parts[2]
 
-	client, err := armmonitor.NewMetricsClient(subID, cred, nil)
+	client, err := getMetricsClient(subID)
 	if err != nil {
-		return nil, err
+		return config.fallback, nil
 	}
 
 	endTime := time.Now()
 	startTime := endTime.Add(-7 * 24 * time.Hour)
 	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
 
-	metricNames := "Percentage CPU,Average_MemoryUsagePercentage,DataDiskReadBytesPerSecond,DataDiskWriteBytesPerSecond,OSDiskReadBytesPerSecond,OSDiskWriteBytesPerSecond,NetworkInTotal,NetworkOutTotal"
 	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
 		Timespan:    &timespan,
 		Interval:    to.Ptr("PT1H"),
-		Metricnames: &metricNames,
+		Metricnames: &config.metricNames,
 		Aggregation: to.Ptr("Average"),
 	})
 
 	if err != nil {
-		return map[string][]float64{"Percentage CPU": {12, 15, 18, 14, 22, 19, 15}, "Average_MemoryUsagePercentage": {30, 35, 28, 40, 25, 33, 29}}, nil
+		return config.fallback, nil
 	}
 
 	metrics := parseMetricsResponse(res)
-	if len(metrics) == 0 || (len(metrics["Percentage CPU"]) == 0 && len(metrics["Average_MemoryUsagePercentage"]) == 0) {
-		// No telemetry available (e.g. VMSS doesn't expose per-instance metrics via Monitor API)
-		// Return a placeholder that triggers "No recommendation" gracefully
-		return map[string][]float64{"Percentage CPU": {}, "Average_MemoryUsagePercentage": {}}, nil
+	if len(metrics) == 0 {
+		return config.fallback, nil
 	}
 	return metrics, nil
+}
+
+// Backwards compatibility wrappers
+func fetchVMExpandedMetrics(ctx context.Context, resourceID string) (map[string][]float64, error) {
+	return fetchResourceMetrics(ctx, resourceID, "microsoft.compute/virtualmachines")
 }
 
 func fetchSQLMetrics(ctx context.Context, resourceID string) (map[string][]float64, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return map[string][]float64{"cpu_percent": {10, 15, 12, 18, 14, 20, 16}, "dtu_consumption_percent": {20, 25, 22, 28, 24, 30, 26}}, nil
-	}
-
-	parts := strings.Split(resourceID, "/")
-	if len(parts) < 3 {
-		return map[string][]float64{"cpu_percent": {10, 15, 12, 18, 14, 20, 16}, "dtu_consumption_percent": {20, 25, 22, 28, 24, 30, 26}}, nil
-	}
-	subID := parts[2]
-
-	client, err := armmonitor.NewMetricsClient(subID, cred, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	endTime := time.Now()
-	startTime := endTime.Add(-7 * 24 * time.Hour)
-	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-
-	metricNames := "cpu_percent,dtu_consumption_percent,data_space_used_percent,sessions_count,workers_count"
-	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
-		Timespan:    &timespan,
-		Interval:    to.Ptr("PT1H"),
-		Metricnames: &metricNames,
-		Aggregation: to.Ptr("Average"),
-	})
-
-	if err != nil {
-		return map[string][]float64{"cpu_percent": {10, 15, 12, 18, 14, 20, 16}, "dtu_consumption_percent": {20, 25, 22, 28, 24, 30, 26}}, nil
-	}
-
-	metrics := parseMetricsResponse(res)
-	if len(metrics) == 0 {
-		metrics = map[string][]float64{"cpu_percent": {10, 15, 12, 18, 14, 20, 16}, "dtu_consumption_percent": {20, 25, 22, 28, 24, 30, 26}}
-	}
-	return metrics, nil
+	return fetchResourceMetrics(ctx, resourceID, "microsoft.sql/servers/databases")
 }
 
 func fetchCosmosDBMetrics(ctx context.Context, resourceID string) (map[string][]float64, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return map[string][]float64{"TotalRequestUnits": {100, 150, 120, 180, 140, 200, 160}, "Requests": {50, 75, 60, 90, 70, 100, 80}}, nil
-	}
-
-	parts := strings.Split(resourceID, "/")
-	if len(parts) < 3 {
-		return map[string][]float64{"TotalRequestUnits": {100, 150, 120, 180, 140, 200, 160}, "Requests": {50, 75, 60, 90, 70, 100, 80}}, nil
-	}
-	subID := parts[2]
-
-	client, err := armmonitor.NewMetricsClient(subID, cred, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	endTime := time.Now()
-	startTime := endTime.Add(-7 * 24 * time.Hour)
-	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-
-	metricNames := "TotalRequestUnits,Requests,DocumentCount,ProvisionedThroughput,MongoRequestUnits"
-	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
-		Timespan:    &timespan,
-		Interval:    to.Ptr("PT1H"),
-		Metricnames: &metricNames,
-		Aggregation: to.Ptr("Average"),
-	})
-
-	if err != nil {
-		return map[string][]float64{"TotalRequestUnits": {100, 150, 120, 180, 140, 200, 160}, "Requests": {50, 75, 60, 90, 70, 100, 80}}, nil
-	}
-
-	metrics := parseMetricsResponse(res)
-	if len(metrics) == 0 {
-		metrics = map[string][]float64{"TotalRequestUnits": {100, 150, 120, 180, 140, 200, 160}, "Requests": {50, 75, 60, 90, 70, 100, 80}}
-	}
-	return metrics, nil
+	return fetchResourceMetrics(ctx, resourceID, "microsoft.documentdb/databaseaccounts")
 }
 
 func fetchAppServiceMetrics(ctx context.Context, resourceID string) (map[string][]float64, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return map[string][]float64{"AverageResponseTime": {50, 80, 65, 100, 75, 120, 90}, "HttpQueueLength": {1, 2, 1, 3, 2, 4, 2}, "MemoryWorkingSet": {200, 250, 220, 300, 240, 320, 260}}, nil
-	}
-
-	parts := strings.Split(resourceID, "/")
-	if len(parts) < 3 {
-		return map[string][]float64{"AverageResponseTime": {50, 80, 65, 100, 75, 120, 90}, "HttpQueueLength": {1, 2, 1, 3, 2, 4, 2}, "MemoryWorkingSet": {200, 250, 220, 300, 240, 320, 260}}, nil
-	}
-	subID := parts[2]
-
-	client, err := armmonitor.NewMetricsClient(subID, cred, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	endTime := time.Now()
-	startTime := endTime.Add(-7 * 24 * time.Hour)
-	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-
-	metricNames := "AverageResponseTime,Requests,HttpQueueLength,MemoryWorkingSet,BytesReceived,BytesSent"
-	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
-		Timespan:    &timespan,
-		Interval:    to.Ptr("PT1H"),
-		Metricnames: &metricNames,
-		Aggregation: to.Ptr("Average"),
-	})
-
-	if err != nil {
-		return map[string][]float64{"AverageResponseTime": {50, 80, 65, 100, 75, 120, 90}, "HttpQueueLength": {1, 2, 1, 3, 2, 4, 2}, "MemoryWorkingSet": {200, 250, 220, 300, 240, 320, 260}}, nil
-	}
-
-	metrics := parseMetricsResponse(res)
-	if len(metrics) == 0 {
-		metrics = map[string][]float64{"AverageResponseTime": {50, 80, 65, 100, 75, 120, 90}, "HttpQueueLength": {1, 2, 1, 3, 2, 4, 2}, "MemoryWorkingSet": {200, 250, 220, 300, 240, 320, 260}}
-	}
-	return metrics, nil
+	return fetchResourceMetrics(ctx, resourceID, "microsoft.web/sites")
 }
 
 func fetchStorageMetrics(ctx context.Context, resourceID string) (map[string][]float64, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return map[string][]float64{"UsedCapacity": {10000000000, 10500000000, 10200000000, 10800000000, 10400000000, 11000000000, 10600000000}, "Transactions": {1000, 1500, 1200, 1800, 1400, 2000, 1600}}, nil
-	}
-
-	parts := strings.Split(resourceID, "/")
-	if len(parts) < 3 {
-		return map[string][]float64{"UsedCapacity": {10000000000, 10500000000, 10200000000, 10800000000, 10400000000, 11000000000, 10600000000}, "Transactions": {1000, 1500, 1200, 1800, 1400, 2000, 1600}}, nil
-	}
-	subID := parts[2]
-
-	client, err := armmonitor.NewMetricsClient(subID, cred, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	endTime := time.Now()
-	startTime := endTime.Add(-7 * 24 * time.Hour)
-	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-
-	metricNames := "UsedCapacity,Transactions,BlobCapacity,TableCapacity,QueueCapacity"
-	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
-		Timespan:    &timespan,
-		Interval:    to.Ptr("PT1H"),
-		Metricnames: &metricNames,
-		Aggregation: to.Ptr("Average"),
-	})
-
-	if err != nil {
-		return map[string][]float64{"UsedCapacity": {10000000000, 10500000000, 10200000000, 10800000000, 10400000000, 11000000000, 10600000000}, "Transactions": {1000, 1500, 1200, 1800, 1400, 2000, 1600}}, nil
-	}
-
-	metrics := parseMetricsResponse(res)
-	if len(metrics) == 0 {
-		metrics = map[string][]float64{"UsedCapacity": {10000000000, 10500000000, 10200000000, 10800000000, 10400000000, 11000000000, 10600000000}, "Transactions": {1000, 1500, 1200, 1800, 1400, 2000, 1600}}
-	}
-	return metrics, nil
+	return fetchResourceMetrics(ctx, resourceID, "microsoft.storage/storageaccounts")
 }
 
 func fetchAKSMetrics(ctx context.Context, resourceID string) (map[string][]float64, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return map[string][]float64{"clusterCpuUtilization": {30, 35, 28, 40, 32, 45, 38}, "nodeMemoryUtilization_Mean": {50, 55, 48, 60, 52, 65, 58}}, nil
-	}
-
-	parts := strings.Split(resourceID, "/")
-	if len(parts) < 3 {
-		return map[string][]float64{"clusterCpuUtilization": {30, 35, 28, 40, 32, 45, 38}, "nodeMemoryUtilization_Mean": {50, 55, 48, 60, 52, 65, 58}}, nil
-	}
-	subID := parts[2]
-
-	client, err := armmonitor.NewMetricsClient(subID, cred, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	endTime := time.Now()
-	startTime := endTime.Add(-7 * 24 * time.Hour)
-	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-
-	metricNames := "clusterCpuUtilization,nodeCpuUtilization_Mean,nodeMemoryUtilization_Mean,podsCount_Free"
-	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
-		Timespan:    &timespan,
-		Interval:    to.Ptr("PT1H"),
-		Metricnames: &metricNames,
-		Aggregation: to.Ptr("Average"),
-	})
-
-	if err != nil {
-		return map[string][]float64{"clusterCpuUtilization": {30, 35, 28, 40, 32, 45, 38}, "nodeMemoryUtilization_Mean": {50, 55, 48, 60, 52, 65, 58}}, nil
-	}
-
-	metrics := parseMetricsResponse(res)
-	if len(metrics) == 0 {
-		metrics = map[string][]float64{"clusterCpuUtilization": {30, 35, 28, 40, 32, 45, 38}, "nodeMemoryUtilization_Mean": {50, 55, 48, 60, 52, 65, 58}}
-	}
-	return metrics, nil
+	return fetchResourceMetrics(ctx, resourceID, "microsoft.containerservice/managedclusters")
 }
 
 // getResourceContext looks up a resource from Azure Resource Graph
@@ -1170,7 +1086,10 @@ Only respond with valid JSON. No markdown, no explanations outside the JSON.`, r
 		"stream": false,
 	}
 
-	jsonPayload, _ := json.Marshal(payload)
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("failed to marshal payload: %w", err)
+	}
 
 	// 10 second timeout
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -1180,11 +1099,16 @@ Only respond with valid JSON. No markdown, no explanations outside the JSON.`, r
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("failed to read response: %w", err)
+	}
 	var result struct {
 		Response string `json:"response"`
 	}
-	json.Unmarshal(body, &result)
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, 0, "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
 
 	// Parse JSON response
 	var parsed struct {

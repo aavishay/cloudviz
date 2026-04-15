@@ -42,6 +42,15 @@ var (
 	costLimiter    = rate.NewLimiter(rate.Limit(2), 5)
 )
 
+// toAnySlice converts a string slice to []any for SQL query arguments
+func toAnySlice(ss []string) []any {
+	result := make([]any, len(ss))
+	for i, s := range ss {
+		result[i] = s
+	}
+	return result
+}
+
 func main() {
 	var rootCmd = &cobra.Command{
 		Use:   "cloudviz",
@@ -101,14 +110,8 @@ func main() {
 			}
 
 			for _, r := range resources {
-				name := r.Name
-				if len(name) > 48 {
-					name = name[:45] + "..."
-				}
-				resType := strings.Replace(r.Type, "microsoft.", "", 1)
-				if len(resType) > 28 {
-					resType = resType[:25] + "..."
-				}
+				name := truncateString(r.Name, 50)
+				resType := truncateString(strings.Replace(r.Type, "microsoft.", "", 1), 30)
 				fmt.Printf("%-50s %-30s %-15s $%-9.2f\n", name, resType, r.Location, r.Cost)
 			}
 		},
@@ -133,7 +136,7 @@ func main() {
 			now := time.Now()
 			start := now.AddDate(0, 0, -30)
 
-			res, err := fetchSubCostsSync(costClient, subID, "current", start, now, context.Background())
+			res, err := fetchSubCostsSync(costClient, subID, "current", start, context.Background())
 			if err != nil {
 				log.Fatalf("Error: %v", err)
 			}
@@ -150,14 +153,8 @@ func main() {
 			fmt.Println(strings.Repeat("-", 85))
 			for _, item := range items {
 				m := item.(map[string]interface{})
-				rt := m["resourceType"].(string)
-				if len(rt) > 28 {
-					rt = rt[:25] + "..."
-				}
-				rg := m["resourceGroup"].(string)
-				if len(rg) > 38 {
-					rg = rg[:35] + "..."
-				}
+				rt := truncateString(m["resourceType"].(string), 30)
+				rg := truncateString(m["resourceGroup"].(string), 40)
 				fmt.Printf("%-30s %-40s $%-9.2f\n", rt, rg, m["cost"].(float64))
 			}
 		},
@@ -210,6 +207,24 @@ func startServer(port string) {
 		AllowMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowHeaders: []string{"Origin", "Content-Type", "Authorization"},
 	}))
+
+	// Initialize webhook notifier and start background checker
+	webhookNotifier := NewWebhookNotifier(cache.db)
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		// Run immediately on startup
+		if err := webhookNotifier.CheckAndNotify(); err != nil {
+			log.Printf("Webhook check error: %v", err)
+		}
+
+		for range ticker.C {
+			if err := webhookNotifier.CheckAndNotify(); err != nil {
+				log.Printf("Webhook check error: %v", err)
+			}
+		}
+	}()
 
 	r.GET("/api/resources", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
@@ -325,7 +340,7 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				daily, err := fetchDailyCosts(costClient, subID, start, now)
+				daily, err := fetchDailyCosts(costClient, subID, start, now, c.Request.Context())
 				if err != nil {
 					log.Printf("Failed to fetch daily costs for %s: %v", subID, err)
 					return
@@ -341,13 +356,7 @@ func startServer(port string) {
 			// Fallback to aggregated totals spread across days
 			var results []map[string]any
 			totalCost := 0.0
-			rows2, err := cache.db.Query("SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", (func() []any {
-				args := []any{}
-				for _, s := range subs {
-					args = append(args, s)
-				}
-				return args
-			})()...)
+			rows2, err := cache.db.Query("SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", toAnySlice(subs)...)
 			if err == nil {
 				defer rows2.Close()
 				if rows2.Next() {
@@ -415,8 +424,8 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				current, err1 := fetchDailyCosts(costClient, subID, currentStart, now)
-				previous, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd)
+				current, err1 := fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
+				previous, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
 
 				if err1 != nil || err2 != nil {
 					return
@@ -1053,7 +1062,7 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				daily, err := fetchDailyCostsByType(costClient, subID, start, now)
+				daily, err := fetchDailyCostsByType(costClient, subID, start, now, c.Request.Context())
 				if err != nil {
 					return
 				}
@@ -1277,9 +1286,9 @@ func startServer(port string) {
 				defer func() { <-sem }()
 
 				// Current period
-				curr, err1 := fetchDailyCosts(costClient, subID, currentStart, now)
+				curr, err1 := fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
 				// Previous period
-				prev, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd)
+				prev, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
 
 				mu.Lock()
 				if err1 == nil {
@@ -1365,7 +1374,7 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				daily, err := fetchDailyCosts(costClient, subID, start, now)
+				daily, err := fetchDailyCosts(costClient, subID, start, now, c.Request.Context())
 				if err != nil {
 					return
 				}
@@ -1434,7 +1443,7 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				actual, forecast, err := fetchForecast(forecastClient, subID, start, now)
+				actual, forecast, err := fetchForecast(forecastClient, subID, start, now, c.Request.Context())
 				mu.Lock()
 				if err != nil {
 					errors = append(errors, fmt.Sprintf("%s: %v", subID, err))
@@ -1464,13 +1473,7 @@ func startServer(port string) {
 
 	r.GET("/api/costs", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
-		rows, err := cache.db.Query("SELECT resource_group, resource_type, resource_location, cost, subscription_id FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", (func() []any {
-			args := []any{}
-			for _, s := range subs {
-				args = append(args, s)
-			}
-			return args
-		})()...)
+		rows, err := cache.db.Query("SELECT resource_group, resource_type, resource_location, cost, subscription_id FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", toAnySlice(subs)...)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -1575,6 +1578,358 @@ func startServer(port string) {
 
 	r.GET("/api/costs/stream", sseHandler)
 	r.GET("/api/history", historyHandler)
+
+	// Resource Group Comparison endpoint
+	r.GET("/api/resource-groups/comparison", func(c *gin.Context) {
+		rg1 := c.Query("rg1")
+		rg2 := c.Query("rg2")
+		sub1 := c.Query("sub1")
+		sub2 := c.Query("sub2")
+
+		if rg1 == "" || rg2 == "" {
+			c.JSON(400, gin.H{"error": "rg1 and rg2 are required"})
+			return
+		}
+
+		// Fetch resources for both resource groups
+		res1, _, err1 := FetchResourcesWithCosts(c.Request.Context(), []string{sub1}, []string{rg1}, nil, nil, "", false, false, false, false, "", "")
+		res2, _, err2 := FetchResourcesWithCosts(c.Request.Context(), []string{sub2}, []string{rg2}, nil, nil, "", false, false, false, false, "", "")
+
+		if err1 != nil || err2 != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to fetch resources: %v, %v", err1, err2)})
+			return
+		}
+
+		// Calculate metrics for each resource group
+		calcMetrics := func(resources []AzureResource) map[string]interface{} {
+			totalCost := 0.0
+			resourceCount := len(resources)
+			typeBreakdown := make(map[string]int)
+			typeCosts := make(map[string]float64)
+			totalScore := 0
+			orphanedCount := 0
+			envCounts := make(map[string]int)
+
+			for _, r := range resources {
+				totalCost += r.Cost
+				totalScore += r.Score
+				if r.IsOrphaned {
+					orphanedCount++
+				}
+
+				// Type breakdown
+				typeName := getResourceTypeName(r.Type)
+				typeBreakdown[typeName]++
+				typeCosts[typeName] += r.Cost
+
+				// Environment inference
+				env := "unknown"
+				rgLower := strings.ToLower(r.ResourceGroup)
+				if strings.Contains(rgLower, "prod") {
+					env = "production"
+				} else if strings.Contains(rgLower, "dev") {
+					env = "development"
+				} else if strings.Contains(rgLower, "test") || strings.Contains(rgLower, "qa") {
+					env = "test"
+				} else if strings.Contains(rgLower, "staging") {
+					env = "staging"
+				}
+				envCounts[env]++
+			}
+
+			avgScore := 100
+			if resourceCount > 0 {
+				avgScore = totalScore / resourceCount
+			}
+
+			// Convert type breakdown to slice for easier consumption
+			typeList := make([]map[string]interface{}, 0)
+			for t, count := range typeBreakdown {
+				typeList = append(typeList, map[string]interface{}{
+					"type":        t,
+					"count":       count,
+					"cost":        typeCosts[t],
+					"percent":     float64(count) / float64(resourceCount) * 100,
+					"costPercent": func() float64 {
+						if totalCost > 0 {
+							return typeCosts[t] / totalCost * 100
+						}
+						return 0
+					}(),
+				})
+			}
+
+			// Sort by count descending
+			sort.Slice(typeList, func(i, j int) bool {
+				return typeList[i]["count"].(int) > typeList[j]["count"].(int)
+			})
+
+			return map[string]interface{}{
+				"resourceGroup":   "",
+				"subscriptionId":  "",
+				"resourceCount":   resourceCount,
+				"totalCost":       totalCost,
+				"averageCost":     func() float64 { if resourceCount > 0 { return totalCost / float64(resourceCount) }; return 0 }(),
+				"efficiencyScore": avgScore,
+				"orphanedCount":   orphanedCount,
+				"typeBreakdown":   typeList,
+				"environment":     envCounts,
+			}
+		}
+
+		metrics1 := calcMetrics(res1)
+		metrics2 := calcMetrics(res2)
+
+		// Get resource group info from first resource if available
+		if len(res1) > 0 {
+			metrics1["resourceGroup"] = res1[0].ResourceGroup
+			metrics1["subscriptionId"] = res1[0].SubscriptionID
+		} else {
+			metrics1["resourceGroup"] = rg1
+			metrics1["subscriptionId"] = sub1
+		}
+
+		if len(res2) > 0 {
+			metrics2["resourceGroup"] = res2[0].ResourceGroup
+			metrics2["subscriptionId"] = res2[0].SubscriptionID
+		} else {
+			metrics2["resourceGroup"] = rg2
+			metrics2["subscriptionId"] = sub2
+		}
+
+		// Calculate deltas
+		countDelta := metrics2["resourceCount"].(int) - metrics1["resourceCount"].(int)
+		costDelta := metrics2["totalCost"].(float64) - metrics1["totalCost"].(float64)
+		scoreDelta := metrics2["efficiencyScore"].(int) - metrics1["efficiencyScore"].(int)
+
+		c.JSON(200, gin.H{
+			"rg1": metrics1,
+			"rg2": metrics2,
+			"comparison": map[string]interface{}{
+				"resourceCountDelta": countDelta,
+				"costDelta":        costDelta,
+				"scoreDelta":       scoreDelta,
+				"winner": func() string {
+					// Simple scoring: lower cost is better, higher efficiency is better
+					score1 := 0
+					score2 := 0
+
+					// Cost efficiency (normalized by resource count)
+					costPerRes1 := metrics1["averageCost"].(float64)
+					costPerRes2 := metrics2["averageCost"].(float64)
+					if costPerRes1 < costPerRes2 {
+						score1 += 2
+					} else if costPerRes2 < costPerRes1 {
+						score2 += 2
+					} else {
+						score1++
+						score2++
+					}
+
+					// Efficiency score
+					if metrics1["efficiencyScore"].(int) > metrics2["efficiencyScore"].(int) {
+						score1 += 2
+					} else if metrics2["efficiencyScore"].(int) > metrics1["efficiencyScore"].(int) {
+						score2 += 2
+					} else {
+						score1++
+						score2++
+					}
+
+					// Less orphaned resources
+					if metrics1["orphanedCount"].(int) < metrics2["orphanedCount"].(int) {
+						score1++
+					} else if metrics2["orphanedCount"].(int) < metrics1["orphanedCount"].(int) {
+						score2++
+					}
+
+					if score1 > score2 {
+						return "rg1"
+					} else if score2 > score1 {
+						return "rg2"
+					}
+					return "tie"
+				}(),
+			},
+		})
+	})
+
+	// Subscription Comparison endpoint
+	r.GET("/api/subscriptions/comparison", func(c *gin.Context) {
+		sub1 := c.Query("sub1")
+		sub2 := c.Query("sub2")
+
+		if sub1 == "" || sub2 == "" {
+			c.JSON(400, gin.H{"error": "sub1 and sub2 are required"})
+			return
+		}
+
+		// Fetch resources for both subscriptions
+		res1, _, err1 := FetchResourcesWithCosts(c.Request.Context(), []string{sub1}, nil, nil, nil, "", false, false, false, false, "", "")
+		res2, _, err2 := FetchResourcesWithCosts(c.Request.Context(), []string{sub2}, nil, nil, nil, "", false, false, false, false, "", "")
+
+		if err1 != nil || err2 != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to fetch resources: %v, %v", err1, err2)})
+			return
+		}
+
+		// Calculate metrics for each subscription
+		calcMetrics := func(resources []AzureResource) map[string]interface{} {
+			totalCost := 0.0
+			resourceCount := len(resources)
+			typeBreakdown := make(map[string]int)
+			typeCosts := make(map[string]float64)
+			locationBreakdown := make(map[string]int)
+			locationCosts := make(map[string]float64)
+			rgBreakdown := make(map[string]int)
+			totalScore := 0
+			orphanedCount := 0
+
+			for _, r := range resources {
+				totalCost += r.Cost
+				totalScore += r.Score
+				if r.IsOrphaned {
+					orphanedCount++
+				}
+
+				// Type breakdown
+				typeName := getResourceTypeName(r.Type)
+				typeBreakdown[typeName]++
+				typeCosts[typeName] += r.Cost
+
+				// Location breakdown
+				locationBreakdown[r.Location]++
+				locationCosts[r.Location] += r.Cost
+
+				// Resource group breakdown
+				rgBreakdown[r.ResourceGroup]++
+			}
+
+			avgScore := 100
+			if resourceCount > 0 {
+				avgScore = totalScore / resourceCount
+			}
+
+			// Convert type breakdown to slice
+			typeList := make([]map[string]interface{}, 0)
+			for t, count := range typeBreakdown {
+				typeList = append(typeList, map[string]interface{}{
+					"type":        t,
+					"count":       count,
+					"cost":        typeCosts[t],
+					"percent":     float64(count) / float64(resourceCount) * 100,
+					"costPercent": func() float64 {
+						if totalCost > 0 {
+							return typeCosts[t] / totalCost * 100
+						}
+						return 0
+					}(),
+				})
+			}
+			sort.Slice(typeList, func(i, j int) bool {
+				return typeList[i]["count"].(int) > typeList[j]["count"].(int)
+			})
+
+			// Convert location breakdown to slice
+			locList := make([]map[string]interface{}, 0)
+			for loc, count := range locationBreakdown {
+				locList = append(locList, map[string]interface{}{
+					"location":    loc,
+					"count":       count,
+					"cost":        locationCosts[loc],
+					"percent":     float64(count) / float64(resourceCount) * 100,
+					"costPercent": func() float64 {
+						if totalCost > 0 {
+							return locationCosts[loc] / totalCost * 100
+						}
+						return 0
+					}(),
+				})
+			}
+			sort.Slice(locList, func(i, j int) bool {
+				return locList[i]["count"].(int) > locList[j]["count"].(int)
+			})
+
+			return map[string]interface{}{
+				"subscriptionId":   "",
+				"resourceCount":    resourceCount,
+				"resourceGroups":   len(rgBreakdown),
+				"totalCost":        totalCost,
+				"averageCost":      func() float64 { if resourceCount > 0 { return totalCost / float64(resourceCount) }; return 0 }(),
+				"efficiencyScore":  avgScore,
+				"orphanedCount":    orphanedCount,
+				"typeBreakdown":    typeList,
+				"locationBreakdown": locList,
+			}
+		}
+
+		metrics1 := calcMetrics(res1)
+		metrics2 := calcMetrics(res2)
+
+		metrics1["subscriptionId"] = sub1
+		metrics2["subscriptionId"] = sub2
+
+		// Calculate deltas
+		countDelta := metrics2["resourceCount"].(int) - metrics1["resourceCount"].(int)
+		costDelta := metrics2["totalCost"].(float64) - metrics1["totalCost"].(float64)
+		scoreDelta := metrics2["efficiencyScore"].(int) - metrics1["efficiencyScore"].(int)
+		rgDelta := metrics2["resourceGroups"].(int) - metrics1["resourceGroups"].(int)
+
+		c.JSON(200, gin.H{
+			"sub1": metrics1,
+			"sub2": metrics2,
+			"comparison": map[string]interface{}{
+				"resourceCountDelta": countDelta,
+				"costDelta":          costDelta,
+				"scoreDelta":         scoreDelta,
+				"rgDelta":            rgDelta,
+				"winner": func() string {
+					score1 := 0
+					score2 := 0
+
+					// Cost efficiency
+					costPerRes1 := metrics1["averageCost"].(float64)
+					costPerRes2 := metrics2["averageCost"].(float64)
+					if costPerRes1 < costPerRes2 {
+						score1 += 2
+					} else if costPerRes2 < costPerRes1 {
+						score2 += 2
+					} else {
+						score1++
+						score2++
+					}
+
+					// Efficiency score
+					if metrics1["efficiencyScore"].(int) > metrics2["efficiencyScore"].(int) {
+						score1 += 2
+					} else if metrics2["efficiencyScore"].(int) > metrics1["efficiencyScore"].(int) {
+						score2 += 2
+					} else {
+						score1++
+						score2++
+					}
+
+					// Less orphaned resources
+					if metrics1["orphanedCount"].(int) < metrics2["orphanedCount"].(int) {
+						score1++
+					} else if metrics2["orphanedCount"].(int) < metrics1["orphanedCount"].(int) {
+						score2++
+					}
+
+					if score1 > score2 {
+						return "sub1"
+					} else if score2 > score1 {
+						return "sub2"
+					}
+					return "tie"
+				}(),
+			},
+		})
+	})
+
+	// Register dependency analysis routes
+	RegisterDependencyRoutes(r, cache.db, argClient)
+
 	r.DELETE("/api/costs/cache", func(c *gin.Context) {
 		cache.db.Exec("DELETE FROM costs")
 		cache.db.Exec("DELETE FROM cost_type_daily")
@@ -1713,7 +2068,7 @@ func sseHandler(c *gin.Context) {
 					msgChan <- streamMsg{Type: "data", SubID: id, Data: gin.H{"current": normalizeResults(curr)}}
 				} else {
 					now := time.Now()
-					fetchSubCostsSync(costClient, id, "current", now.AddDate(0, 0, -30), now, c.Request.Context())
+					fetchSubCostsSync(costClient, id, "current", now.AddDate(0, 0, -30), c.Request.Context())
 					if res, ok := cache.get(id, "current"); ok {
 						msgChan <- streamMsg{Type: "data", SubID: id, Data: gin.H{"current": normalizeResults(res)}}
 					}
