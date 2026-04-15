@@ -3,7 +3,7 @@ class Cloudviz < Formula
   homepage "https://github.com/aavishay/cloudviz"
   license "MIT"
   version "0.4.0"
-  sha256 "938e4c26541240f6118663926b4777ca6f44d6b5bffd4a43f24bd69e55d3887a"
+  sha256 "84c171089b1d5a0afa5e6a2a3e86f9c5e45c43dab2a4e74c7d0599be694279c2"
 
   url "https://github.com/aavishay/cloudviz/releases/download/v0.4.0/cloudviz_0.4.0_darwin_arm64.tar.gz"
 

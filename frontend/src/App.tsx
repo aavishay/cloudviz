@@ -1122,7 +1122,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
   const [dashboardOrder, setDashboardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-dashOrder');
-    return saved ? JSON.parse(saved) : ['insights', 'summary', 'costComparison', 'rgComparison', 'subComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
+    return saved ? JSON.parse(saved) : ['insights', 'summary', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
   });
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -1145,8 +1145,8 @@ export default function App() {
   });
   const itemsPerPage = 25;
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'resources' | 'costs' | 'history'>(() => {
-    return (localStorage.getItem('cloudviz-tab') as 'dashboard' | 'resources' | 'costs' | 'history') || 'dashboard';
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'resources' | 'costs' | 'comparisons' | 'history'>(() => {
+    return (localStorage.getItem('cloudviz-tab') as 'dashboard' | 'resources' | 'costs' | 'comparisons' | 'history') || 'dashboard';
   });
   const [selectedCost, setSelectedCost] = useState<CostPrediction | null>(null);
   const [costSearchQuery, setCostSearchQuery] = useState(() => localStorage.getItem('cloudviz-costSearchQuery') || '');
@@ -1262,6 +1262,12 @@ export default function App() {
     },
     {
       key: '4',
+      ctrl: true,
+      description: 'Comparisons tab',
+      action: () => setActiveTab('comparisons'),
+    },
+    {
+      key: '5',
       ctrl: true,
       description: 'History tab',
       action: () => setActiveTab('history'),
@@ -2210,8 +2216,6 @@ export default function App() {
     { id: 'insights', render: renderInsights },
     { id: 'summary', render: renderSummary },
     { id: 'costComparison', render: renderCostComparison },
-    { id: 'rgComparison', render: renderRGComparison },
-    { id: 'subComparison', render: renderSubComparison },
     { id: 'chartsRow', render: renderChartsRow },
     { id: 'costBySub', render: () => (
       <div className="card chart-card-clickable" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
@@ -3600,6 +3604,10 @@ export default function App() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 6 }}><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
             Cost Forecast
           </button>
+          <button className={`tab ${activeTab === 'comparisons' ? 'active' : ''}`} onClick={() => setActiveTab('comparisons')}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 6 }}><path d="M9 17V7m0 10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m0 10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m0 10V7m0 10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2" /></svg>
+            Comparisons
+          </button>
           <button className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 6 }}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
             History
@@ -3987,6 +3995,26 @@ export default function App() {
                   )}
                 </div>
               </div>
+            </div>
+          ) : activeTab === 'comparisons' ? (
+            /* ── Comparisons Tab ── */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              {/* Comparisons Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.3)' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M9 17V7m0 10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m0 10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m0 10V7m0 10a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2" /></svg>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>Comparisons</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 12 }}>Compare resource groups and subscriptions</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Comparison Panels */}
+              {renderRGComparison()}
+              {renderSubComparison()}
             </div>
           ) : activeTab === 'history' ? (
             /* ── History Tab ── */
