@@ -2,10 +2,10 @@ class Cloudviz < Formula
   desc "Azure cloud infrastructure visualization and cost management dashboard"
   homepage "https://github.com/aavishay/cloudviz"
   license "MIT"
-  version "0.7.0"
-  sha256 "caf169d6b1cedb24fdd39e4601d6dd3f1b5a37570502660f6d11e46d3d25e9a0"
+  version "0.8.0"
+  sha256 "6b138f16ebf4a2a2a6b8f7759de0dc75fd59f6b7c40b2ef4ddbe2fde0295c2e1"
 
-  url "https://github.com/aavishay/cloudviz/releases/download/v0.7.0/cloudviz_0.7.0_darwin_arm64.tar.gz"
+  url "https://github.com/aavishay/cloudviz/releases/download/v0.8.0/cloudviz_0.8.0_darwin_arm64.tar.gz"
 
   def install
     bin.install "cloudviz"
