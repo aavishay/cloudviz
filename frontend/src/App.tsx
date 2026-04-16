@@ -1206,6 +1206,11 @@ export default function App() {
   const [sub2Selection, setSub2Selection] = useState<string | null>(null);
   const [subExpandedTypes, setSubExpandedTypes] = useState<Set<string>>(new Set());
 
+  // Comparisons search state
+  const [comparisonsSearchQuery, setComparisonsSearchQuery] = useState('');
+  const [comparisonsSearchFocused, setComparisonsSearchFocused] = useState(false);
+  const comparisonsSearchInputRef = useRef<HTMLInputElement>(null);
+
   const [allPossibleFilters, setAllPossibleFilters] = useState<{ subs: string[]; locations: string[]; rgs: string[]; types: string[] }>({
     subs: [], locations: [], rgs: [], types: [],
   });
@@ -4220,9 +4225,114 @@ export default function App() {
                     <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 12 }}>Compare resource groups and subscriptions</span>
                   </div>
                 </div>
+
+                {/* Comparisons Search */}
+                <div style={{ position: 'relative', minWidth: 300 }}>
+                  <div style={{ position: 'relative' }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }}><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>
+                    <input
+                      ref={comparisonsSearchInputRef}
+                      type="text"
+                      placeholder="Search resources..."
+                      value={comparisonsSearchQuery}
+                      onChange={(e) => setComparisonsSearchQuery(e.target.value)}
+                      onFocus={() => setComparisonsSearchFocused(true)}
+                      onBlur={() => setTimeout(() => setComparisonsSearchFocused(false), 200)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px 10px 40px',
+                        borderRadius: 10,
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-surface)',
+                        color: 'var(--text-1)',
+                        fontSize: 14,
+                        outline: 'none',
+                      }}
+                    />
+                    {comparisonsSearchQuery && (
+                      <button
+                        onClick={() => { setComparisonsSearchQuery(''); comparisonsSearchInputRef.current?.focus(); }}
+                        style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4 }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Autocomplete Dropdown */}
+                  {comparisonsSearchFocused && comparisonsSearchQuery && (() => {
+                    // Collect all resources from both comparisons
+                    const allResources: Array<{ name: string; type: string; rg?: string; sub?: string; side: 'left' | 'right' }> = [];
+
+                    if (rgComparison) {
+                      rgComparison.rg1.resourcesByType?.forEach((t: any) => {
+                        t.resources.forEach((r: any) => {
+                          if (r.name.toLowerCase().includes(comparisonsSearchQuery.toLowerCase())) {
+                            allResources.push({ name: r.name, type: t.type, rg: rgComparison.rg1.resourceGroup, side: 'left' });
+                          }
+                        });
+                      });
+                      rgComparison.rg2.resourcesByType?.forEach((t: any) => {
+                        t.resources.forEach((r: any) => {
+                          if (r.name.toLowerCase().includes(comparisonsSearchQuery.toLowerCase())) {
+                            allResources.push({ name: r.name, type: t.type, rg: rgComparison.rg2.resourceGroup, side: 'right' });
+                          }
+                        });
+                      });
+                    }
+
+                    if (subComparison) {
+                      subComparison.sub1.resourcesByType?.forEach((t: any) => {
+                        t.resources.forEach((r: any) => {
+                          if (r.name.toLowerCase().includes(comparisonsSearchQuery.toLowerCase())) {
+                            allResources.push({ name: r.name, type: t.type, sub: subComparison.sub1.subscriptionId.slice(0, 8), side: 'left' });
+                          }
+                        });
+                      });
+                      subComparison.sub2.resourcesByType?.forEach((t: any) => {
+                        t.resources.forEach((r: any) => {
+                          if (r.name.toLowerCase().includes(comparisonsSearchQuery.toLowerCase())) {
+                            allResources.push({ name: r.name, type: t.type, sub: subComparison.sub2.subscriptionId.slice(0, 8), side: 'right' });
+                          }
+                        });
+                      });
+                    }
+
+                    const uniqueResources = allResources.slice(0, 8);
+
+                    if (uniqueResources.length === 0) return null;
+
+                    return (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 8, background: 'var(--bg-card)', borderRadius: 10, border: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-lg)', zIndex: 100, maxHeight: 300, overflow: 'auto' }}>
+                        {uniqueResources.map((res, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => {
+                              setComparisonsSearchQuery(res.name);
+                              setComparisonsSearchFocused(false);
+                              // Expand the type for this resource
+                              const newSet = new Set(rgExpandedTypes);
+                              newSet.add(res.type);
+                              setRgExpandedTypes(newSet);
+                            }}
+                            style={{ width: '100%', padding: '10px 16px', border: 'none', borderBottom: idx < uniqueResources.length - 1 ? '1px solid var(--border)' : 'none', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface)'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.name}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(res.type)} • {res.rg || res.sub} • {res.side === 'left' ? 'Left' : 'Right'}</div>
+                            </div>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--accent)', flexShrink: 0 }}><path d="M9 18l6-6-6-6" /></svg>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
 
-              {/* Comparison Panels */}
+              {/* Comparison Panels with search filter */}
               {renderRGComparison()}
               {renderSubComparison()}
             </div>
