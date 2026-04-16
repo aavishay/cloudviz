@@ -1702,6 +1702,60 @@ func startServer(port string) {
 		costDelta := metrics2["totalCost"].(float64) - metrics1["totalCost"].(float64)
 		scoreDelta := metrics2["efficiencyScore"].(int) - metrics1["efficiencyScore"].(int)
 
+		// Helper to format resources by type
+		formatResourcesByType := func(resources []AzureResource) []map[string]interface{} {
+			// Group resources by type
+			typeMap := make(map[string][]map[string]interface{})
+			for _, r := range resources {
+				typeName := getResourceTypeName(r.Type)
+				if _, ok := typeMap[typeName]; !ok {
+					typeMap[typeName] = make([]map[string]interface{}, 0)
+				}
+				typeMap[typeName] = append(typeMap[typeName], map[string]interface{}{
+					"id":             r.ID,
+					"name":           r.Name,
+					"type":           r.Type,
+					"location":       r.Location,
+					"cost":           r.Cost,
+					"score":          r.Score,
+					"isOrphaned":     r.IsOrphaned,
+					"optimization":   r.Optimization,
+				})
+			}
+
+			// Convert to slice format
+			result := make([]map[string]interface{}, 0)
+			for typeName, resList := range typeMap {
+				// Sort resources by cost descending
+				sort.Slice(resList, func(i, j int) bool {
+					return resList[i]["cost"].(float64) > resList[j]["cost"].(float64)
+				})
+
+				// Calculate total cost for this type
+				typeCost := 0.0
+				for _, r := range resList {
+					typeCost += r["cost"].(float64)
+				}
+
+				result = append(result, map[string]interface{}{
+					"type":      typeName,
+					"count":     len(resList),
+					"totalCost": typeCost,
+					"resources": resList,
+				})
+			}
+
+			// Sort by count descending
+			sort.Slice(result, func(i, j int) bool {
+				return result[i]["count"].(int) > result[j]["count"].(int)
+			})
+
+			return result
+		}
+
+		metrics1["resourcesByType"] = formatResourcesByType(res1)
+		metrics2["resourcesByType"] = formatResourcesByType(res2)
+
 		c.JSON(200, gin.H{
 			"rg1": metrics1,
 			"rg2": metrics2,
@@ -1874,6 +1928,55 @@ func startServer(port string) {
 		costDelta := metrics2["totalCost"].(float64) - metrics1["totalCost"].(float64)
 		scoreDelta := metrics2["efficiencyScore"].(int) - metrics1["efficiencyScore"].(int)
 		rgDelta := metrics2["resourceGroups"].(int) - metrics1["resourceGroups"].(int)
+
+		// Helper to format resources by type (reused from RG comparison)
+		formatResourcesByType := func(resources []AzureResource) []map[string]interface{} {
+			typeMap := make(map[string][]map[string]interface{})
+			for _, r := range resources {
+				typeName := getResourceTypeName(r.Type)
+				if _, ok := typeMap[typeName]; !ok {
+					typeMap[typeName] = make([]map[string]interface{}, 0)
+				}
+				typeMap[typeName] = append(typeMap[typeName], map[string]interface{}{
+					"id":           r.ID,
+					"name":         r.Name,
+					"type":         r.Type,
+					"location":     r.Location,
+					"cost":         r.Cost,
+					"score":        r.Score,
+					"isOrphaned":   r.IsOrphaned,
+					"optimization": r.Optimization,
+				})
+			}
+
+			result := make([]map[string]interface{}, 0)
+			for typeName, resList := range typeMap {
+				sort.Slice(resList, func(i, j int) bool {
+					return resList[i]["cost"].(float64) > resList[j]["cost"].(float64)
+				})
+
+				typeCost := 0.0
+				for _, r := range resList {
+					typeCost += r["cost"].(float64)
+				}
+
+				result = append(result, map[string]interface{}{
+					"type":      typeName,
+					"count":     len(resList),
+					"totalCost": typeCost,
+					"resources": resList,
+				})
+			}
+
+			sort.Slice(result, func(i, j int) bool {
+				return result[i]["count"].(int) > result[j]["count"].(int)
+			})
+
+			return result
+		}
+
+		metrics1["resourcesByType"] = formatResourcesByType(res1)
+		metrics2["resourcesByType"] = formatResourcesByType(res2)
 
 		c.JSON(200, gin.H{
 			"sub1": metrics1,

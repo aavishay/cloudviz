@@ -1184,25 +1184,27 @@ export default function App() {
 
   // Resource group comparison state
   const [rgComparison, setRgComparison] = useState<{
-    rg1: { resourceGroup: string; subscriptionId: string; resourceCount: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}> };
-    rg2: { resourceGroup: string; subscriptionId: string; resourceCount: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}> };
+    rg1: { resourceGroup: string; subscriptionId: string; resourceCount: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}>; resourcesByType: Array<{type: string; count: number; totalCost: number; resources: Array<{id: string; name: string; type: string; location: string; cost: number; score: number; isOrphaned: boolean; optimization?: string}>}> };
+    rg2: { resourceGroup: string; subscriptionId: string; resourceCount: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}>; resourcesByType: Array<{type: string; count: number; totalCost: number; resources: Array<{id: string; name: string; type: string; location: string; cost: number; score: number; isOrphaned: boolean; optimization?: string}>}> };
     comparison: { resourceCountDelta: number; costDelta: number; scoreDelta: number; winner: string };
   } | null>(null);
   const [rgCompareLoading, setRgCompareLoading] = useState(false);
   const [rgCompareOpen, setRgCompareOpen] = useState(false);
   const [rg1Selection, setRg1Selection] = useState<{rg: string; sub: string} | null>(null);
   const [rg2Selection, setRg2Selection] = useState<{rg: string; sub: string} | null>(null);
+  const [rgExpandedTypes, setRgExpandedTypes] = useState<Set<string>>(new Set());
 
   // Subscription comparison state
   const [subComparison, setSubComparison] = useState<{
-    sub1: { subscriptionId: string; resourceCount: number; resourceGroups: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}>; locationBreakdown: Array<{location: string; count: number; cost: number; percent: number; costPercent: number}> };
-    sub2: { subscriptionId: string; resourceCount: number; resourceGroups: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}>; locationBreakdown: Array<{location: string; count: number; cost: number; percent: number; costPercent: number}> };
+    sub1: { subscriptionId: string; resourceCount: number; resourceGroups: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}>; locationBreakdown: Array<{location: string; count: number; cost: number; percent: number; costPercent: number}>; resourcesByType: Array<{type: string; count: number; totalCost: number; resources: Array<{id: string; name: string; type: string; location: string; cost: number; score: number; isOrphaned: boolean; optimization?: string}>}> };
+    sub2: { subscriptionId: string; resourceCount: number; resourceGroups: number; totalCost: number; averageCost: number; efficiencyScore: number; orphanedCount: number; typeBreakdown: Array<{type: string; count: number; cost: number; percent: number; costPercent: number}>; locationBreakdown: Array<{location: string; count: number; cost: number; percent: number; costPercent: number}>; resourcesByType: Array<{type: string; count: number; totalCost: number; resources: Array<{id: string; name: string; type: string; location: string; cost: number; score: number; isOrphaned: boolean; optimization?: string}>}> };
     comparison: { resourceCountDelta: number; costDelta: number; scoreDelta: number; rgDelta: number; winner: string };
   } | null>(null);
   const [subCompareLoading, setSubCompareLoading] = useState(false);
   const [subCompareOpen, setSubCompareOpen] = useState(false);
   const [sub1Selection, setSub1Selection] = useState<string | null>(null);
   const [sub2Selection, setSub2Selection] = useState<string | null>(null);
+  const [subExpandedTypes, setSubExpandedTypes] = useState<Set<string>>(new Set());
 
   const [allPossibleFilters, setAllPossibleFilters] = useState<{ subs: string[]; locations: string[]; rgs: string[]; types: string[] }>({
     subs: [], locations: [], rgs: [], types: [],
@@ -1572,75 +1574,179 @@ export default function App() {
       </div>
 
       {rgComparison ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'stretch' }}>
-          {/* RG1 */}
-          <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>1</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Summary Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'stretch' }}>
+            {/* RG1 */}
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>1</span>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rgComparison.rg1.resourceGroup}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'monospace' }}>{rgComparison.rg1.subscriptionId.slice(0, 8)}...</div>
+                </div>
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rgComparison.rg1.resourceGroup}</div>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'monospace' }}>{rgComparison.rg1.subscriptionId.slice(0, 8)}...</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{rgComparison.rg1.resourceCount}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${rgComparison.rg1.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg1.efficiencyScore >= 80 ? 'var(--accent)' : rgComparison.rg1.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{rgComparison.rg1.efficiencyScore}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Orphaned</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg1.orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)' }}>{rgComparison.rg1.orphanedCount}</div>
+                </div>
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{rgComparison.rg1.resourceCount}</div>
+
+            {/* VS indicator */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>VS</div>
+              {rgComparison.comparison.winner !== 'tie' && (
+                <div style={{ padding: '6px 12px', borderRadius: 12, background: rgComparison.comparison.winner === 'rg1' ? 'var(--blue-dim)' : 'var(--accent-dim)', fontSize: 10, fontWeight: 700, color: rgComparison.comparison.winner === 'rg1' ? 'var(--blue)' : 'var(--accent)' }}>
+                  {rgComparison.comparison.winner === 'rg1' ? 'Winner' : 'Runner-up'}
+                </div>
+              )}
+            </div>
+
+            {/* RG2 */}
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>2</span>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rgComparison.rg2.resourceGroup}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'monospace' }}>{rgComparison.rg2.subscriptionId.slice(0, 8)}...</div>
+                </div>
               </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${rgComparison.rg1.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-              </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg1.efficiencyScore >= 80 ? 'var(--accent)' : rgComparison.rg1.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{rgComparison.rg1.efficiencyScore}</div>
-              </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Orphaned</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg1.orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)' }}>{rgComparison.rg1.orphanedCount}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{rgComparison.rg2.resourceCount}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${rgComparison.rg2.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg2.efficiencyScore >= 80 ? 'var(--accent)' : rgComparison.rg2.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{rgComparison.rg2.efficiencyScore}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Orphaned</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg2.orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)' }}>{rgComparison.rg2.orphanedCount}</div>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* VS indicator */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>VS</div>
-            {rgComparison.comparison.winner !== 'tie' && (
-              <div style={{ padding: '6px 12px', borderRadius: 12, background: rgComparison.comparison.winner === 'rg1' ? 'var(--blue-dim)' : 'var(--accent-dim)', fontSize: 10, fontWeight: 700, color: rgComparison.comparison.winner === 'rg1' ? 'var(--blue)' : 'var(--accent)' }}>
-                {rgComparison.comparison.winner === 'rg1' ? 'Winner' : 'Runner-up'}
+          {/* Side-by-Side Resource Tables */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {/* RG1 Resource Table */}
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', background: 'var(--blue-dim)', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--blue)' }}>{rgComparison.rg1.resourceGroup}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-2)', marginLeft: 8 }}>{rgComparison.rg1.resourceCount} resources</span>
               </div>
-            )}
-          </div>
-
-          {/* RG2 */}
-          <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>2</span>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rgComparison.rg2.resourceGroup}</div>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'monospace' }}>{rgComparison.rg2.subscriptionId.slice(0, 8)}...</div>
+              <div style={{ maxHeight: 500, overflow: 'auto' }}>
+                {rgComparison.rg1.resourcesByType?.map((typeGroup: any) => (
+                  <div key={typeGroup.type} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <button
+                      onClick={() => {
+                        const newSet = new Set(rgExpandedTypes);
+                        if (newSet.has(typeGroup.type)) {
+                          newSet.delete(typeGroup.type);
+                        } else {
+                          newSet.add(typeGroup.type);
+                        }
+                        setRgExpandedTypes(newSet);
+                      }}
+                      style={{ width: '100%', padding: '10px 16px', background: 'var(--bg-card)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transform: rgExpandedTypes.has(typeGroup.type) ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s', color: 'var(--text-3)' }}><path d="M9 18l6-6-6-6" /></svg>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>{friendlyType(typeGroup.type)}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '2px 8px', borderRadius: 10 }}>{typeGroup.count}</span>
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>${typeGroup.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                    </button>
+                    {rgExpandedTypes.has(typeGroup.type) && (
+                      <div style={{ background: 'var(--bg-surface)' }}>
+                        {typeGroup.resources.map((res: any) => (
+                          <div key={res.id} style={{ padding: '10px 16px 10px 40px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.name}</div>
+                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{res.location} {res.isOrphaned && <span style={{ color: 'var(--danger)' }}>(orphaned)</span>}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', fontFamily: 'monospace' }}>${res.cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                              <div style={{ fontSize: 10, color: res.score >= 80 ? 'var(--accent)' : res.score >= 50 ? 'var(--warning)' : 'var(--danger)' }}>Score: {res.score}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{rgComparison.rg2.resourceCount}</div>
+
+            {/* RG2 Resource Table */}
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', background: 'var(--accent-dim)', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>{rgComparison.rg2.resourceGroup}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-2)', marginLeft: 8 }}>{rgComparison.rg2.resourceCount} resources</span>
               </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${rgComparison.rg2.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-              </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg2.efficiencyScore >= 80 ? 'var(--accent)' : rgComparison.rg2.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{rgComparison.rg2.efficiencyScore}</div>
-              </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Orphaned</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: rgComparison.rg2.orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)' }}>{rgComparison.rg2.orphanedCount}</div>
+              <div style={{ maxHeight: 500, overflow: 'auto' }}>
+                {rgComparison.rg2.resourcesByType?.map((typeGroup: any) => (
+                  <div key={typeGroup.type} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <button
+                      onClick={() => {
+                        const newSet = new Set(rgExpandedTypes);
+                        if (newSet.has(typeGroup.type)) {
+                          newSet.delete(typeGroup.type);
+                        } else {
+                          newSet.add(typeGroup.type);
+                        }
+                        setRgExpandedTypes(newSet);
+                      }}
+                      style={{ width: '100%', padding: '10px 16px', background: 'var(--bg-card)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transform: rgExpandedTypes.has(typeGroup.type) ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s', color: 'var(--text-3)' }}><path d="M9 18l6-6-6-6" /></svg>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>{friendlyType(typeGroup.type)}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '2px 8px', borderRadius: 10 }}>{typeGroup.count}</span>
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>${typeGroup.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                    </button>
+                    {rgExpandedTypes.has(typeGroup.type) && (
+                      <div style={{ background: 'var(--bg-surface)' }}>
+                        {typeGroup.resources.map((res: any) => (
+                          <div key={res.id} style={{ padding: '10px 16px 10px 40px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.name}</div>
+                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{res.location} {res.isOrphaned && <span style={{ color: 'var(--danger)' }}>(orphaned)</span>}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', fontFamily: 'monospace' }}>${res.cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                              <div style={{ fontSize: 10, color: res.score >= 80 ? 'var(--accent)' : res.score >= 50 ? 'var(--warning)' : 'var(--danger)' }}>Score: {res.score}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -1790,73 +1896,177 @@ export default function App() {
       </div>
 
       {subComparison ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'stretch' }}>
-          {/* Sub1 */}
-          <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>1</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Summary Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'stretch' }}>
+            {/* Sub1 */}
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--blue)' }}>1</span>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{subComparison.sub1.subscriptionId}</div>
+                </div>
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{subComparison.sub1.subscriptionId}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub1.resourceCount.toLocaleString()}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${subComparison.sub1.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: subComparison.sub1.efficiencyScore >= 80 ? 'var(--accent)' : subComparison.sub1.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{subComparison.sub1.efficiencyScore}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>R Groups</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub1.resourceGroups}</div>
+                </div>
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub1.resourceCount.toLocaleString()}</div>
+
+            {/* VS indicator */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>VS</div>
+              {subComparison.comparison.winner !== 'tie' && (
+                <div style={{ padding: '6px 12px', borderRadius: 12, background: subComparison.comparison.winner === 'sub1' ? 'var(--blue-dim)' : 'var(--accent-dim)', fontSize: 10, fontWeight: 700, color: subComparison.comparison.winner === 'sub1' ? 'var(--blue)' : 'var(--accent)' }}>
+                  {subComparison.comparison.winner === 'sub1' ? 'Winner' : 'Runner-up'}
+                </div>
+              )}
+            </div>
+
+            {/* Sub2 */}
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>2</span>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{subComparison.sub2.subscriptionId}</div>
+                </div>
               </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${subComparison.sub1.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-              </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: subComparison.sub1.efficiencyScore >= 80 ? 'var(--accent)' : subComparison.sub1.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{subComparison.sub1.efficiencyScore}</div>
-              </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>R Groups</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub1.resourceGroups}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub2.resourceCount.toLocaleString()}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${subComparison.sub2.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: subComparison.sub2.efficiencyScore >= 80 ? 'var(--accent)' : subComparison.sub2.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{subComparison.sub2.efficiencyScore}</div>
+                </div>
+                <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>R Groups</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub2.resourceGroups}</div>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* VS indicator */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>VS</div>
-            {subComparison.comparison.winner !== 'tie' && (
-              <div style={{ padding: '6px 12px', borderRadius: 12, background: subComparison.comparison.winner === 'sub1' ? 'var(--blue-dim)' : 'var(--accent-dim)', fontSize: 10, fontWeight: 700, color: subComparison.comparison.winner === 'sub1' ? 'var(--blue)' : 'var(--accent)' }}>
-                {subComparison.comparison.winner === 'sub1' ? 'Winner' : 'Runner-up'}
+          {/* Side-by-Side Resource Tables */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {/* Sub1 Resource Table */}
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', background: 'var(--blue-dim)', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--blue)' }}>{subComparison.sub1.subscriptionId.slice(0, 20)}...</span>
+                <span style={{ fontSize: 11, color: 'var(--text-2)', marginLeft: 8 }}>{subComparison.sub1.resourceCount} resources</span>
               </div>
-            )}
-          </div>
-
-          {/* Sub2 */}
-          <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 16, border: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>2</span>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{subComparison.sub2.subscriptionId}</div>
+              <div style={{ maxHeight: 500, overflow: 'auto' }}>
+                {subComparison.sub1.resourcesByType?.map((typeGroup: any) => (
+                  <div key={typeGroup.type} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <button
+                      onClick={() => {
+                        const newSet = new Set(subExpandedTypes);
+                        if (newSet.has(typeGroup.type)) {
+                          newSet.delete(typeGroup.type);
+                        } else {
+                          newSet.add(typeGroup.type);
+                        }
+                        setSubExpandedTypes(newSet);
+                      }}
+                      style={{ width: '100%', padding: '10px 16px', background: 'var(--bg-card)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transform: subExpandedTypes.has(typeGroup.type) ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s', color: 'var(--text-3)' }}><path d="M9 18l6-6-6-6" /></svg>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>{friendlyType(typeGroup.type)}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '2px 8px', borderRadius: 10 }}>{typeGroup.count}</span>
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>${typeGroup.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                    </button>
+                    {subExpandedTypes.has(typeGroup.type) && (
+                      <div style={{ background: 'var(--bg-surface)' }}>
+                        {typeGroup.resources.map((res: any) => (
+                          <div key={res.id} style={{ padding: '10px 16px 10px 40px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.name}</div>
+                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{res.location} {res.isOrphaned && <span style={{ color: 'var(--danger)' }}>(orphaned)</span>}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', fontFamily: 'monospace' }}>${res.cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                              <div style={{ fontSize: 10, color: res.score >= 80 ? 'var(--accent)' : res.score >= 50 ? 'var(--warning)' : 'var(--danger)' }}>Score: {res.score}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Resources</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub2.resourceCount.toLocaleString()}</div>
+
+            {/* Sub2 Resource Table */}
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', background: 'var(--accent-dim)', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>{subComparison.sub2.subscriptionId.slice(0, 20)}...</span>
+                <span style={{ fontSize: 11, color: 'var(--text-2)', marginLeft: 8 }}>{subComparison.sub2.resourceCount} resources</span>
               </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Cost</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>${subComparison.sub2.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-              </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>Efficiency</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: subComparison.sub2.efficiencyScore >= 80 ? 'var(--accent)' : subComparison.sub2.efficiencyScore >= 50 ? 'var(--warning)' : 'var(--danger)' }}>{subComparison.sub2.efficiencyScore}</div>
-              </div>
-              <div style={{ padding: 10, background: 'var(--bg-card)', borderRadius: 8 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>R Groups</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{subComparison.sub2.resourceGroups}</div>
+              <div style={{ maxHeight: 500, overflow: 'auto' }}>
+                {subComparison.sub2.resourcesByType?.map((typeGroup: any) => (
+                  <div key={typeGroup.type} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <button
+                      onClick={() => {
+                        const newSet = new Set(subExpandedTypes);
+                        if (newSet.has(typeGroup.type)) {
+                          newSet.delete(typeGroup.type);
+                        } else {
+                          newSet.add(typeGroup.type);
+                        }
+                        setSubExpandedTypes(newSet);
+                      }}
+                      style={{ width: '100%', padding: '10px 16px', background: 'var(--bg-card)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ transform: subExpandedTypes.has(typeGroup.type) ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s', color: 'var(--text-3)' }}><path d="M9 18l6-6-6-6" /></svg>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>{friendlyType(typeGroup.type)}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '2px 8px', borderRadius: 10 }}>{typeGroup.count}</span>
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)' }}>${typeGroup.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                    </button>
+                    {subExpandedTypes.has(typeGroup.type) && (
+                      <div style={{ background: 'var(--bg-surface)' }}>
+                        {typeGroup.resources.map((res: any) => (
+                          <div key={res.id} style={{ padding: '10px 16px 10px 40px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.name}</div>
+                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{res.location} {res.isOrphaned && <span style={{ color: 'var(--danger)' }}>(orphaned)</span>}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', fontFamily: 'monospace' }}>${res.cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                              <div style={{ fontSize: 10, color: res.score >= 80 ? 'var(--accent)' : res.score >= 50 ? 'var(--warning)' : 'var(--danger)' }}>Score: {res.score}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
