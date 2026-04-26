@@ -19,7 +19,7 @@ cloudviz/
 ### Backend (Go + Gin)
 
 - **Entry point**: `backend/main.go`
-- **Structure**: Multi-file Go project (`main.go`, `azure.go`, `db.go`, `types.go`)
+- **Structure**: Multi-file Go project (`main.go`, `azure.go`, `db.go`, `types.go`, `dependencies.go`, `webhooks.go`)
 - **Framework**: Gin web framework
 - **Frontend Embedding**: Frontend assets are embedded in the binary via `go:embed dist`
 - **Authentication**: Azure Default Credential via `azidentity`
@@ -37,6 +37,7 @@ cloudviz/
 - `GET /api/costs/stream` - SSE streaming for cost updates
 - `GET /api/export` - CSV export
 - `GET /api/ai-insights/:resourceId` - AI recommendations via Ollama
+- `GET /api/resources/:id/dependencies` - Get dependency graph for a resource
 - `DELETE /api/costs/cache` - Clear cost cache
 - `GET /ws` - WebSocket ping/pong
 
@@ -53,15 +54,15 @@ cloudviz/
 
 ```bash
 cd backend
-go run main.go azure.go db.go types.go  # Run development server
-go build -o cloudviz main.go azure.go db.go types.go # Build unified binary
+go run main.go azure.go db.go types.go dependencies.go webhooks.go  # Run development server
+go build -o cloudviz main.go azure.go db.go types.go dependencies.go webhooks.go # Build unified binary
 ```
 
 ### Unified Build (Frontend + Backend)
 ```bash
 cd frontend && npm run build
 cp -r frontend/dist backend/dist
-cd backend && go build -o cloudviz main.go azure.go db.go types.go
+cd backend && go build -o cloudviz main.go azure.go db.go types.go dependencies.go webhooks.go
 ```
 
 ### Frontend

@@ -1403,7 +1403,7 @@ export default function App() {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
         </div>
         <div style={{ fontSize: 32, fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>{totalResources.toLocaleString()}</div>
-        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{uniqueSubs.length} subscriptions</div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{totalResources === 1 ? 'resource' : 'resources'}</div>
       </div>
 
       <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
@@ -3835,7 +3835,7 @@ export default function App() {
         {costsLoading && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 8, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', marginRight: 8 }}>
             <div className="sync-spinner" style={{ width: 14, height: 14, border: '2px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--accent)' }}>Syncing...</span>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--accent)' }}>Syncing ({syncedSubIds.size}/{uniqueSubs.length} subs)...</span>
           </div>
         )}
 
@@ -4037,17 +4037,10 @@ export default function App() {
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
                       Export CSV
                     </button>
-                    {costsLoading ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-2)', padding: '0 8px' }}>
-                        <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-                        {`${syncedSubIds.size}/${uniqueSubs.length} subs`}
-                      </div>
-                    ) : (
-                      <button className="btn" onClick={refreshCosts}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                        Refresh Costs
-                      </button>
-                    )}
+                    <button className="btn" onClick={refreshCosts} disabled={costsLoading}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: costsLoading ? 'spin 0.8s linear infinite' : 'none' }}><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                      Refresh Costs
+                    </button>
                   </div>
                 </div>
               </div>
@@ -4533,17 +4526,10 @@ export default function App() {
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
                       Export CSV
                     </button>
-                    {costsLoading ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-2)', padding: '0 8px' }}>
-                        <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-                        {`${syncedSubIds.size}/${uniqueSubs.length} subs`}
-                      </div>
-                    ) : (
-                      <button className="btn" onClick={refreshCosts}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                        Refresh Costs
-                      </button>
-                    )}
+                    <button className="btn" onClick={refreshCosts} disabled={costsLoading}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: costsLoading ? 'spin 0.8s linear infinite' : 'none' }}><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                      Refresh Costs
+                    </button>
                   </div>
                 </div>
               </div>
