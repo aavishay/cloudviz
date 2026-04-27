@@ -434,11 +434,12 @@ func (da *DependencyAnalyzer) queryRelatedResources(ctx context.Context, subscri
 func RegisterDependencyRoutes(r *gin.Engine, db *sql.DB, argClient *armresourcegraph.Client) {
 	analyzer := NewDependencyAnalyzer(db, argClient)
 
-	r.GET("/api/resources/:id/dependencies", func(c *gin.Context) {
-		resourceID := c.Param("id")
-		// URL decode if needed
-		resourceID = strings.ReplaceAll(resourceID, "%2F", "/")
-		resourceID = strings.ReplaceAll(resourceID, "%2f", "/")
+	r.GET("/api/dependencies", func(c *gin.Context) {
+		resourceID := c.Query("id")
+		if resourceID == "" {
+			c.JSON(400, gin.H{"error": "missing 'id' query parameter"})
+			return
+		}
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()

@@ -767,7 +767,7 @@ function DependencyGraphModal({ resource, onClose }: { resource: AzureResource; 
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`/api/resources/${encodeURIComponent(resource.id)}/dependencies`)
+    fetch(`/api/dependencies?id=${encodeURIComponent(resource.id)}`)
       .then(r => r.json())
       .then(data => {
         if (data.error) throw new Error(data.error);
@@ -1329,11 +1329,25 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-dashOrder', JSON.stringify(dashboardOrder)); }, [dashboardOrder]);
 
   // ── Dashboard panel renderers ──────────────────────────────────────────────
-  const renderInsights = () => (
+  const renderInsights = () => {
+    // Determine severity level for styling
+    const hasOrphaned = orphanedCount > 0;
+    const hasWarnings = lowScoreCount > 0 || costAnomalies.length > 0;
+    const severityLevel = hasOrphaned ? 'danger' : hasWarnings ? 'warning' : 'success';
+
+    return (
     (lowScoreCount > 0 || orphanedCount > 0 || costAnomalies.length > 0) && (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'linear-gradient(135deg, rgba(244 63 94 / 0.08) 0%, rgba(245 158 11 / 0.05) 100%)', borderRadius: 12, border: '1px solid rgba(244 63 94 / 0.15)' }}>
-        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--danger-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '12px 16px',
+        background: 'var(--bg-surface)',
+        borderRadius: 12,
+        border: '1px solid var(--border)'
+      }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: severityLevel === 'danger' ? 'var(--danger-dim)' : 'var(--warning-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={severityLevel === 'danger' ? 'var(--danger)' : 'var(--warning)'} strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
         </div>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>Action Required:</span>
@@ -1359,6 +1373,7 @@ export default function App() {
       </div>
     )
   );
+  };
 
   const renderSummary = () => (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
