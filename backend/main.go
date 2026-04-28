@@ -225,7 +225,6 @@ func startServer(port string) {
 			}
 		}
 	}()
-
 	r.GET("/api/resources", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
 		rgs := c.QueryArray("resourceGroup")

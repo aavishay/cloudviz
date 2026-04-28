@@ -58,9 +58,79 @@ func NewDependencyAnalyzer(db *sql.DB, argClient *armresourcegraph.Client) *Depe
 	}
 }
 
+// ResourceInfo holds basic resource information
+type ResourceInfo struct {
+	Name           string
+	Type           string
+	SubscriptionID string
+	ResourceGroup  string
+}
+
+// queryResourceFromARG queries Azure Resource Graph for resource details
+func (da *DependencyAnalyzer) queryResourceFromARG(ctx context.Context, resourceID string) (*ResourceInfo, error) {
+	// Extract subscription ID from resource ID
+	parts := strings.Split(resourceID, "/")
+	var subID string
+	for i, p := range parts {
+		if strings.EqualFold(p, "subscriptions") && i+1 < len(parts) {
+			subID = parts[i+1]
+			break
+		}
+	}
+	if subID == "" {
+		return nil, fmt.Errorf("could not extract subscription ID from resource ID")
+	}
+
+	query := fmt.Sprintf(`
+		resources
+		| where id == "%s"
+		| project name, type, subscriptionId, resourceGroup
+	`, resourceID)
+
+	result, err := da.argClient.Resources(ctx, armresourcegraph.QueryRequest{
+		Subscriptions: []*string{&[]string{subID}[0]},
+		Query:         &query,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query ARG: %w", err)
+	}
+
+	if result.Data == nil {
+		return nil, fmt.Errorf("resource not found in Azure")
+	}
+
+	// Parse results
+	data, ok := result.Data.([]interface{})
+	if !ok || len(data) == 0 {
+		return nil, fmt.Errorf("resource not found in Azure")
+	}
+
+	row, ok := data[0].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected response format")
+	}
+
+	return &ResourceInfo{
+		Name:           getStringValue(row, "name"),
+		Type:           getStringValue(row, "type"),
+		SubscriptionID: getStringValue(row, "subscriptionId"),
+		ResourceGroup:  getStringValue(row, "resourceGroup"),
+	}, nil
+}
+
+// getStringValue extracts a string value from a map
+func getStringValue(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
 // AnalyzeDependencies analyzes dependencies for a resource
 func (da *DependencyAnalyzer) AnalyzeDependencies(ctx context.Context, resourceID string) (*ResourceDependencyGraph, error) {
-	// Get resource details from database
+	// Get resource details from database or Azure
 	var resourceName, resourceType, subscriptionID, resourceGroup string
 	err := da.db.QueryRow(`
 		SELECT name, type, subscription_id, resource_group
@@ -68,7 +138,15 @@ func (da *DependencyAnalyzer) AnalyzeDependencies(ctx context.Context, resourceI
 		WHERE id = ?
 	`, resourceID).Scan(&resourceName, &resourceType, &subscriptionID, &resourceGroup)
 	if err != nil {
-		return nil, fmt.Errorf("resource not found: %w", err)
+		// Resource not in cache, query from Azure Resource Graph
+		resourceData, queryErr := da.queryResourceFromARG(ctx, resourceID)
+		if queryErr != nil {
+			return nil, fmt.Errorf("resource not found: %w", queryErr)
+		}
+		resourceName = resourceData.Name
+		resourceType = resourceData.Type
+		subscriptionID = resourceData.SubscriptionID
+		resourceGroup = resourceData.ResourceGroup
 	}
 
 	graph := &ResourceDependencyGraph{
