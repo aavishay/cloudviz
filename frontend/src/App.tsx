@@ -1150,6 +1150,11 @@ export default function App() {
   });
   const [selectedCost, setSelectedCost] = useState<CostPrediction | null>(null);
   const [costSearchQuery, setCostSearchQuery] = useState(() => localStorage.getItem('cloudviz-costSearchQuery') || '');
+  const [costSortConfig, setCostSortConfig] = useState<{ key: keyof CostItem | null; direction: 'asc' | 'desc' }>(() => {
+    const saved = localStorage.getItem('cloudviz-costSort');
+    return saved ? JSON.parse(saved) : { key: null, direction: 'asc' };
+  });
+  useEffect(() => { localStorage.setItem('cloudviz-costSort', JSON.stringify(costSortConfig)); }, [costSortConfig]);
   const [dailyCosts, setDailyCosts] = useState<{ date: string; cost: number }[]>([]);
   const [costPeriod, setCostPeriod] = useState<'7' | '30' | '90'>(() => (localStorage.getItem('cloudviz-costPeriod') as '7' | '30' | '90') || '30');
   const [budgetLimit, setBudgetLimit] = useState<number>(() => {
@@ -4158,8 +4163,9 @@ export default function App() {
               {/* Cost by Environment Bar Chart */}
               {costsByEnvironment.length > 0 && (
                 <div className="card" style={{ padding: 24 }}>
-                  <div style={{ marginBottom: 16 }}>
+                  <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost Distribution by Environment</span>
+                    <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#22c55e', background: 'rgba(34 197 94 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(34 197 94 / 0.2)' }}>Interactive</span>
                   </div>
                   <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={costsByEnvironment.filter(e => e.value > 0)} margin={{ left: 20, right: 20 }}>
@@ -4167,9 +4173,14 @@ export default function App() {
                       <XAxis dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 11 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, '']} labelStyle={{ color: 'var(--text-1)', fontWeight: 800 }} itemStyle={{ color: '#22c55e', fontWeight: 700 }} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8 }} />
-                      <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                      <Bar
+                        dataKey="value"
+                        radius={[4, 4, 0, 0]}
+                        onClick={(data: any) => { if (data?.name) { setActiveTab('resources'); setTagFilter({ key: 'Environment', value: data.name }); setCurrentPage(1); } }}
+                        style={{ cursor: 'pointer' }}
+                      >
                         {costsByEnvironment.filter(e => e.value > 0).map((_, i) => (
-                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                          <Cell key={i} fill={COLORS[i % COLORS.length]} style={{ cursor: 'pointer', outline: 'none' }} />
                         ))}
                       </Bar>
                     </BarChart>
@@ -4187,13 +4198,29 @@ export default function App() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                     <thead>
                       <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                        {['Resource Group', 'Type', 'Location', 'Cost'].map(h => (
-                          <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--text-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
+                        {[
+                          { key: 'resourceGroup', label: 'Resource Group' },
+                          { key: 'resourceType', label: 'Type' },
+                          { key: 'resourceLocation', label: 'Location' },
+                          { key: 'cost', label: 'Cost' },
+                        ].map(col => (
+                          <th
+                            key={col.key}
+                            onClick={() => setCostSortConfig(prev => ({ key: col.key as keyof CostItem, direction: prev.key === col.key && prev.direction === 'asc' ? 'desc' : 'asc' }))}
+                            style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--text-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer', userSelect: 'none' }}
+                          >
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              {col.label}
+                              {costSortConfig.key === col.key && (
+                                <span style={{ color: 'var(--accent)', fontSize: 10 }}>{costSortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                              )}
+                            </span>
+                          </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredCosts
+                      {[...filteredCosts]
                         .filter(cost => {
                           if (!envFilter) return true;
                           const inferred = inferEnvFromRG(cost.resourceGroup || '');
@@ -4202,6 +4229,18 @@ export default function App() {
                           if (envFilter === 'Staging') return inferred === 'Staging';
                           if (envFilter === 'Test/QA') return inferred === 'Test/QA';
                           return true;
+                        })
+                        .sort((a, b) => {
+                          if (!costSortConfig.key) return 0;
+                          const key = costSortConfig.key;
+                          const aVal = a[key];
+                          const bVal = b[key];
+                          if (typeof aVal === 'number' && typeof bVal === 'number') {
+                            return costSortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+                          }
+                          return costSortConfig.direction === 'asc'
+                            ? String(aVal).localeCompare(String(bVal))
+                            : String(bVal).localeCompare(String(aVal));
                         })
                         .slice(0, 100).map((cost, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); }}>
