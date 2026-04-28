@@ -761,23 +761,38 @@ interface DependencyGraph {
   generatedAt: string;
 }
 
-function DependencyGraphModal({ resource, onClose }: { resource: AzureResource; onClose: () => void }) {
+function DependencyGraphModal({ resource, onClose, onResourceClick, allResources }: { resource: AzureResource; onClose: () => void; onResourceClick?: (resource: AzureResource) => void; allResources: AzureResource[] }) {
   const [graph, setGraph] = useState<DependencyGraph | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let isCancelled = false;
+
     fetch(`/api/dependencies?id=${encodeURIComponent(resource.id)}`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) {
+          return r.text().then(text => {
+            throw new Error(`HTTP ${r.status}: ${text || 'Unknown error'}`);
+          });
+        }
+        return r.json();
+      })
       .then(data => {
+        if (isCancelled) return;
         if (data.error) throw new Error(data.error);
         setGraph(data);
         setLoading(false);
       })
       .catch(e => {
+        if (isCancelled) return;
         setError(e.message);
         setLoading(false);
       });
+
+    return () => {
+      isCancelled = true;
+    };
   }, [resource.id]);
 
   const getRelationshipColor = (rel: string) => {
@@ -865,7 +880,49 @@ function DependencyGraphModal({ resource, onClose }: { resource: AzureResource; 
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {graph.dependencies.map((dep, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 10, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                      <div
+                        key={i}
+                        onClick={() => {
+                          if (onResourceClick) {
+                            // Try to find the full resource in the loaded resources
+                            const fullResource = allResources.find(r => r.id === dep.id);
+                            if (fullResource) {
+                              onResourceClick(fullResource);
+                            } else {
+                              // Fetch the resource details from API
+                              fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(dep.id)}`)
+                                .then(r => r.json())
+                                .then(data => {
+                                  if (data.data && data.data.length > 0) {
+                                    onResourceClick(data.data[0]);
+                                  }
+                                })
+                                .catch(err => console.error('Failed to fetch resource:', err));
+                            }
+                          }
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 12,
+                          padding: 12,
+                          borderRadius: 10,
+                          background: 'var(--bg-surface)',
+                          border: '1px solid var(--border)',
+                          cursor: onResourceClick ? 'pointer' : 'default',
+                          transition: 'background 0.2s ease, border-color 0.2s ease',
+                        }}
+                        onMouseEnter={e => {
+                          if (onResourceClick) {
+                            e.currentTarget.style.background = 'var(--bg-hover)';
+                            e.currentTarget.style.borderColor = 'var(--accent-border)';
+                          }
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.background = 'var(--bg-surface)';
+                          e.currentTarget.style.borderColor = 'var(--border)';
+                        }}
+                      >
                         <span style={{ fontSize: 20 }}>{getRelationshipIcon(dep.relationship)}</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.name}</div>
@@ -891,7 +948,49 @@ function DependencyGraphModal({ resource, onClose }: { resource: AzureResource; 
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {graph.dependents.map((dep, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 10, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                      <div
+                        key={i}
+                        onClick={() => {
+                          if (onResourceClick) {
+                            // Try to find the full resource in the loaded resources
+                            const fullResource = allResources.find(r => r.id === dep.id);
+                            if (fullResource) {
+                              onResourceClick(fullResource);
+                            } else {
+                              // Fetch the resource details from API
+                              fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(dep.id)}`)
+                                .then(r => r.json())
+                                .then(data => {
+                                  if (data.data && data.data.length > 0) {
+                                    onResourceClick(data.data[0]);
+                                  }
+                                })
+                                .catch(err => console.error('Failed to fetch resource:', err));
+                            }
+                          }
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 12,
+                          padding: 12,
+                          borderRadius: 10,
+                          background: 'var(--bg-surface)',
+                          border: '1px solid var(--border)',
+                          cursor: onResourceClick ? 'pointer' : 'default',
+                          transition: 'background 0.2s ease, border-color 0.2s ease',
+                        }}
+                        onMouseEnter={e => {
+                          if (onResourceClick) {
+                            e.currentTarget.style.background = 'var(--bg-hover)';
+                            e.currentTarget.style.borderColor = 'var(--accent-border)';
+                          }
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.background = 'var(--bg-surface)';
+                          e.currentTarget.style.borderColor = 'var(--border)';
+                        }}
+                      >
                         <span style={{ fontSize: 20 }}>{getRelationshipIcon(dep.relationship)}</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.name}</div>
@@ -3537,14 +3636,38 @@ export default function App() {
   const debouncedCostSearch = useDebounce(costSearchQuery, 300);
 
   const filteredCosts = useMemo(() => {
-    if (!debouncedCostSearch) return costs;
-    const q = debouncedCostSearch.toLowerCase();
-    return costs.filter(c =>
-      (c.resourceGroup || '').toLowerCase().includes(q) ||
-      (c.resourceType || '').toLowerCase().includes(q) ||
-      (c.resourceLocation || '').toLowerCase().includes(q)
-    );
-  }, [costs, debouncedCostSearch]);
+    let result = costs;
+
+    // Filter by Environment tag when tagFilter is set (from chart click)
+    if (tagFilter?.key === 'Environment') {
+      result = result.filter(c => {
+        // Find matching resource to get its actual Environment tag
+        const matchingResource = resources.find(r =>
+          r.resourceGroup?.toLowerCase() === (c.resourceGroup || '').toLowerCase() &&
+          (r.type?.toLowerCase().includes(c.resourceType?.toLowerCase() || '') ||
+           (c.resourceType || '').toLowerCase().includes(r.type?.toLowerCase() || '')) &&
+          (r.location?.toLowerCase().replace(/\s/g, '') === (c.resourceLocation || '').toLowerCase())
+        );
+        const envTag = matchingResource?.tags?.Environment ||
+                      matchingResource?.tags?.environment ||
+                      matchingResource?.tags?.env ||
+                      'Untagged';
+        return envTag === tagFilter.value;
+      });
+    }
+
+    // Filter by search query
+    if (debouncedCostSearch) {
+      const q = debouncedCostSearch.toLowerCase();
+      result = result.filter(c =>
+        (c.resourceGroup || '').toLowerCase().includes(q) ||
+        (c.resourceType || '').toLowerCase().includes(q) ||
+        (c.resourceLocation || '').toLowerCase().includes(q)
+      );
+    }
+
+    return result;
+  }, [costs, debouncedCostSearch, tagFilter, resources]);
 
   const totalCostsSum = useMemo(() => costs.reduce((s, c) => s + c.cost, 0), [costs]);
 
@@ -3763,7 +3886,11 @@ export default function App() {
     return anomalies.sort((a, b) => b.spike - a.spike).slice(0, 5);
   }, [costs]);
 
-  const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+  const COLORS = useMemo(() => isDarkMode
+    ? ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+    : ['#059669', '#2563eb', '#d97706', '#e11d48', '#7c3aed', '#db2777', '#0891b2', '#65a30d'],
+    [isDarkMode]
+  );
 
   // Save budget to localStorage
   const saveBudget = (value: number) => {
@@ -4176,7 +4303,19 @@ export default function App() {
                       <Bar
                         dataKey="value"
                         radius={[4, 4, 0, 0]}
-                        onClick={(data: any) => { if (data?.name) { setActiveTab('resources'); setTagFilter({ key: 'Environment', value: data.name }); setCurrentPage(1); } }}
+                        onClick={(data: any) => {
+                          if (data?.name) {
+                            setActiveTab('resources');
+                            setTagFilter({ key: 'Environment', value: data.name });
+                            setCurrentPage(1);
+                            // Sync envFilter for Cost Details table - "Untagged" maps to "Unknown" in inferred env
+                            if (data.name === 'Untagged') {
+                              setEnvFilter('Unknown');
+                            } else if (['Production', 'Development', 'Staging', 'Test/QA'].includes(data.name)) {
+                              setEnvFilter(data.name);
+                            }
+                          }
+                        }}
                         style={{ cursor: 'pointer' }}
                       >
                         {costsByEnvironment.filter(e => e.value > 0).map((_, i) => (
@@ -4228,6 +4367,7 @@ export default function App() {
                           if (envFilter === 'Development') return inferred === 'Development';
                           if (envFilter === 'Staging') return inferred === 'Staging';
                           if (envFilter === 'Test/QA') return inferred === 'Test/QA';
+                          if (envFilter === 'Unknown') return inferred === 'Unknown';
                           return true;
                         })
                         .sort((a, b) => {
@@ -4446,6 +4586,41 @@ export default function App() {
                     return (
                       <div
                         key={i}
+                        onClick={() => {
+                          // Skip deleted resources - they no longer exist
+                          if (h.changeType === 'deleted') {
+                            alert(`This resource was deleted and is no longer available.\n\nName: ${h.resourceName}\nDeleted: ${new Date(h.timestamp).toLocaleString()}`);
+                            return;
+                          }
+                          // Find the resource and navigate to it
+                          const resource = resources.find(r => r.id === h.resourceId);
+                          if (resource) {
+                            setSelectedResource(resource);
+                            setCurrentPage(1);
+                          } else {
+                            // Resource not loaded, fetch it
+                            fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(h.resourceId)}`)
+                              .then(r => r.json())
+                              .then(data => {
+                                if (data.data && data.data.length > 0) {
+                                  // Validate the returned resource matches the requested ID
+                                  const foundResource = data.data.find((r: AzureResource) => r.id === h.resourceId);
+                                  if (foundResource) {
+                                    setSelectedResource(foundResource);
+                                    setCurrentPage(1);
+                                  } else {
+                                    alert(`Resource not found. It may have been deleted or the ID has changed.\n\nName: ${h.resourceName}`);
+                                  }
+                                } else {
+                                  alert(`Resource not found. It may have been deleted or the ID has changed.\n\nName: ${h.resourceName}`);
+                                }
+                              })
+                              .catch(err => {
+                                console.error('Failed to fetch resource:', err);
+                                alert(`Failed to load resource details.\n\nName: ${h.resourceName}`);
+                              });
+                          }
+                        }}
                         style={{
                           display: 'flex',
                           alignItems: 'flex-start',
@@ -4788,6 +4963,11 @@ export default function App() {
         <DependencyGraphModal
           resource={selectedResource}
           onClose={() => setShowDependencyGraph(false)}
+          onResourceClick={(resource) => {
+            setSelectedResource(resource);
+            setCurrentPage(1);
+          }}
+          allResources={resources}
         />
       )}
 
