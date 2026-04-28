@@ -276,7 +276,11 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 		clauses = append(clauses, fmt.Sprintf("name contains '%s' or resourceGroup contains '%s' or type contains '%s'", search, search, search))
 	}
 	if tagKey != "" && tagValue != "" {
-		clauses = append(clauses, fmt.Sprintf("tags['%s'] =~ '%s'", tagKey, tagValue))
+		if tagValue == "Untagged" {
+			clauses = append(clauses, fmt.Sprintf("isempty(tags['%s']) or isnull(tags['%s'])", tagKey, tagKey))
+		} else {
+			clauses = append(clauses, fmt.Sprintf("tags['%s'] =~ '%s'", tagKey, tagValue))
+		}
 	}
 	if orphaned {
 		clauses = append(clauses, "((type has 'microsoft.compute/disks' and isnull(managedBy)) or (type has 'microsoft.network/networkinterfaces' and isnull(properties.virtualMachine)) or (type has 'microsoft.network/publicipaddresses' and isnull(properties.ipConfiguration)))")
