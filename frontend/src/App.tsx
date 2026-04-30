@@ -460,9 +460,12 @@ interface ResourceTableProps {
   onSubClick: (sub: string) => void;
   onTypeClick: (type: string) => void;
   onResourceClick: (r: AzureResource) => void;
+  favorites?: Set<string>;
+  onToggleFavorite?: (id: string) => void;
 }
 
 const COLUMNS = [
+  { key: 'favorite',       label: '',               defaultW: 40, minWidth: 36 },
   { key: 'name',           label: 'Name',           defaultW: 120, minWidth: 80 },
   { key: 'type',           label: 'Type',          defaultW: 100, minWidth: 60 },
   { key: 'location',       label: 'Location',       defaultW: 80, minWidth: 50 },
@@ -472,7 +475,7 @@ const COLUMNS = [
   { key: 'cost',           label: 'Cost',          defaultW: 80, minWidth: 60 },
 ];
 
-function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgClick, onSubClick, onTypeClick, onResourceClick }: ResourceTableProps) {
+function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgClick, onSubClick, onTypeClick, onResourceClick, favorites, onToggleFavorite }: ResourceTableProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [widths, setWidths] = useState<Record<string, number>>(
     Object.fromEntries(COLUMNS.map(c => [c.key, c.defaultW]))
@@ -543,6 +546,36 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
         <tbody>
           {resources.map((r, i) => (
             <tr key={r.id || i}>
+              <td style={{ textAlign: 'center' }}>
+                {onToggleFavorite && (
+                  <button
+                    onClick={() => onToggleFavorite(r.id)}
+                    title={favorites?.has(r.id) ? 'Remove from favorites' : 'Add to favorites'}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: 4,
+                      borderRadius: 4,
+                      transition: 'all 0.2s ease',
+                      opacity: favorites?.has(r.id) ? 1 : 0.4
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                    onMouseLeave={e => e.currentTarget.style.opacity = favorites?.has(r.id) ? '1' : '0.4'}
+                  >
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill={favorites?.has(r.id) ? '#fbbf24' : 'none'}
+                      stroke={favorites?.has(r.id) ? '#fbbf24' : 'currentColor'}
+                      strokeWidth="2"
+                    >
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                  </button>
+                )}
+              </td>
               <td>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                   <button
@@ -619,7 +652,7 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
             </tr>
           ))}
           {resources.length === 0 && (
-            <tr><td colSpan={7} style={{ padding: 40 }}>
+            <tr><td colSpan={8} style={{ padding: 40 }}>
               <EmptyState icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>} message="No resources matched your criteria" />
             </td></tr>
           )}
@@ -1448,10 +1481,10 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTypes, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, setRegionFilter, setSubFilter, setRgFilter, setTypeFilter, setShowOrphanedOnly, setShowUnattachedDiskOnly, setShowUnassignedPIPOnly, setShowUnattachedNICOnly, setCurrentPage, collapsed, onToggleCollapse }: {
+function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTypes, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, showFavoritesOnly, setRegionFilter, setSubFilter, setRgFilter, setTypeFilter, setShowOrphanedOnly, setShowUnattachedDiskOnly, setShowUnassignedPIPOnly, setShowUnattachedNICOnly, setShowFavoritesOnly, setCurrentPage, collapsed, onToggleCollapse, favorites }: {
   open: boolean; onClose: () => void;
   uniqueRegions: string[]; uniqueSubs: string[]; uniqueRGs: string[]; uniqueTypes: string[];
-  regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; showOrphanedOnly: boolean; showUnattachedDiskOnly: boolean; showUnassignedPIPOnly: boolean; showUnattachedNICOnly: boolean;
+  regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; showOrphanedOnly: boolean; showUnattachedDiskOnly: boolean; showUnassignedPIPOnly: boolean; showUnattachedNICOnly: boolean; showFavoritesOnly: boolean; favorites: Set<string>;
   setRegionFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setSubFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setRgFilter: React.Dispatch<React.SetStateAction<string[]>>;
@@ -1460,6 +1493,7 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
   setShowUnattachedDiskOnly: React.Dispatch<React.SetStateAction<boolean>>;
   setShowUnassignedPIPOnly: React.Dispatch<React.SetStateAction<boolean>>;
   setShowUnattachedNICOnly: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowFavoritesOnly: React.Dispatch<React.SetStateAction<boolean>>;
   setCurrentPage: React.Dispatch<React.SetStateAction<number>>;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -1469,7 +1503,7 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
     setCurrentPage(1);
   };
 
-  const hasFilters = regionFilter.length || subFilter.length || rgFilter.length || typeFilter || showOrphanedOnly || showUnattachedDiskOnly || showUnassignedPIPOnly || showUnattachedNICOnly;
+  const hasFilters = regionFilter.length || subFilter.length || rgFilter.length || typeFilter || showOrphanedOnly || showUnattachedDiskOnly || showUnassignedPIPOnly || showUnattachedNICOnly || showFavoritesOnly;
 
   return (
     <>
@@ -1501,7 +1535,7 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
                   <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Filters</span>
                 </div>
                 {hasFilters ? (
-                  <button onClick={() => { setRegionFilter([]); setSubFilter([]); setRgFilter([]); setTypeFilter(''); setShowOrphanedOnly(false); setCurrentPage(1); }}
+                  <button onClick={() => { setRegionFilter([]); setSubFilter([]); setRgFilter([]); setTypeFilter(''); setShowOrphanedOnly(false); setShowUnattachedDiskOnly(false); setShowUnassignedPIPOnly(false); setShowUnattachedNICOnly(false); setShowFavoritesOnly(false); setCurrentPage(1); }}
                     style={{ fontSize: 10, fontWeight: 700, color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', transition: 'opacity 0.2s' }}
                     onMouseEnter={e => e.currentTarget.style.opacity = '0.7'}
                     onMouseLeave={e => e.currentTarget.style.opacity = '1'}
@@ -1580,7 +1614,7 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
                     background: showUnattachedNICOnly ? 'rgba(244, 63, 94, 0.1)' : 'var(--bg-surface)',
                     color: showUnattachedNICOnly ? '#f43f5e' : 'var(--text-2)',
                     cursor: 'pointer', fontSize: 12, fontWeight: 600, width: '100%', textAlign: 'left',
-                    transition: 'all 0.2s ease'
+                    transition: 'all 0.2s ease', marginBottom: 8
                   }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -1588,6 +1622,34 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
                     <path d="M6 21V23M18 21V23M8 7v2M12 7v2M16 7v2" />
                   </svg>
                   Unattached NICs
+                </button>
+                <button
+                  onClick={() => { setShowFavoritesOnly(v => !v); setCurrentPage(1); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 10,
+                    border: showFavoritesOnly ? '1px solid #fbbf24' : '1px solid var(--border)',
+                    background: showFavoritesOnly ? 'rgba(251, 191, 36, 0.15)' : 'var(--bg-surface)',
+                    color: showFavoritesOnly ? '#fbbf24' : 'var(--text-2)',
+                    cursor: 'pointer', fontSize: 12, fontWeight: 600, width: '100%', textAlign: 'left',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill={showFavoritesOnly ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2.5">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  </svg>
+                  Favorites Only
+                  {favorites.size > 0 && (
+                    <span style={{
+                      marginLeft: 'auto',
+                      padding: '2px 8px',
+                      borderRadius: 12,
+                      background: showFavoritesOnly ? 'rgba(251, 191, 36, 0.3)' : 'var(--bg-hover)',
+                      fontSize: 11,
+                      fontWeight: 700
+                    }}>
+                      {favorites.size}
+                    </span>
+                  )}
                 </button>
               </div>
             </>
@@ -1629,6 +1691,24 @@ export default function App() {
   const [showUnattachedDiskOnly, setShowUnattachedDiskOnly] = useState(() => localStorage.getItem('cloudviz-unattachedDisk') === 'true');
   const [showUnassignedPIPOnly, setShowUnassignedPIPOnly] = useState(() => localStorage.getItem('cloudviz-unassignedPIP') === 'true');
   const [showUnattachedNICOnly, setShowUnattachedNICOnly] = useState(() => localStorage.getItem('cloudviz-unattachedNIC') === 'true');
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(() => localStorage.getItem('cloudviz-favoritesOnly') === 'true');
+  const [favorites, setFavorites] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem('cloudviz-favorites');
+    return new Set(saved ? JSON.parse(saved) : []);
+  });
+  const toggleFavorite = (resourceId: string) => {
+    setFavorites(prev => {
+      const next = new Set(prev);
+      if (next.has(resourceId)) {
+        next.delete(resourceId);
+      } else {
+        next.add(resourceId);
+      }
+      localStorage.setItem('cloudviz-favorites', JSON.stringify(Array.from(next)));
+      return next;
+    });
+  };
+  useEffect(() => { localStorage.setItem('cloudviz-favoritesOnly', String(showFavoritesOnly)); }, [showFavoritesOnly]);
   const [tagFilter, setTagFilter] = useState<{ key: string; value: string } | null>(() => {
     const saved = localStorage.getItem('cloudviz-tag-filter');
     return saved ? JSON.parse(saved) : null;
@@ -4579,11 +4659,12 @@ export default function App() {
           collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(v => !v)}
           uniqueRegions={uniqueRegions} uniqueSubs={uniqueSubs} uniqueRGs={uniqueRGs} uniqueTypes={uniqueTypes}
           regionFilter={regionFilter} subFilter={subFilter} rgFilter={rgFilter} typeFilter={typeFilter}
-          showOrphanedOnly={showOrphanedOnly} showUnattachedDiskOnly={showUnattachedDiskOnly} showUnassignedPIPOnly={showUnassignedPIPOnly} showUnattachedNICOnly={showUnattachedNICOnly}
+          showOrphanedOnly={showOrphanedOnly} showUnattachedDiskOnly={showUnattachedDiskOnly} showUnassignedPIPOnly={showUnassignedPIPOnly} showUnattachedNICOnly={showUnattachedNICOnly} showFavoritesOnly={showFavoritesOnly}
           setRegionFilter={setRegionFilter} setSubFilter={setSubFilter} setRgFilter={setRgFilter} setTypeFilter={setTypeFilter}
           setShowOrphanedOnly={setShowOrphanedOnly} setShowUnattachedDiskOnly={setShowUnattachedDiskOnly}
-          setShowUnassignedPIPOnly={setShowUnassignedPIPOnly} setShowUnattachedNICOnly={setShowUnattachedNICOnly}
+          setShowUnassignedPIPOnly={setShowUnassignedPIPOnly} setShowUnattachedNICOnly={setShowUnattachedNICOnly} setShowFavoritesOnly={setShowFavoritesOnly}
           setCurrentPage={setCurrentPage}
+          favorites={favorites}
         />
 
         {/* ── Main ── */}
@@ -4727,7 +4808,7 @@ export default function App() {
                 </div>
               ) : (
                 <ResourceTable
-                  resources={resources.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)}
+                  resources={(showFavoritesOnly ? resources.filter(r => favorites.has(r.id)) : resources).slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)}
                   sortConfig={sortConfig}
                   onSort={handleSort}
                   onLocationClick={loc => { setRegionFilter([loc]); setCurrentPage(1); }}
@@ -4735,6 +4816,8 @@ export default function App() {
                   onSubClick={sub => { setSubFilter([sub]); setCurrentPage(1); }}
                   onTypeClick={type => { setTypeFilter(type); setCurrentPage(1); }}
                   onResourceClick={r => { setSelectedResource(r); fetchAIInsights(r); }}
+                  favorites={favorites}
+                  onToggleFavorite={toggleFavorite}
                 />
               )}
 
@@ -5468,6 +5551,8 @@ export default function App() {
                 onSubClick={() => {}}
                 onTypeClick={type => setTypeFilter(type)}
                 onResourceClick={r => { setSelectedCost(null); setSelectedResource(r); fetchAIInsights(r); }}
+                favorites={favorites}
+                onToggleFavorite={toggleFavorite}
               />
             </div>
           </div>
