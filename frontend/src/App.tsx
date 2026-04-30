@@ -840,6 +840,28 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
   const [graph, setGraph] = useState<DependencyGraph | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Filter dependencies and dependents based on search query
+  const filteredDependencies = useMemo(() => {
+    if (!graph || !searchQuery.trim()) return graph?.dependencies || [];
+    const query = searchQuery.toLowerCase();
+    return (graph.dependencies || []).filter(dep =>
+      dep.name.toLowerCase().includes(query) ||
+      dep.type.toLowerCase().includes(query) ||
+      dep.relationship.toLowerCase().includes(query)
+    );
+  }, [graph, searchQuery]);
+
+  const filteredDependents = useMemo(() => {
+    if (!graph || !searchQuery.trim()) return graph?.dependents || [];
+    const query = searchQuery.toLowerCase();
+    return (graph.dependents || []).filter(dep =>
+      dep.name.toLowerCase().includes(query) ||
+      dep.type.toLowerCase().includes(query) ||
+      dep.relationship.toLowerCase().includes(query)
+    );
+  }, [graph, searchQuery]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -947,14 +969,74 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
                 </div>
               </div>
 
+              {/* Search/Filter */}
+              {((graph.dependencies || []).length + (graph.dependents || []).length) > 5 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
+                      <circle cx="11" cy="11" r="8" />
+                      <path d="M21 21l-4.35-4.35" />
+                    </svg>
+                    <input
+                      type="text"
+                      placeholder="Filter dependencies by name, type, or relationship..."
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px 10px 40px',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-surface)',
+                        color: 'var(--text-1)',
+                        fontSize: 13,
+                        outline: 'none',
+                        transition: 'all 0.2s ease'
+                      }}
+                      onFocus={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+                      onBlur={e => e.currentTarget.style.borderColor = 'var(--border)'}
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => setSearchQuery('')}
+                        style={{
+                          position: 'absolute',
+                          right: 10,
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          padding: '4px 8px',
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--text-3)',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          display: 'flex',
+                          alignItems: 'center'
+                        }}
+                        title="Clear filter"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M18 6L6 18M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                  {(searchQuery && graph) && (
+                    <div style={{ fontSize: 12, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+                      Showing {filteredDependencies.length + filteredDependents.length} of {(graph.dependencies || []).length + (graph.dependents || []).length}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Dependencies (outbound) */}
               {(graph.dependencies || []).length > 0 && (
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Dependencies ({(graph.dependencies || []).length})
+                    Dependencies ({searchQuery ? `${filteredDependencies.length} of ${(graph.dependencies || []).length}` : (graph.dependencies || []).length})
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {(graph.dependencies || []).map((dep, i) => {
+                    {filteredDependencies.map((dep, i) => {
                       const depResource = allResources.find(r => r.id === dep.id);
                       const depCost = depResource?.cost ?? 0;
                       return (
@@ -1026,10 +1108,10 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
               {(graph.dependents || []).length > 0 && (
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Dependents ({(graph.dependents || []).length})
+                    Dependents ({searchQuery ? `${filteredDependents.length} of ${(graph.dependents || []).length}` : (graph.dependents || []).length})
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {(graph.dependents || []).map((dep, i) => {
+                    {filteredDependents.map((dep, i) => {
                       const depResource = allResources.find(r => r.id === dep.id);
                       const depCost = depResource?.cost ?? 0;
                       return (
