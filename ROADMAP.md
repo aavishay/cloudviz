@@ -6,6 +6,13 @@
 
 ## 🎉 Recently Completed
 
+### v1.2.0 (April 2026)
+- [x] Cost display in Dependency Graph — Show cost per dependency/dependent resource
+- [x] Null safety improvements — Fixed dependents/dependencies null handling
+- [x] Clickable History items — Navigate to resources from history, handle deleted resources
+- [x] Sortable Cost Details table — Persistent column sorting
+- [x] Clickable dashboard elements — Environment bars, history items
+
 ### Code Quality & Performance (2024)
 - [x] Backend code simplification — Consolidated 6 duplicate metrics fetchers
 - [x] Error handling improvements — Fixed silent error handlers across codebase
@@ -70,6 +77,8 @@
 - [x] Dashboard customization (drag-and-drop cards) — Full drag-and-drop with persistence
 - [x] Export to Excel format — CSV export with Excel compatibility
 - [x] Shared dashboard links (read-only) — URL-based filter sharing
+- [x] Cost display in Dependency Graph — Show cost per resource in dependency view
+- [x] Clickable History items — Navigate to resources from history tab
 
 ---
 
@@ -82,6 +91,7 @@
 - [ ] Resource tagging enforcement policies — Foundation: tag-based filtering exists
 - [x] Cost allocation (chargeback reports) — Cost by subscription/environment available
 - [ ] SLA monitoring (resource uptime tracking) — VM metrics collection exists
+- [ ] PII masking for external reports — Mask resource names in exports/screenshots
 
 ### Frontend
 - [ ] User management panel
@@ -89,6 +99,8 @@
 - [ ] Cost allocation editor
 - [ ] Multi-tenant support
 - [ ] SSO login flow
+- [ ] Virtual scrolling for large tables — Support 10k+ resources with react-window
+- [ ] Theme transition animations — Smooth dark/light mode switching
 
 ---
 
@@ -101,6 +113,8 @@
 - [ ] Database migration system (currently manual)
 - [ ] Plugin architecture for custom cost sources
 - [ ] Rate limiting per user/API key
+- [ ] Redis caching option — For multi-user deployments
+- [ ] Server-side pagination — Reduce memory for large subscriptions
 
 ### Frontend
 - [ ] Mobile-responsive design overhaul
@@ -108,6 +122,8 @@
 - [ ] Offline mode with local data caching
 - [ ] Advanced query builder for custom reports
 - [ ] Custom dashboard widget SDK
+- [ ] Keyboard shortcuts help modal — `?` key for shortcut discovery
+- [ ] Component extraction — Split App.tsx into separate files
 
 ---
 
@@ -118,6 +134,19 @@
 - [ ] Carbon footprint estimation (green cloud) — Azure Sustainability API integration
 - [ ] Enhanced ML-based anomaly detection — Build on existing z-score implementation
 - [ ] Natural language cost queries — Expand existing Ollama integration
+- [ ] Cost anomaly alerts with severity levels — Statistical analysis with standard deviation
+- [ ] Resource auto-shutdown scheduling — Azure Automation integration for dev/test resources
+- [ ] Bulk tag editor — Mass update resources missing required tags
+- [ ] Tag compliance scoring — Track Environment, Owner, Project tag coverage
+
+### Quick Wins (High Impact, Low Effort)
+- [ ] Copy resource ID button — For Azure CLI/PowerShell usage
+- [ ] Resource count badge on tabs — Show (25) next to "Resources"
+- [ ] Search/filter within dependency graph — For long dependency lists
+- [ ] Export dependency graph as PNG/SVG — Share architecture diagrams
+- [ ] Resource favorites/pinning — Quick access to important resources
+- [ ] Cost per day toggle — More granular cost view option
+- [ ] Bulk selection actions — Multi-select for export/tagging
 
 ### Long-term (12+ months)
 - [ ] Mobile companion app (React Native/Flutter)
