@@ -135,7 +135,6 @@
 - [ ] Enhanced ML-based anomaly detection — Build on existing z-score implementation
 - [ ] Natural language cost queries — Expand existing Ollama integration
 - [ ] Cost anomaly alerts with severity levels — Statistical analysis with standard deviation
-- [ ] Resource auto-shutdown scheduling — Azure Automation integration for dev/test resources
 - [ ] Bulk tag editor — Mass update resources missing required tags
 - [ ] Tag compliance scoring — Track Environment, Owner, Project tag coverage
 
