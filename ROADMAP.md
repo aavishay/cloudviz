@@ -136,7 +136,7 @@
 - [x] Resource count badge on tabs — Show (25) next to "Resources" — ✅ **COMPLETED** — Shows count on Resources and History tabs with active/inactive styling
 - [x] Search/filter within dependency graph — For long dependency lists — ✅ **COMPLETED** — Search by name, type, or relationship; shows filtered count
 - [x] Export dependency graph as PNG/SVG — Share architecture diagrams — ✅ **COMPLETED** — Export buttons generate SVG with radial layout, connections, and legend; PNG uses 2x high-res canvas rendering
-- [ ] Resource favorites/pinning — Quick access to important resources
+- [x] Resource favorites/pinning — Quick access to important resources — ✅ **COMPLETED** — Star button on each resource row, Favorites Only quick filter, persisted to localStorage with favorites count badge
 - [ ] Cost per day toggle — More granular cost view option
 - [ ] Bulk selection actions — Multi-select for export/tagging
 
