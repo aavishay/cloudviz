@@ -857,12 +857,12 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 120, padding: 16, borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Dependencies</div>
-                  <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--accent)', marginTop: 4 }}>{graph.dependencies.length}</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--accent)', marginTop: 4 }}>{(graph.dependencies || []).length}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>Resources this depends on</div>
                 </div>
                 <div style={{ flex: 1, minWidth: 120, padding: 16, borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Dependents</div>
-                  <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--warning)', marginTop: 4 }}>{graph.dependents.length}</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--warning)', marginTop: 4 }}>{(graph.dependents || []).length}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>Resources depending on this</div>
                 </div>
                 <div style={{ flex: 1, minWidth: 120, padding: 16, borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
@@ -873,142 +873,156 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
               </div>
 
               {/* Dependencies (outbound) */}
-              {graph.dependencies.length > 0 && (
+              {(graph.dependencies || []).length > 0 && (
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Dependencies ({graph.dependencies.length})
+                    Dependencies ({(graph.dependencies || []).length})
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {graph.dependencies.map((dep, i) => (
-                      <div
-                        key={i}
-                        onClick={() => {
-                          if (onResourceClick) {
-                            // Try to find the full resource in the loaded resources
-                            const fullResource = allResources.find(r => r.id === dep.id);
-                            if (fullResource) {
-                              onResourceClick(fullResource);
-                            } else {
-                              // Fetch the resource details from API
-                              fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(dep.id)}`)
-                                .then(r => r.json())
-                                .then(data => {
-                                  if (data.data && data.data.length > 0) {
-                                    onResourceClick(data.data[0]);
-                                  }
-                                })
-                                .catch(err => console.error('Failed to fetch resource:', err));
+                    {(graph.dependencies || []).map((dep, i) => {
+                      const depResource = allResources.find(r => r.id === dep.id);
+                      const depCost = depResource?.cost ?? 0;
+                      return (
+                        <div
+                          key={i}
+                          onClick={() => {
+                            if (onResourceClick) {
+                              // Try to find the full resource in the loaded resources
+                              const fullResource = allResources.find(r => r.id === dep.id);
+                              if (fullResource) {
+                                onResourceClick(fullResource);
+                              } else {
+                                // Fetch the resource details from API
+                                fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(dep.id)}`)
+                                  .then(r => r.json())
+                                  .then(data => {
+                                    if (data.data && data.data.length > 0) {
+                                      onResourceClick(data.data[0]);
+                                    }
+                                  })
+                                  .catch(err => console.error('Failed to fetch resource:', err));
+                              }
                             }
-                          }
-                        }}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 12,
-                          padding: 12,
-                          borderRadius: 10,
-                          background: 'var(--bg-surface)',
-                          border: '1px solid var(--border)',
-                          cursor: onResourceClick ? 'pointer' : 'default',
-                          transition: 'background 0.2s ease, border-color 0.2s ease',
-                        }}
-                        onMouseEnter={e => {
-                          if (onResourceClick) {
-                            e.currentTarget.style.background = 'var(--bg-hover)';
-                            e.currentTarget.style.borderColor = 'var(--accent-border)';
-                          }
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.background = 'var(--bg-surface)';
-                          e.currentTarget.style.borderColor = 'var(--border)';
-                        }}
-                      >
-                        <span style={{ fontSize: 20 }}>{getRelationshipIcon(dep.relationship)}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.name}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(dep.type)}</div>
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 12,
+                            padding: 12,
+                            borderRadius: 10,
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border)',
+                            cursor: onResourceClick ? 'pointer' : 'default',
+                            transition: 'background 0.2s ease, border-color 0.2s ease',
+                          }}
+                          onMouseEnter={e => {
+                            if (onResourceClick) {
+                              e.currentTarget.style.background = 'var(--bg-hover)';
+                              e.currentTarget.style.borderColor = 'var(--accent-border)';
+                            }
+                          }}
+                          onMouseLeave={e => {
+                            e.currentTarget.style.background = 'var(--bg-surface)';
+                            e.currentTarget.style.borderColor = 'var(--border)';
+                          }}
+                        >
+                          <span style={{ fontSize: 20 }}>{getRelationshipIcon(dep.relationship)}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.name}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(dep.type)}</div>
+                          </div>
+                          {depCost > 0 && (
+                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>${depCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          )}
+                          <span style={{ padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: getRelationshipColor(dep.relationship) + '20', color: getRelationshipColor(dep.relationship) }}>
+                            {dep.relationship}
+                          </span>
+                          {dep.properties?.role && (
+                            <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{dep.properties.role}</span>
+                          )}
                         </div>
-                        <span style={{ padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: getRelationshipColor(dep.relationship) + '20', color: getRelationshipColor(dep.relationship) }}>
-                          {dep.relationship}
-                        </span>
-                        {dep.properties?.role && (
-                          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{dep.properties.role}</span>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
               {/* Dependents (inbound) */}
-              {graph.dependents.length > 0 && (
+              {(graph.dependents || []).length > 0 && (
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Dependents ({graph.dependents.length})
+                    Dependents ({(graph.dependents || []).length})
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {graph.dependents.map((dep, i) => (
-                      <div
-                        key={i}
-                        onClick={() => {
-                          if (onResourceClick) {
-                            // Try to find the full resource in the loaded resources
-                            const fullResource = allResources.find(r => r.id === dep.id);
-                            if (fullResource) {
-                              onResourceClick(fullResource);
-                            } else {
-                              // Fetch the resource details from API
-                              fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(dep.id)}`)
-                                .then(r => r.json())
-                                .then(data => {
-                                  if (data.data && data.data.length > 0) {
-                                    onResourceClick(data.data[0]);
-                                  }
-                                })
-                                .catch(err => console.error('Failed to fetch resource:', err));
+                    {(graph.dependents || []).map((dep, i) => {
+                      const depResource = allResources.find(r => r.id === dep.id);
+                      const depCost = depResource?.cost ?? 0;
+                      return (
+                        <div
+                          key={i}
+                          onClick={() => {
+                            if (onResourceClick) {
+                              // Try to find the full resource in the loaded resources
+                              const fullResource = allResources.find(r => r.id === dep.id);
+                              if (fullResource) {
+                                onResourceClick(fullResource);
+                              } else {
+                                // Fetch the resource details from API
+                                fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(dep.id)}`)
+                                  .then(r => r.json())
+                                  .then(data => {
+                                    if (data.data && data.data.length > 0) {
+                                      onResourceClick(data.data[0]);
+                                    }
+                                  })
+                                  .catch(err => console.error('Failed to fetch resource:', err));
+                              }
                             }
-                          }
-                        }}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 12,
-                          padding: 12,
-                          borderRadius: 10,
-                          background: 'var(--bg-surface)',
-                          border: '1px solid var(--border)',
-                          cursor: onResourceClick ? 'pointer' : 'default',
-                          transition: 'background 0.2s ease, border-color 0.2s ease',
-                        }}
-                        onMouseEnter={e => {
-                          if (onResourceClick) {
-                            e.currentTarget.style.background = 'var(--bg-hover)';
-                            e.currentTarget.style.borderColor = 'var(--accent-border)';
-                          }
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.background = 'var(--bg-surface)';
-                          e.currentTarget.style.borderColor = 'var(--border)';
-                        }}
-                      >
-                        <span style={{ fontSize: 20 }}>{getRelationshipIcon(dep.relationship)}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.name}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(dep.type)}</div>
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 12,
+                            padding: 12,
+                            borderRadius: 10,
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border)',
+                            cursor: onResourceClick ? 'pointer' : 'default',
+                            transition: 'background 0.2s ease, border-color 0.2s ease',
+                          }}
+                          onMouseEnter={e => {
+                            if (onResourceClick) {
+                              e.currentTarget.style.background = 'var(--bg-hover)';
+                              e.currentTarget.style.borderColor = 'var(--accent-border)';
+                            }
+                          }}
+                          onMouseLeave={e => {
+                            e.currentTarget.style.background = 'var(--bg-surface)';
+                            e.currentTarget.style.borderColor = 'var(--border)';
+                          }}
+                        >
+                          <span style={{ fontSize: 20 }}>{getRelationshipIcon(dep.relationship)}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dep.name}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{friendlyType(dep.type)}</div>
+                          </div>
+                          {depCost > 0 && (
+                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>${depCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          )}
+                          <span style={{ padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: getRelationshipColor(dep.relationship) + '20', color: getRelationshipColor(dep.relationship) }}>
+                            {dep.relationship}
+                          </span>
+                          {dep.properties?.role && (
+                            <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{dep.properties.role}</span>
+                          )}
                         </div>
-                        <span style={{ padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: getRelationshipColor(dep.relationship) + '20', color: getRelationshipColor(dep.relationship) }}>
-                          {dep.relationship}
-                        </span>
-                        {dep.properties?.role && (
-                          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{dep.properties.role}</span>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
-              {graph.dependencies.length === 0 && graph.dependents.length === 0 && (
+              {(graph.dependencies || []).length === 0 && (graph.dependents || []).length === 0 && (
                 <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-3)' }}>
                   <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ margin: '0 auto 16px', opacity: 0.5 }}>
                     <circle cx="12" cy="5" r="3" />
