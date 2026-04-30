@@ -85,20 +85,12 @@
 ## v0.4.0 - Enterprise Features 🚧 In Progress
 
 ### Backend
-- [ ] Role-based access control (RBAC) — Foundation: resource history tracking exists
-- [ ] Azure AD authentication — Replace current DefaultAzureCredential
-- [ ] Audit logging (who viewed/changed what) — Foundation: `/api/history` endpoint exists
 - [ ] Resource tagging enforcement policies — Foundation: tag-based filtering exists
 - [x] Cost allocation (chargeback reports) — Cost by subscription/environment available
 - [ ] SLA monitoring (resource uptime tracking) — VM metrics collection exists
-- [ ] PII masking for external reports — Mask resource names in exports/screenshots
 
 ### Frontend
-- [ ] User management panel
-- [ ] Audit log viewer — Foundation: History tab exists
 - [ ] Cost allocation editor
-- [ ] Multi-tenant support
-- [ ] SSO login flow
 - [ ] Virtual scrolling for large tables — Support 10k+ resources with react-window
 - [ ] Theme transition animations — Smooth dark/light mode switching
 
