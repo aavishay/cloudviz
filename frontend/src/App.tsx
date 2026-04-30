@@ -553,6 +553,29 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
                   >
                     {r.name}
                   </button>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(r.id).then(() => alert('Resource ID copied to clipboard!'))}
+                    title={`Copy Resource ID: ${r.id}`}
+                    style={{
+                      padding: '2px 6px',
+                      borderRadius: 4,
+                      background: 'var(--bg-surface)',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text-2)',
+                      fontSize: 10,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      opacity: 0.6,
+                      transition: 'opacity 0.2s ease'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                    onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    ID
+                  </button>
                 </div>
               </td>
               <td>
@@ -625,6 +648,30 @@ function AIInsightsModal({ resource, onClose, insight, loading, onViewDependenci
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 42 }}>
               <span style={{ fontSize: 12, color: 'var(--text-2)', fontWeight: 500, padding: '3px 8px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)' }}>{friendlyType(resource.type)}</span>
               {resource.status && <StatusDot status={resource.status} />}
+              <button
+                onClick={() => navigator.clipboard.writeText(resource.id).then(() => alert('Resource ID copied to clipboard!'))}
+                title={`Copy Resource ID: ${resource.id}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '3px 8px',
+                  borderRadius: 6,
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-2)',
+                  fontSize: 11,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  fontFamily: 'monospace'
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                Copy ID
+              </button>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -653,6 +700,34 @@ function AIInsightsModal({ resource, onClose, insight, loading, onViewDependenci
             <div className="info-cell">
               <div className="info-cell-label">Resource Group</div>
               <div className="info-cell-value" style={{ fontSize: 12, wordBreak: 'break-all' }}>{resource.resourceGroup}</div>
+            </div>
+            <div className="info-cell">
+              <div className="info-cell-label">Resource ID</div>
+              <div className="info-cell-value" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{resource.id}</span>
+                <button
+                  onClick={() => navigator.clipboard.writeText(resource.id).then(() => alert('Resource ID copied to clipboard!'))}
+                  title="Copy Resource ID"
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: 4,
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text-2)',
+                    fontSize: 10,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                  Copy
+                </button>
+              </div>
             </div>
             <div className="info-cell">
               <div className="info-cell-label">Location</div>
