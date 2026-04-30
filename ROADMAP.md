@@ -142,7 +142,7 @@
 - [ ] Tag compliance scoring — Track Environment, Owner, Project tag coverage
 
 ### Quick Wins (High Impact, Low Effort)
-- [ ] Copy resource ID button — For Azure CLI/PowerShell usage
+- [x] Copy resource ID button — For Azure CLI/PowerShell usage — ✅ **COMPLETED** — Button in resource table and AI Insights modal with full ID display
 - [ ] Resource count badge on tabs — Show (25) next to "Resources"
 - [ ] Search/filter within dependency graph — For long dependency lists
 - [ ] Export dependency graph as PNG/SVG — Share architecture diagrams
