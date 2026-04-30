@@ -85,12 +85,10 @@
 ## v0.4.0 - Enterprise Features 🚧 In Progress
 
 ### Backend
-- [ ] Resource tagging enforcement policies — Foundation: tag-based filtering exists
 - [x] Cost allocation (chargeback reports) — Cost by subscription/environment available
 - [ ] SLA monitoring (resource uptime tracking) — VM metrics collection exists
 
 ### Frontend
-- [ ] Cost allocation editor
 - [ ] Virtual scrolling for large tables — Support 10k+ resources with react-window
 - [ ] Theme transition animations — Smooth dark/light mode switching
 
