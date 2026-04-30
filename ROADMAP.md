@@ -134,7 +134,7 @@
 ### Quick Wins (High Impact, Low Effort)
 - [x] Copy resource ID button — For Azure CLI/PowerShell usage — ✅ **COMPLETED** — Button in resource table and AI Insights modal with full ID display
 - [x] Resource count badge on tabs — Show (25) next to "Resources" — ✅ **COMPLETED** — Shows count on Resources and History tabs with active/inactive styling
-- [ ] Search/filter within dependency graph — For long dependency lists
+- [x] Search/filter within dependency graph — For long dependency lists — ✅ **COMPLETED** — Search by name, type, or relationship; shows filtered count
 - [ ] Export dependency graph as PNG/SVG — Share architecture diagrams
 - [ ] Resource favorites/pinning — Quick access to important resources
 - [ ] Cost per day toggle — More granular cost view option
