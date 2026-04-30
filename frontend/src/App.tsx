@@ -836,6 +836,158 @@ interface DependencyGraph {
   generatedAt: string;
 }
 
+// Generate SVG for dependency graph export
+function generateDependencySVG(graph: DependencyGraph, resource: AzureResource): string {
+  const width = 800;
+  const height = 600;
+  const padding = 60;
+
+  // Color scheme based on theme
+  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+  const bgColor = isDark ? '#0a0a14' : '#fafafa';
+  const textColor = isDark ? '#e2e8f0' : '#1a1a2e';
+  const secondaryText = isDark ? '#94a3b8' : '#64748b';
+  const accentColor = '#3b82f6';
+  const warningColor = '#f59e0b';
+  const borderColor = isDark ? '#2d3748' : '#e2e8f0';
+
+  // Calculate node positions - radial layout
+  const centerX = width / 2;
+  const centerY = height / 2;
+
+  // Build nodes array
+  const nodes: Array<{ id: string; name: string; type: string; x: number; y: number; color: string; relationship?: string }> = [];
+
+  // Center node (main resource)
+  nodes.push({
+    id: resource.id,
+    name: resource.name,
+    type: resource.type,
+    x: centerX,
+    y: centerY,
+    color: accentColor
+  });
+
+  // Dependency nodes (left side)
+  const deps = graph.dependencies || [];
+  const depRadius = Math.min(200, (height - 2 * padding) / Math.max(1, deps.length) * 0.8);
+  deps.forEach((dep, i) => {
+    const angle = deps.length === 1 ? Math.PI : Math.PI * 0.25 + (Math.PI * 0.5 * i / Math.max(1, deps.length - 1));
+    nodes.push({
+      id: dep.id,
+      name: dep.name,
+      type: dep.type,
+      x: centerX + Math.cos(angle) * 180,
+      y: centerY + Math.sin(angle) * depRadius - (deps.length * 20),
+      color: warningColor,
+      relationship: dep.relationship
+    });
+  });
+
+  // Dependent nodes (right side)
+  const depend = graph.dependents || [];
+  const depenRadius = Math.min(200, (height - 2 * padding) / Math.max(1, depend.length) * 0.8);
+  depend.forEach((dep, i) => {
+    const angle = depend.length === 1 ? 0 : -Math.PI * 0.25 + (Math.PI * 0.5 * i / Math.max(1, depend.length - 1));
+    nodes.push({
+      id: dep.id,
+      name: dep.name,
+      type: dep.type,
+      x: centerX + Math.cos(angle) * 180,
+      y: centerY + Math.sin(angle) * depenRadius + (depend.length * 20),
+      color: warningColor,
+      relationship: dep.relationship
+    });
+  });
+
+  // Generate SVG content
+  const lines: string[] = [];
+
+  // Draw connections
+  deps.forEach((dep) => {
+    const targetNode = nodes.find(n => n.id === dep.id);
+    if (targetNode) {
+      lines.push(`
+        <line x1="${targetNode.x}" y1="${targetNode.y}" x2="${centerX}" y2="${centerY}"
+              stroke="${borderColor}" stroke-width="2" stroke-dasharray="5,5" />
+        <circle cx="${(targetNode.x + centerX) / 2}" cy="${(targetNode.y + centerY) / 2}" r="3" fill="${warningColor}" />
+      `);
+    }
+  });
+
+  depend.forEach((dep) => {
+    const targetNode = nodes.find(n => n.id === dep.id);
+    if (targetNode) {
+      lines.push(`
+        <line x1="${centerX}" y1="${centerY}" x2="${targetNode.x}" y2="${targetNode.y}"
+              stroke="${borderColor}" stroke-width="2" />
+        <polygon points="${targetNode.x - 8},${targetNode.y} ${targetNode.x - 16},${targetNode.y - 5} ${targetNode.x - 16},${targetNode.y + 5}"
+                 fill="${accentColor}" />
+      `);
+    }
+  });
+
+  // Draw nodes
+  const nodeCircles = nodes.map((node, i) => `
+    <g>
+      <circle cx="${node.x}" cy="${node.y}" r="24" fill="${bgColor}" stroke="${node.color}" stroke-width="3" />
+      <text x="${node.x}" y="${node.y + 5}" text-anchor="middle"
+            font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="600"
+            fill="${node.color}">${i === 0 ? '★' : i <= deps.length ? '↓' : '↑'}</text>
+      <text x="${node.x}" y="${node.y + 45}" text-anchor="middle"
+            font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="600"
+            fill="${textColor}">${node.name.length > 20 ? node.name.substring(0, 20) + '...' : node.name}</text>
+      <text x="${node.x}" y="${node.y + 60}" text-anchor="middle"
+            font-family="system-ui, -apple-system, sans-serif" font-size="9"
+            fill="${secondaryText}">${node.type.split('/').pop()?.substring(0, 25) || 'Resource'}</text>
+    </g>
+  `).join('\n');
+
+  // Title and metadata
+  const generatedAt = new Date().toLocaleString();
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <rect width="100%" height="100%" fill="${bgColor}" />
+
+    <!-- Title -->
+    <g transform="translate(${padding}, 30)">
+      <text font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="700" fill="${textColor}">
+        Dependency Graph: ${resource.name}</text>
+      <text y="20" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="${secondaryText}">
+        ${graph.relationships} relationships • Generated: ${generatedAt}</text>
+    </g>
+
+    <!-- Legend -->
+    <g transform="translate(${width - padding - 120}, 20)">
+      <rect width="120" height="70" rx="8" fill="${bgColor}" stroke="${borderColor}" stroke-width="1" />
+      <g transform="translate(10, 15)">
+        <circle r="6" fill="${accentColor}" />
+        <text x="15" y="4" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="${textColor}">Current Resource</text>
+      </g>
+      <g transform="translate(10, 35)">
+        <circle r="6" fill="${warningColor}" />
+        <text x="15" y="4" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="${textColor}">Dependencies</text>
+      </g>
+      <g transform="translate(10, 55)">
+        <line x1="-6" y1="0" x2="6" y2="0" stroke="${borderColor}" stroke-width="2" />
+        <text x="15" y="4" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="${textColor}">Connection</text>
+      </g>
+    </g>
+
+    <!-- Graph content -->
+    <g transform="translate(0, 50)">
+      ${lines.join('\n')}
+      ${nodeCircles}
+    </g>
+
+    <!-- Footer -->
+    <text x="${width / 2}" y="${height - 15}" text-anchor="middle"
+          font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="${secondaryText}">
+      CloudViz • Azure Resource Dependency Visualization
+    </text>
+  </svg>`;
+}
+
 function DependencyGraphModal({ resource, onClose, onResourceClick, allResources }: { resource: AzureResource; onClose: () => void; onResourceClick?: (resource: AzureResource) => void; allResources: AzureResource[] }) {
   const [graph, setGraph] = useState<DependencyGraph | null>(null);
   const [loading, setLoading] = useState(true);
@@ -951,7 +1103,7 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
           ) : graph ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               {/* Summary */}
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1, minWidth: 120, padding: 16, borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Dependencies</div>
                   <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--accent)', marginTop: 4 }}>{(graph.dependencies || []).length}</div>
@@ -967,9 +1119,106 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
                   <div style={{ fontSize: 24, fontWeight: 900, color: 'var(--text-1)', marginTop: 4 }}>{graph.relationships}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>Relationships found</div>
                 </div>
+                {/* Export Buttons */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Export Diagram</div>
+                  <button
+                    onClick={() => {
+                      // Generate SVG for the dependency graph
+                      const svg = generateDependencySVG(graph, resource);
+                      const blob = new Blob([svg], { type: 'image/svg+xml' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `dependency-graph-${resource.name.toLowerCase().replace(/\s+/g, '-')}.svg`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '8px 12px', borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg-surface)',
+                      color: 'var(--text-2)',
+                      cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.borderColor = 'var(--accent)';
+                      e.currentTarget.style.color = 'var(--accent)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.borderColor = 'var(--border)';
+                      e.currentTarget.style.color = 'var(--text-2)';
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    Export SVG
+                  </button>
+                  <button
+                    onClick={() => {
+                      // Generate and convert SVG to PNG
+                      const svg = generateDependencySVG(graph, resource);
+                      const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+                      const url = URL.createObjectURL(svgBlob);
+                      const img = new Image();
+                      img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const scale = 2; // 2x for high resolution
+                        canvas.width = 800 * scale;
+                        canvas.height = 600 * scale;
+                        const ctx = canvas.getContext('2d');
+                        if (ctx) {
+                          ctx.fillStyle = document.documentElement.classList.contains('dark') ? '#0a0a14' : '#fafafa';
+                          ctx.fillRect(0, 0, canvas.width, canvas.height);
+                          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                          const pngUrl = canvas.toDataURL('image/png');
+                          const a = document.createElement('a');
+                          a.href = pngUrl;
+                          a.download = `dependency-graph-${resource.name.toLowerCase().replace(/\s+/g, '-')}.png`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                        }
+                        URL.revokeObjectURL(url);
+                      };
+                      img.src = url;
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '8px 12px', borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg-surface)',
+                      color: 'var(--text-2)',
+                      cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                      transition: 'all 0.2s ease'
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.borderColor = 'var(--accent)';
+                      e.currentTarget.style.color = 'var(--accent)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.borderColor = 'var(--border)';
+                      e.currentTarget.style.color = 'var(--text-2)';
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                    Export PNG
+                  </button>
+                </div>
               </div>
 
-              {/* Search/Filter */}
+              {/* Search/Filter and Export */}
               {((graph.dependencies || []).length + (graph.dependents || []).length) > 5 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                   <div style={{ flex: 1, position: 'relative' }}>
