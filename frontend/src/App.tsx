@@ -462,10 +462,15 @@ interface ResourceTableProps {
   onResourceClick: (r: AzureResource) => void;
   favorites?: Set<string>;
   onToggleFavorite?: (id: string) => void;
+  selected?: Set<string>;
+  onSelect?: (id: string, selected: boolean) => void;
+  onSelectAll?: (selected: boolean) => void;
+  onBulkExport?: (ids: string[]) => void;
 }
 
 const COLUMNS = [
-  { key: 'favorite',       label: '',               defaultW: 40, minWidth: 36 },
+  { key: 'select',         label: '',               defaultW: 36, minWidth: 36 },
+  { key: 'favorite',       label: '',               defaultW: 36, minWidth: 36 },
   { key: 'name',           label: 'Name',           defaultW: 120, minWidth: 80 },
   { key: 'type',           label: 'Type',          defaultW: 100, minWidth: 60 },
   { key: 'location',       label: 'Location',       defaultW: 80, minWidth: 50 },
@@ -475,7 +480,7 @@ const COLUMNS = [
   { key: 'cost',           label: 'Cost',          defaultW: 80, minWidth: 60 },
 ];
 
-function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgClick, onSubClick, onTypeClick, onResourceClick, favorites, onToggleFavorite }: ResourceTableProps) {
+function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgClick, onSubClick, onTypeClick, onResourceClick, favorites, onToggleFavorite, selected, onSelect, onSelectAll, onBulkExport }: ResourceTableProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [widths, setWidths] = useState<Record<string, number>>(
     Object.fromEntries(COLUMNS.map(c => [c.key, c.defaultW]))
@@ -525,20 +530,96 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
     document.addEventListener('mouseup', onUp);
   };
 
+  // Calculate selection state
+  const allSelected = resources.length > 0 && resources.every(r => selected?.has(r.id));
+  const someSelected = resources.some(r => selected?.has(r.id)) && !allSelected;
+
   return (
-    <div className="resource-table-wrap" ref={wrapRef}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Bulk Actions Bar */}
+      {selected && selected.size > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '12px 16px',
+          background: 'var(--accent-dim)',
+          border: '1px solid var(--accent-border)',
+          borderRadius: 10,
+          gap: 12
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)' }}>
+              {selected.size} selected
+            </span>
+            <button
+              onClick={() => onSelectAll?.(false)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-surface)',
+                color: 'var(--text-2)',
+                fontSize: 12,
+                cursor: 'pointer'
+              }}
+            >
+              Clear
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => onBulkExport?.(Array.from(selected))}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid var(--accent)',
+                background: 'var(--accent)',
+                color: 'white',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+              </svg>
+              Export CSV
+            </button>
+          </div>
+        </div>
+      )}
       <table className="resource-table" style={{ width: '100%', tableLayout: 'fixed' }}>
         <thead>
           <tr>
             {COLUMNS.map(c => (
-              <th key={c.key} className={sortConfig.key === c.key ? 'sorted' : ''} onClick={() => onSort(c.key)} style={{ position: 'relative', width: widths[c.key], textAlign: c.key === 'cost' ? 'right' : 'left' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 12, justifyContent: c.key === 'cost' ? 'flex-end' : 'flex-start' }}>
-                  {c.label}
-                  {sortConfig.key === c.key && (
+              <th key={c.key} className={sortConfig.key === c.key ? 'sorted' : ''} onClick={() => c.key !== 'select' && onSort(c.key)} style={{ position: 'relative', width: widths[c.key], textAlign: c.key === 'cost' ? 'right' : c.key === 'select' || c.key === 'favorite' ? 'center' : 'left' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 12, justifyContent: c.key === 'cost' ? 'flex-end' : c.key === 'select' || c.key === 'favorite' ? 'center' : 'flex-start' }}>
+                  {c.key === 'select' && onSelectAll ? (
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={el => { if (el) el.indeterminate = someSelected; }}
+                      onChange={e => onSelectAll(e.target.checked)}
+                      onClick={e => e.stopPropagation()}
+                      style={{
+                        width: 16,
+                        height: 16,
+                        cursor: 'pointer',
+                        accentColor: 'var(--accent)'
+                      }}
+                    />
+                  ) : c.label}
+                  {sortConfig.key === c.key && c.key !== 'select' && c.key !== 'favorite' && (
                     <span style={{ color: 'var(--accent)', fontSize: 10 }}>{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
                   )}
                 </span>
-                <span className="col-resize-handle" onMouseDown={e => startResize(c.key, e)} onClick={e => e.stopPropagation()} />
+                {c.key !== 'select' && c.key !== 'favorite' && (
+                  <span className="col-resize-handle" onMouseDown={e => startResize(c.key, e)} onClick={e => e.stopPropagation()} />
+                )}
               </th>
             ))}
           </tr>
@@ -546,6 +627,21 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
         <tbody>
           {resources.map((r, i) => (
             <tr key={r.id || i}>
+              <td style={{ textAlign: 'center' }}>
+                {onSelect && (
+                  <input
+                    type="checkbox"
+                    checked={selected?.has(r.id) || false}
+                    onChange={e => onSelect(r.id, e.target.checked)}
+                    style={{
+                      width: 16,
+                      height: 16,
+                      cursor: 'pointer',
+                      accentColor: 'var(--accent)'
+                    }}
+                  />
+                )}
+              </td>
               <td style={{ textAlign: 'center' }}>
                 {onToggleFavorite && (
                   <button
@@ -652,7 +748,7 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
             </tr>
           ))}
           {resources.length === 0 && (
-            <tr><td colSpan={8} style={{ padding: 40 }}>
+            <tr><td colSpan={9} style={{ padding: 40 }}>
               <EmptyState icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>} message="No resources matched your criteria" />
             </td></tr>
           )}
@@ -1730,6 +1826,49 @@ export default function App() {
   });
 
   const [selectedResource, setSelectedResource] = useState<AzureResource | null>(null);
+  const [selectedResources, setSelectedResources] = useState<Set<string>>(new Set());
+  const clearSelection = () => setSelectedResources(new Set());
+  const toggleSelection = (id: string, selected: boolean) => {
+    setSelectedResources(prev => {
+      const next = new Set(prev);
+      if (selected) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  };
+  const selectAll = (selected: boolean) => {
+    if (selected) {
+      setSelectedResources(new Set(resources.map(r => r.id)));
+    } else {
+      setSelectedResources(new Set());
+    }
+  };
+  const bulkExportSelected = (ids: string[]) => {
+    const selectedData = resources.filter(r => ids.includes(r.id));
+    const headers = ['Name', 'Type', 'Location', 'Resource Group', 'Subscription', 'Cost', 'Status'];
+    const rows = selectedData.map(r => [
+      r.name,
+      r.type,
+      r.location,
+      r.resourceGroup,
+      r.subscriptionId,
+      r.cost?.toString() || '0',
+      r.status || 'Unknown'
+    ]);
+    const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cloudviz-selected-${selectedData.length}-resources.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
   const [showDependencyGraph, setShowDependencyGraph] = useState(false);
   const [aiInsight, setAiInsight] = useState<{ metrics: MetricSeries; recommendations: Array<{category: string; action: string; estimatedSavings: number; savingsPercent: number; rationale: string; priority: number}> } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -4827,9 +4966,13 @@ export default function App() {
                   onRgClick={rg => { setRgFilter([rg]); setCurrentPage(1); }}
                   onSubClick={sub => { setSubFilter([sub]); setCurrentPage(1); }}
                   onTypeClick={type => { setTypeFilter(type); setCurrentPage(1); }}
-                  onResourceClick={r => { setSelectedResource(r); fetchAIInsights(r); }}
+                  onResourceClick={r => { setSelectedResource(r); fetchAIInsights(r); clearSelection(); }}
                   favorites={favorites}
                   onToggleFavorite={toggleFavorite}
+                  selected={selectedResources}
+                  onSelect={toggleSelection}
+                  onSelectAll={selectAll}
+                  onBulkExport={bulkExportSelected}
                 />
               )}
 
@@ -5562,9 +5705,13 @@ export default function App() {
                 onRgClick={() => {}}
                 onSubClick={() => {}}
                 onTypeClick={type => setTypeFilter(type)}
-                onResourceClick={r => { setSelectedCost(null); setSelectedResource(r); fetchAIInsights(r); }}
+                onResourceClick={r => { setSelectedCost(null); setSelectedResource(r); fetchAIInsights(r); clearSelection(); }}
                 favorites={favorites}
                 onToggleFavorite={toggleFavorite}
+                selected={selectedResources}
+                onSelect={toggleSelection}
+                onSelectAll={selectAll}
+                onBulkExport={bulkExportSelected}
               />
             </div>
           </div>

@@ -138,7 +138,7 @@
 - [x] Export dependency graph as PNG/SVG — Share architecture diagrams — ✅ **COMPLETED** — Export buttons generate SVG with radial layout, connections, and legend; PNG uses 2x high-res canvas rendering
 - [x] Resource favorites/pinning — Quick access to important resources — ✅ **COMPLETED** — Star button on each resource row, Favorites Only quick filter, persisted to localStorage with favorites count badge
 - [x] Cost per day toggle — More granular cost view option — ✅ **COMPLETED** — Toggle in Settings to show daily cost (divided by 30) instead of monthly; updates Total Cost display and all cost cards
-- [ ] Bulk selection actions — Multi-select for export/tagging
+- [x] Bulk selection actions — Multi-select for export/tagging — ✅ **COMPLETED** — Checkbox column, select all/none with indeterminate state, bulk actions bar with count and Export CSV button
 
 ### Long-term (12+ months)
 - [ ] Mobile companion app (React Native/Flutter)
