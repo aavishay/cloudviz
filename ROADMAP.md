@@ -132,7 +132,10 @@
 ### Near-term (6-12 months)
 - [ ] Terraform/Ansible state import for infrastructure comparison
 - [ ] Carbon footprint estimation (green cloud) — Azure Sustainability API integration
-- [ ] Enhanced ML-based anomaly detection — Build on existing z-score implementation
+- [x] Enhanced ML-based anomaly detection — Build on existing z-score implementation — ✅ **COMPLETED**
+  - Backend: `/api/costs/anomalies/enhanced` with Isolation Forest, MAD, Seasonal algorithms
+  - Frontend: Dashboard panel showing severity badges (Critical/High/Medium/Low) with method indicators
+  - Features: Combined scoring, trend analysis, day-of-week patterns
 - [ ] Natural language cost queries — Expand existing Ollama integration
 - [ ] Cost anomaly alerts with severity levels — Statistical analysis with standard deviation
 - [ ] Bulk tag editor — Mass update resources missing required tags

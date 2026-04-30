@@ -27,6 +27,8 @@ import (
 	"golang.org/x/time/rate"
 	"io/fs"
 	"math"
+
+	"cloudviz-backend/anomaly"
 )
 
 //go:embed dist
@@ -516,6 +518,145 @@ func startServer(port string) {
 			"anomalies":   anomalies,
 			"threshold":   threshold,
 			"zThreshold":  zThreshold,
+			"periodStart": currentStart.Format("2006-01-02"),
+			"periodEnd":   now.Format("2006-01-02"),
+		})
+	})
+
+	// Enhanced ML-based anomaly detection endpoint
+	r.GET("/api/costs/anomalies/enhanced", func(c *gin.Context) {
+		subs := c.QueryArray("subscriptionId")
+
+		// Parse config from query params
+		config := anomaly.DefaultDetectorConfig()
+		if t := c.Query("zscore"); t != "" {
+			fmt.Sscanf(t, "%f", &config.ZScoreThreshold)
+		}
+		if t := c.Query("mad"); t != "" {
+			fmt.Sscanf(t, "%f", &config.MADThreshold)
+		}
+		if t := c.Query("isolation"); t != "" {
+			fmt.Sscanf(t, "%f", &config.IsolationThreshold)
+		}
+		if t := c.Query("seasonal"); t != "" {
+			fmt.Sscanf(t, "%f", &config.SeasonalThreshold)
+		}
+		if minSev := c.Query("minSeverity"); minSev != "" {
+			config.MinSeverity = anomaly.SeverityFromString(minSev)
+		}
+
+		// Parse method flags
+		methods := c.Query("methods")
+		if methods != "" && methods != "all" {
+			config.UseZScore = false
+			config.UseMAD = false
+			config.UseIsolationForest = false
+			config.UseSeasonal = false
+			for _, m := range strings.Split(methods, ",") {
+				switch m {
+				case "zscore":
+					config.UseZScore = true
+				case "mad":
+					config.UseMAD = true
+				case "isolation_forest":
+					config.UseIsolationForest = true
+				case "seasonal":
+					config.UseSeasonal = true
+				}
+			}
+		}
+
+		now := time.Now()
+		currentStart := now.AddDate(0, 0, -30)
+		previousStart := now.AddDate(0, 0, -60)
+		previousEnd := now.AddDate(0, 0, -30)
+
+		detector := anomaly.NewEnhancedDetector(config)
+
+		var allResults []anomaly.EnhancedAnomalyResult
+		var summaryMap = make(map[anomaly.AnomalySeverity]int)
+		var methodMap = make(map[string]int)
+
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 5)
+
+		for _, sid := range subs {
+			wg.Add(1)
+			go func(subID string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				// Fetch current period costs
+				current, err1 := fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
+				previous, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
+
+				if err1 != nil || err2 != nil {
+					return
+				}
+
+				// Convert to time/cost slices
+				dates := make([]time.Time, 0, len(current))
+				costs := make([]float64, 0, len(current))
+				costMap := make(map[string]float64)
+
+				for _, d := range current {
+					if dateStr, ok := d["date"].(string); ok {
+						if cost, ok := d["cost"].(float64); ok {
+							costMap[dateStr] = cost
+							date, _ := time.Parse("2006-01-02", dateStr)
+							dates = append(dates, date)
+							costs = append(costs, cost)
+						}
+					}
+				}
+
+				// Build previous costs aligned by date
+				previousCosts := make([]float64, len(dates))
+				for i, date := range dates {
+					// Find previous cost for same day of month in previous period
+					prevDateStr := date.AddDate(0, 0, -30).Format("2006-01-02")
+					for _, pd := range previous {
+						if pds, ok := pd["date"].(string); ok && pds == prevDateStr {
+							if pc, ok := pd["cost"].(float64); ok {
+								previousCosts[i] = pc
+							}
+							break
+						}
+					}
+				}
+
+				// Detect anomalies
+				results := detector.Detect(subID, dates, costs, previousCosts, nil)
+
+				mu.Lock()
+				allResults = append(allResults, results.Anomalies...)
+				for sev, count := range results.Summary.BySeverity {
+					summaryMap[sev] += count
+				}
+				for method, count := range results.Summary.ByMethod {
+					methodMap[method] += count
+				}
+				mu.Unlock()
+			}(sid)
+		}
+		wg.Wait()
+
+		c.JSON(200, map[string]any{
+			"anomalies":   allResults,
+			"summary": map[string]any{
+				"total":      len(allResults),
+				"bySeverity": summaryMap,
+				"byMethod":   methodMap,
+			},
+			"config": map[string]any{
+				"zScoreThreshold":    config.ZScoreThreshold,
+				"madThreshold":       config.MADThreshold,
+				"isolationThreshold": config.IsolationThreshold,
+				"seasonalThreshold":  config.SeasonalThreshold,
+				"methodsUsed":        []string{"zscore", "mad", "isolation_forest", "seasonal"}, // Simplified for now
+			},
 			"periodStart": currentStart.Format("2006-01-02"),
 			"periodEnd":   now.Format("2006-01-02"),
 		})

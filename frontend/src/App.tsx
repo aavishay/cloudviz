@@ -1299,6 +1299,8 @@ export default function App() {
   const [periodComparison, setPeriodComparison] = useState<any>(null);
   const [forecastData, setForecastData] = useState<{actualCost: number; forecastCost: number; periodDays: number} | null>(null);
   const [anomalyData, setAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; ratio: number; change: number}>; threshold: number; periodStart: string; periodEnd: string} | null>(null);
+  const [enhancedAnomalyData, setEnhancedAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; severity: string; score: number; methods: string[]; zscore?: number; madScore?: number; isolationScore?: number; seasonalScore?: number; trend?: string; dayOfWeek?: string}>; summary: {total: number; bySeverity: Record<string, number>; byMethod: Record<string, number>}; config: {zScoreThreshold: number; madThreshold: number; isolationThreshold: number; seasonalThreshold: number; methodsUsed: string[]}; periodStart: string; periodEnd: string} | null>(null);
+  const [enhancedAnomalyLoading, setEnhancedAnomalyLoading] = useState(false);
 
   // Resource group comparison state
   const [rgComparison, setRgComparison] = useState<{
@@ -3252,6 +3254,64 @@ export default function App() {
             )}
           </div>
         )}
+
+        {/* Enhanced ML-based Anomalies */}
+        {enhancedAnomalyData && enhancedAnomalyData.anomalies.length > 0 && (
+          <div className="card" style={{ padding: 24, marginTop: 16, borderLeft: '4px solid var(--accent)', background: 'linear-gradient(135deg, var(--bg-card) 0%, rgba(16 185 129 / 0.03) 100%)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--accent-dim)', border: '1px solid rgba(16 185 129 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M9 19v-6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2zm0 0V9a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v10m-6 0a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2m0 0V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v14a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2z" /></svg>
+              </div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>ML-Based Anomaly Detection</span>
+              <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                {Object.entries(enhancedAnomalyData.summary.bySeverity).map(([severity, count]) => (
+                  <span key={severity} style={{ padding: '4px 12px', borderRadius: 12, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', background: severity === 'critical' ? 'var(--danger-dim)' : severity === 'high' ? 'rgba(245 158 11 / 0.1)' : 'var(--accent-dim)', color: severity === 'critical' ? 'var(--danger)' : severity === 'high' ? 'var(--warning)' : 'var(--accent)' }}>
+                    {severity}: {count}
+                  </span>
+                ))}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+              Using {enhancedAnomalyData.config.methodsUsed.join(', ')} · Thresholds: z-score {enhancedAnomalyData.config.zScoreThreshold}, MAD {enhancedAnomalyData.config.madThreshold}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {enhancedAnomalyData.anomalies.slice(0, 6).map((a, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease' }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                  <div style={{
+                    width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    background: a.severity === 'critical' ? 'var(--danger-dim)' : a.severity === 'high' ? 'rgba(245 158 11 / 0.1)' : 'var(--accent-dim)',
+                    color: a.severity === 'critical' ? 'var(--danger)' : a.severity === 'high' ? 'var(--warning)' : 'var(--accent)',
+                    fontSize: 10, fontWeight: 700, textTransform: 'uppercase'
+                  }}>
+                    {a.severity?.slice(0, 3)}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.subscriptionId?.slice(0, 18)}...</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date} · {a.dayOfWeek}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {a.methods?.map((method, mi) => (
+                      <span key={mi} style={{ padding: '2px 8px', borderRadius: 4, fontSize: 9, fontWeight: 600, background: 'var(--bg-hover)', color: 'var(--text-2)', textTransform: 'uppercase' }}>
+                        {method.replace('_', ' ')}
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ textAlign: 'right', minWidth: 100 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: a.severity === 'critical' ? 'var(--danger)' : a.severity === 'high' ? 'var(--warning)' : 'var(--accent)' }}>Score: {a.score?.toFixed(1)}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                      {a.trend === 'spiking' ? '↗️' : a.trend === 'dropping' ? '↘️' : '→'} ${a.currentCost?.toFixed(0)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {enhancedAnomalyLoading && (
+              <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-3)', fontSize: 12 }}>
+                Analyzing with ML algorithms...
+              </div>
+            )}
+          </div>
+        )}
       </>
     ) },
   ];
@@ -3394,6 +3454,23 @@ export default function App() {
       .then(r => r.json())
       .then(data => { if (data.anomalies) setAnomalyData(data); })
       .catch(() => {});
+  }, [activeSubs]);
+
+  // Fetch enhanced ML-based anomalies
+  useEffect(() => {
+    if (activeSubs.length === 0) return;
+    setEnhancedAnomalyLoading(true);
+    const params = new URLSearchParams();
+    activeSubs.forEach(s => params.append('subscriptionId', s));
+    fetch(`http://localhost:8080/api/costs/anomalies/enhanced?${params}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.anomalies) {
+          setEnhancedAnomalyData(data);
+        }
+        setEnhancedAnomalyLoading(false);
+      })
+      .catch(() => { setEnhancedAnomalyLoading(false); });
   }, [activeSubs]);
 
 
