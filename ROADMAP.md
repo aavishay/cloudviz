@@ -6,6 +6,9 @@
 
 ## 🎉 Recently Completed
 
+### v1.3.0 (May 2026)
+- [x] Multi-subscription daily cost aggregation — Dashboard trends now aggregate daily costs across all active subscriptions instead of showing only the first subscription
+
 ### v1.2.0 (April 2026)
 - [x] Cost display in Dependency Graph — Show cost per dependency/dependent resource
 - [x] Null safety improvements — Fixed dependents/dependencies null handling

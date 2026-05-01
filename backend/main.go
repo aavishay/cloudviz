@@ -55,8 +55,9 @@ func toAnySlice(ss []string) []any {
 
 func main() {
 	var rootCmd = &cobra.Command{
-		Use:   "cloudviz",
-		Short: "CloudViz is an Azure resource and cost management tool",
+		Use:     "cloudviz",
+		Short:   "CloudViz is an Azure resource and cost management tool",
+		Version: "1.3.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
