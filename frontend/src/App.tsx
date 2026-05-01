@@ -4014,11 +4014,13 @@ export default function App() {
   }, [uniqueSubs, selectedSubs]);
 
 
-  // Fetch daily costs for dashboard trends
+  // Fetch daily costs for dashboard trends - aggregate across all active subscriptions
   useEffect(() => {
     if (activeSubs.length === 0) return;
-    const subId = activeSubs[0];
-    fetch(`http://localhost:8080/api/costs/daily?subscriptionId=${subId}&period=${costPeriod}`)
+    const params = new URLSearchParams();
+    activeSubs.forEach(s => params.append('subscriptionId', s));
+    params.append('period', costPeriod);
+    fetch(`http://localhost:8080/api/costs/daily?${params}`)
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
