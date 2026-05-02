@@ -62,6 +62,14 @@ func parseAzureDate(dateVal string) string {
 	if len(dateStr) == 8 {
 		return fmt.Sprintf("%s-%s-%s", dateStr[0:4], dateStr[4:6], dateStr[6:8])
 	}
+	// Handle numeric values that may come as scientific notation (e.g. 2.0260401e+07)
+	var dateNum float64
+	if _, err := fmt.Sscanf(dateStr, "%e", &dateNum); err == nil {
+		dateStr = fmt.Sprintf("%.0f", dateNum)
+		if len(dateStr) == 8 {
+			return fmt.Sprintf("%s-%s-%s", dateStr[0:4], dateStr[4:6], dateStr[6:8])
+		}
+	}
 	return dateStr
 }
 
@@ -607,7 +615,14 @@ func parseDailyCostsByType(res armcostmanagement.QueryResult) []map[string]any {
 			}
 		}
 		// Parse date string - Azure returns yyyyMMdd or yyyy-MM-dd format
+		// Handle numeric values that may come as scientific notation (e.g. 2.0260401e+07)
 		dateStr := strings.TrimSpace(dateVal)
+		if len(dateStr) != 8 {
+			var dateNum float64
+			if _, err := fmt.Sscanf(dateStr, "%e", &dateNum); err == nil {
+				dateStr = fmt.Sprintf("%.0f", dateNum)
+			}
+		}
 		if len(dateStr) == 8 { // yyyyMMdd
 			year := dateStr[0:4]
 			month := dateStr[4:6]
@@ -668,10 +683,6 @@ func parseForecastResults(res armcostmanagement.QueryResult) (actualCost, foreca
 		}
 
 		costVal := row[0] // PreTaxCost
-		currencyVal := ""
-		if len(row) > 2 {
-			currencyVal = fmt.Sprintf("%v", row[2])
-		}
 
 		var cost float64
 		switch v := costVal.(type) {
@@ -687,13 +698,30 @@ func parseForecastResults(res armcostmanagement.QueryResult) (actualCost, foreca
 			}
 		}
 
-		// currencyVal is like "Actual USD" or "Forecast USD" - 'A' prefix = actual cost
-		isActualRow := len(currencyVal) > 0 && currencyVal[0] == 'A'
+		// IsForecast column is at index 3. Azure returns it as a boolean or string.
+		// Actual rows: IsForecast=false/0, Forecast rows: IsForecast=true/1.
+		isForecastRow := false
+		if len(row) > 3 {
+			switch v := row[3].(type) {
+			case bool:
+				isForecastRow = v
+			case int:
+				isForecastRow = v != 0
+			case int64:
+				isForecastRow = v != 0
+			case string:
+				isForecastRow = v == "1" || strings.EqualFold(v, "true")
+			}
+		} else if len(row) > 2 {
+			// Fallback: older API may put actual/forecast indicator in Currency column
+			currencyVal := fmt.Sprintf("%v", row[2])
+			isForecastRow = len(currencyVal) > 0 && currencyVal[0] == 'F'
+		}
 
-		if isActualRow {
-			actualCost += cost
-		} else {
+		if isForecastRow {
 			forecastCost += cost
+		} else {
+			actualCost += cost
 		}
 	}
 	return actualCost, forecastCost

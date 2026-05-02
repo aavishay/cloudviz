@@ -57,7 +57,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.3.0",
+		Version: "1.4.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -354,7 +354,15 @@ func startServer(port string) {
 		}
 		wg.Wait()
 
-		if len(allDaily) == 0 {
+		// Check if fetched data has any actual cost
+		fetchedTotal := 0.0
+		for _, d := range allDaily {
+			if cost, ok := d["cost"].(float64); ok {
+				fetchedTotal += cost
+			}
+		}
+
+		if len(allDaily) == 0 || fetchedTotal == 0 {
 			// Fallback to aggregated totals spread across days
 			var results []map[string]any
 			totalCost := 0.0
@@ -1214,6 +1222,14 @@ func startServer(port string) {
 		}
 		wg.Wait()
 
+		// Check if fetched data has any actual cost
+		fetchedTotal := 0.0
+		for _, d := range allDaily {
+			if cost, ok := d["cost"].(float64); ok {
+				fetchedTotal += cost
+			}
+		}
+
 		// Group by date and type
 		byDateType := make(map[string]map[string]float64)
 		for _, d := range allDaily {
@@ -1227,6 +1243,47 @@ func startServer(port string) {
 				byDateType[date] = make(map[string]float64)
 			}
 			byDateType[date][rtype] += cost
+		}
+
+		// Fallback: if Azure returned no data or all zeros, build from cached costs
+		if len(byDateType) == 0 || fetchedTotal == 0 {
+			rows2, err := cache.db.Query("SELECT resource_type, COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+") GROUP BY resource_type", toAnySlice(subs)...)
+			if err == nil {
+				defer rows2.Close()
+				typeTotals := make(map[string]float64)
+				for rows2.Next() {
+					var rt string
+					var tc float64
+					if rows2.Scan(&rt, &tc) == nil {
+						if idx := strings.LastIndex(rt, "/"); idx >= 0 {
+							rt = rt[idx+1:]
+						}
+						rt = strings.ToLower(rt)
+						if rt != "" {
+							typeTotals[rt] += tc
+						}
+					}
+				}
+				var fallbackTypes []string
+				for t := range typeTotals {
+					fallbackTypes = append(fallbackTypes, t)
+				}
+				sort.Strings(fallbackTypes)
+				var fallbackResults []map[string]any
+				for i := days - 1; i >= 0; i-- {
+					date := now.AddDate(0, 0, -i).Format("2006-01-02")
+					entry := map[string]any{"date": date}
+					for _, t := range fallbackTypes {
+						entry[t] = typeTotals[t] / float64(days)
+					}
+					fallbackResults = append(fallbackResults, entry)
+				}
+				c.JSON(200, map[string]any{
+					"dates": fallbackResults,
+					"types": fallbackTypes,
+				})
+				return
+			}
 		}
 
 		// Collect all types
@@ -2250,6 +2307,7 @@ func historyHandler(c *gin.Context) {
 		SELECT
 			h.resource_id,
 			COALESCE(h.resource_name, h.resource_id),
+			COALESCE(h.resource_type, ''),
 			h.change_type,
 			h.field_name,
 			h.old_value,
@@ -2277,7 +2335,7 @@ func historyHandler(c *gin.Context) {
 	var history []ResourceChange
 	for rows.Next() {
 		var h ResourceChange
-		rows.Scan(&h.ResourceID, &h.ResourceName, &h.ChangeType, &h.Field, &h.OldValue, &h.NewValue, &h.Timestamp, &h.Cost)
+		rows.Scan(&h.ResourceID, &h.ResourceName, &h.ResourceType, &h.ChangeType, &h.Field, &h.OldValue, &h.NewValue, &h.Timestamp, &h.Cost)
 		history = append(history, h)
 	}
 	c.JSON(200, history)

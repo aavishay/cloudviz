@@ -20,6 +20,7 @@ type AzureResource struct {
 type ResourceChange struct {
 	ResourceID   string    `json:"resourceId"`
 	ResourceName string    `json:"resourceName"`
+	ResourceType string    `json:"resourceType"`
 	ChangeType   string    `json:"changeType"` // created, modified, deleted
 	Field        string    `json:"field"`
 	OldValue     string    `json:"oldValue"`

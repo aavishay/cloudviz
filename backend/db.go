@@ -78,6 +78,9 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON resource_history(timestamp)`); err != nil {
 		log.Printf("Warning: failed to create index: %v", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE resource_history ADD COLUMN resource_type TEXT`); err != nil {
+		log.Printf("Warning: failed to add resource_type column (may already exist): %v", err)
+	}
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS budgets (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -349,7 +352,7 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	}
 	defer tx.Rollback()
 
-	changeStmt, err := tx.Prepare(`INSERT INTO resource_history (resource_id, resource_name, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	changeStmt, err := tx.Prepare(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		log.Printf("Error: failed to prepare change statement: %v", err)
 		return
@@ -361,33 +364,33 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 		newMap[r.ID] = r
 		if old, exists := oldMap[r.ID]; exists {
 			if old.Name != r.Name {
-				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "name", old.Name, r.Name)
+				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "name", old.Name, r.Name)
 			}
 			if old.Status != r.Status {
-				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "status", old.Status, r.Status)
+				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "status", old.Status, r.Status)
 			}
 			if old.Location != r.Location {
-				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "location", old.Location, r.Location)
+				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "location", old.Location, r.Location)
 			}
 			if old.ResourceGroup != r.ResourceGroup {
-				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup)
+				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup)
 			}
 			if old.Type != r.Type {
-				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "type", old.Type, r.Type)
+				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "type", old.Type, r.Type)
 			}
 			oldTagsJSON, _ := json.Marshal(old.Tags)
 			newTagsJSON, _ := json.Marshal(r.Tags)
 			if string(oldTagsJSON) != string(newTagsJSON) {
-				recordChangeStmt(changeStmt, r.ID, r.Name, "modified", "tags", string(oldTagsJSON), string(newTagsJSON))
+				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "tags", string(oldTagsJSON), string(newTagsJSON))
 			}
 		} else {
-			recordChangeStmt(changeStmt, r.ID, r.Name, "created", "", "", "")
+			recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "created", "", "", "")
 		}
 	}
 
 	for id, old := range oldMap {
 		if _, exists := newMap[id]; !exists {
-			recordChangeStmt(changeStmt, id, old.Name, "deleted", "", "", "")
+			recordChangeStmt(changeStmt, id, old.Name, old.Type, "deleted", "", "", "")
 		}
 	}
 
@@ -419,15 +422,15 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 }
 
 // recordChangeStmt records a change using a prepared statement
-func recordChangeStmt(stmt *sql.Stmt, resourceID, resourceName, changeType, field, oldVal, newVal string) {
-	if _, err := stmt.Exec(resourceID, resourceName, changeType, field, oldVal, newVal, time.Now()); err != nil {
+func recordChangeStmt(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {
+	if _, err := stmt.Exec(resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now()); err != nil {
 		log.Printf("Warning: failed to record change: %v", err)
 	}
 }
 
-func recordChange(db *sql.DB, resourceID, resourceName, changeType, field, oldVal, newVal string) {
-	if _, err := db.Exec(`INSERT INTO resource_history (resource_id, resource_name, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		resourceID, resourceName, changeType, field, oldVal, newVal, time.Now()); err != nil {
+func recordChange(db *sql.DB, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {
+	if _, err := db.Exec(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now()); err != nil {
 		log.Printf("Warning: failed to record change: %v", err)
 	}
 }

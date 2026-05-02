@@ -137,6 +137,7 @@ interface AggregatedCost {
 interface ResourceChange {
   resourceId: string;
   resourceName: string;
+  resourceType: string;
   changeType: string;
   field: string;
   oldValue: string;
@@ -1926,6 +1927,7 @@ export default function App() {
   const [history, setHistory] = useState<ResourceChange[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [alertModal, setAlertModal] = useState<{open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info'} | null>(null);
   const [dragItem, setDragItem] = useState<string | null>(null);
   const [dragOverItem, setDragOverItem] = useState<string | null>(null);
   const [commitmentSavings, setCommitmentSavings] = useState<any>(null);
@@ -3102,7 +3104,46 @@ export default function App() {
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
               <XAxis dataKey="date" tick={{ fill: 'var(--text-3)', fontSize: 9 }} tickFormatter={v => typeof v === 'string' ? v.slice(5) : ''} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: 'var(--text-3)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-              <Tooltip formatter={(v: unknown) => `$${Number(v).toLocaleString()}`} labelFormatter={(l: unknown) => String(l)} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8, boxShadow: 'var(--shadow-lg)' }} />
+              <Tooltip
+                content={({ active, payload, label }: any) => {
+                  if (!active || !payload || payload.length === 0) return null;
+                  const items = payload
+                    .filter((p: any) => p.value > 0)
+                    .map((p: any) => ({
+                      name: p.dataKey,
+                      value: p.value,
+                      color: p.color,
+                    }))
+                    .sort((a: any, b: any) => b.value - a.value);
+                  const total = items.reduce((s: number, item: any) => s + item.value, 0);
+                  return (
+                    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 12, minWidth: 220 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 8, borderBottom: '1px solid var(--border)', paddingBottom: 6 }}>
+                        {label}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+                        {items.slice(0, 8).map((item: any, idx: number) => (
+                          <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <div style={{ width: 8, height: 8, borderRadius: 2, background: item.color, flexShrink: 0 }} />
+                              <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'capitalize' }}>{item.name}</span>
+                            </div>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: '#e2e8f0' }}>
+                              ${item.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 6, display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>Total</span>
+                        <span style={{ fontSize: 12, fontWeight: 900, color: '#34d399' }}>
+                          ${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }}
+              />
               {typeTrendData.types.slice(0, 8).map((t: string, i: number) => (
                 <Area key={t} type="monotone" dataKey={t} stackId="1" stroke="transparent" fill={COLORS[i % COLORS.length]} fillOpacity={1} />
               ))}
@@ -5066,7 +5107,25 @@ export default function App() {
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={true} vertical={false} />
                       <XAxis dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 11 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                      <Tooltip formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, '']} labelStyle={{ color: 'var(--text-1)', fontWeight: 800 }} itemStyle={{ color: '#22c55e', fontWeight: 700 }} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 8 }} />
+                      <Tooltip
+                        content={({ active, payload, label }: any) => {
+                          if (!active || !payload || payload.length === 0) return null;
+                          const val = payload[0].value;
+                          return (
+                            <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.4)', padding: 12, minWidth: 160 }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 6, borderBottom: '1px solid #334155', paddingBottom: 6 }}>
+                                {label}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                                <span style={{ fontSize: 11, color: '#94a3b8' }}>Cost</span>
+                                <span style={{ fontSize: 13, fontWeight: 700, color: '#34d399' }}>
+                                  ${Number(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
                       <Bar
                         dataKey="value"
                         radius={[4, 4, 0, 0]}
@@ -5356,7 +5415,12 @@ export default function App() {
                         onClick={() => {
                           // Skip deleted resources - they no longer exist
                           if (h.changeType === 'deleted') {
-                            alert(`This resource was deleted and is no longer available.\n\nName: ${h.resourceName}\nDeleted: ${new Date(h.timestamp).toLocaleString()}`);
+                            setAlertModal({
+                              open: true,
+                              title: 'Resource Deleted',
+                              message: `This resource was deleted and is no longer available.\n\nName: ${h.resourceName}\nDeleted: ${new Date(h.timestamp).toLocaleString()}`,
+                              icon: 'danger',
+                            });
                             return;
                           }
                           // Find the resource and navigate to it
@@ -5376,15 +5440,30 @@ export default function App() {
                                     setSelectedResource(foundResource);
                                     setCurrentPage(1);
                                   } else {
-                                    alert(`Resource not found. It may have been deleted or the ID has changed.\n\nName: ${h.resourceName}`);
+                                    setAlertModal({
+                                      open: true,
+                                      title: 'Resource Not Found',
+                                      message: `Resource not found. It may have been deleted or the ID has changed.\n\nName: ${h.resourceName}`,
+                                      icon: 'warning',
+                                    });
                                   }
                                 } else {
-                                  alert(`Resource not found. It may have been deleted or the ID has changed.\n\nName: ${h.resourceName}`);
+                                  setAlertModal({
+                                    open: true,
+                                    title: 'Resource Not Found',
+                                    message: `Resource not found. It may have been deleted or the ID has changed.\n\nName: ${h.resourceName}`,
+                                    icon: 'warning',
+                                  });
                                 }
                               })
                               .catch(err => {
                                 console.error('Failed to fetch resource:', err);
-                                alert(`Failed to load resource details.\n\nName: ${h.resourceName}`);
+                                setAlertModal({
+                                  open: true,
+                                  title: 'Failed to Load',
+                                  message: `Failed to load resource details.\n\nName: ${h.resourceName}`,
+                                  icon: 'danger',
+                                });
                               });
                           }
                         }}
@@ -5446,8 +5525,11 @@ export default function App() {
                               {new Date(h.timestamp).toLocaleString()}
                             </span>
                           </div>
-                          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-1)', marginBottom: h.cost > 0 ? 2 : 4 }}>
-                            {h.resourceName}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: h.cost > 0 ? 2 : 4 }}>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-1)' }}>{h.resourceName}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-2)', fontWeight: 500, padding: '2px 6px', background: 'var(--bg-surface)', borderRadius: 4, border: '1px solid var(--border)' }}>
+                              {friendlyType(h.resourceType)}
+                            </span>
                           </div>
                           {h.cost > 0 && (
                             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', marginBottom: 4 }}>
@@ -6087,6 +6169,56 @@ export default function App() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
                   <span>Shortcuts are disabled when typing in input fields</span>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Alert Modal ── */}
+      {alertModal && alertModal.open && (
+        <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && setAlertModal(null)}>
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{
+                  width: 36, height: 36, borderRadius: 10,
+                  background: alertModal.icon === 'danger' ? 'var(--danger-dim)' : alertModal.icon === 'warning' ? 'rgba(245 158 11 / 0.1)' : 'var(--accent-dim)',
+                  border: `1px solid ${alertModal.icon === 'danger' ? 'var(--danger)' : alertModal.icon === 'warning' ? 'rgba(245 158 11 / 0.2)' : 'var(--accent)'}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {alertModal.icon === 'danger' ? (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" strokeWidth="2.5"><path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h17.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></svg>
+                  ) : alertModal.icon === 'warning' ? (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h17.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01" /></svg>
+                  ) : (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
+                  )}
+                </div>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-1)' }}>{alertModal.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{alertModal.message.split('\n')[0]}</div>
+                </div>
+              </div>
+              <button className="modal-close" onClick={() => setAlertModal(null)}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6, whiteSpace: 'pre-line' }}>
+                {alertModal.message.split('\n').slice(1).join('\n')}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
+                <button
+                  onClick={() => setAlertModal(null)}
+                  style={{
+                    padding: '8px 16px', borderRadius: 8, border: 'none',
+                    background: alertModal.icon === 'danger' ? 'var(--danger)' : alertModal.icon === 'warning' ? '#f59e0b' : 'var(--accent)',
+                    color: 'white', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  OK
+                </button>
               </div>
             </div>
           </div>
