@@ -90,6 +90,7 @@
 ### Backend
 - [x] Cost allocation (chargeback reports) — Cost by subscription/environment available
 - [ ] SLA monitoring (resource uptime tracking) — VM metrics collection exists
+- [ ] PII masking for external reports — Mask resource names in exports/screenshots
 
 ### Frontend
 - [ ] Virtual scrolling for large tables — Support 10k+ resources with react-window
