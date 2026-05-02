@@ -85,7 +85,7 @@
 
 ---
 
-## v0.4.0 - Enterprise Features 🚧 In Progress
+## v0.4.0 - Enterprise Features ✅ Released (v1.7.0)
 
 ### Backend
 - [x] Cost allocation (chargeback reports) — Cost by subscription/environment available
@@ -94,7 +94,7 @@
 
 ### Frontend
 - [x] Virtual scrolling for large tables — Support 10k+ resources with react-window
-- [ ] Theme transition animations — Smooth dark/light mode switching
+- [x] Theme transition animations — Smooth dark/light mode switching — CSS transitions on `body, body *` for background, border, color, and box-shadow
 
 ---
 
