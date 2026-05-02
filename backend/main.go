@@ -57,7 +57,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.6.0",
+		Version: "1.7.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -242,6 +242,7 @@ func startServer(port string) {
 		tagValue := c.Query("tagValue")
 		sortBy := c.Query("sortBy")
 		sortOrder := c.Query("sortOrder")
+		mask := c.Query("mask") == "true"
 
 		res, totalCost, err := FetchResourcesWithCosts(c.Request.Context(), subs, rgs, types, locs, search, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly, tagKey, tagValue)
 		if err != nil {
@@ -276,6 +277,14 @@ func startServer(port string) {
 			})
 		}
 
+
+		if mask {
+			for i := range res {
+				res[i].Name = fmt.Sprintf("resource-%03d", i+1)
+				res[i].ResourceGroup = "masked-rg"
+				res[i].SubscriptionID = "masked-sub"
+			}
+		}
 		recordResourceChanges(cache.db, res)
 		c.JSON(200, gin.H{"data": res, "totalCost": totalCost, "total": len(res)})
 	})
@@ -1705,6 +1714,7 @@ func startServer(port string) {
 		unattachedDiskOnly := c.Query("unattachedDiskOnly") == "true"
 		unassignedPIPOnly := c.Query("unassignedPIPOnly") == "true"
 		unattachedNICOnly := c.Query("unattachedNICOnly") == "true"
+		mask := c.Query("mask") == "true"
 
 		res, _, err := FetchResourcesWithCosts(c.Request.Context(), subs, rgs, types, locs, search, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly, "", "")
 		if err != nil {
@@ -1712,6 +1722,13 @@ func startServer(port string) {
 			return
 		}
 
+		if mask {
+			for i := range res {
+				res[i].Name = fmt.Sprintf("resource-%03d", i+1)
+				res[i].ResourceGroup = "masked-rg"
+				res[i].SubscriptionID = "masked-sub"
+			}
+		}
 		c.Header("Content-Type", "text/csv")
 		c.Header("Content-Disposition", "attachment; filename=cloudviz-export.csv")
 		fmt.Fprintln(c.Writer, "Name,Type,Location,Resource Group,Subscription ID,Cost,Optimization")

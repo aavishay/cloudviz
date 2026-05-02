@@ -90,7 +90,7 @@
 ### Backend
 - [x] Cost allocation (chargeback reports) — Cost by subscription/environment available
 - [x] SLA monitoring (resource uptime tracking) — `/api/sla` endpoint with VmAvailabilityMetric + CPU fallback, dashboard panel showing uptime % and downtime hours
-- [ ] PII masking for external reports — Mask resource names in exports/screenshots
+- [x] PII masking for external reports — `?mask=true` param on `/api/resources` and `/api/export`, settings toggle with localStorage persistence, replaces names with `resource-001`, RG/sub with `masked-rg`/`masked-sub`
 
 ### Frontend
 - [x] Virtual scrolling for large tables — Support 10k+ resources with react-window

@@ -1916,6 +1916,8 @@ export default function App() {
   const [typeTrendData, setTypeTrendData] = useState<any>(null);
   const [envFilter, setEnvFilter] = useState(() => localStorage.getItem('cloudviz-envFilter') || '');
   useEffect(() => { localStorage.setItem('cloudviz-envFilter', envFilter); }, [envFilter]);
+  const [piiMasking, setPiiMasking] = useState(() => localStorage.getItem('cloudviz-piiMasking') === 'true');
+  useEffect(() => { localStorage.setItem('cloudviz-piiMasking', String(piiMasking)); }, [piiMasking]);
   const [wasteData, setWasteData] = useState<any>(null);
   const [periodComparison, setPeriodComparison] = useState<any>(null);
   const [forecastData, setForecastData] = useState<{actualCost: number; forecastCost: number; periodDays: number} | null>(null);
@@ -4047,12 +4049,13 @@ export default function App() {
     params.append('skip', String((currentPage - 1) * itemsPerPage));
     params.append('limit', String(itemsPerPage));
     if (sortConfig.key) { params.append('sortBy', sortConfig.key); params.append('sortOrder', sortConfig.direction); }
+    if (piiMasking) params.append('mask', 'true');
 
     fetch(`http://localhost:8080/api/resources?${params}`)
       .then(r => r.json())
       .then(data => { setResources(data.data || []); setTotalResources(data.total || 0); setFilteredTotalCost(data.totalCost || 0); setLoading(false); })
       .catch(err => { setError(err.message); setLoading(false); });
-  }, [regionFilter, subFilter, rgFilter, typeFilter, debouncedSearch, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, tagFilter, currentPage, sortConfig]);
+  }, [regionFilter, subFilter, rgFilter, typeFilter, debouncedSearch, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, tagFilter, currentPage, sortConfig, piiMasking]);
 
   const handleSort = (key: string) => {
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
@@ -4346,6 +4349,7 @@ export default function App() {
     rgFilter.forEach(f => params.append('resourceGroup', f));
     if (typeFilter) params.append('type', typeFilter);
     if (debouncedSearch) params.append('search', debouncedSearch);
+    if (piiMasking) params.append('mask', 'true');
     window.open(`http://localhost:8080/api/export?${params}`, '_blank');
   };
 
@@ -6108,6 +6112,20 @@ export default function App() {
                   ))}
                   <div style={{ fontSize: 11, color: 'var(--text-3)', padding: '4px 0' }}>
                     {uniqueSubs.length} subscription{uniqueSubs.length !== 1 ? 's' : ''} active — costs shown are across all subscriptions
+                  </div>
+                </div>
+              </div>
+
+              {/* PII Masking */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-2)', display: 'block', marginBottom: 8 }}>
+                  Privacy & Exports
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 8, background: 'var(--bg-surface)', border: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => setPiiMasking(v => !v)}>
+                  <input type="checkbox" checked={piiMasking} onChange={() => {}} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)' }} />
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>Mask resource names in exports & UI</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Replace names with anonymous IDs for screenshots and shared reports</div>
                   </div>
                 </div>
               </div>
