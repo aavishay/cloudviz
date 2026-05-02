@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, Component, type ReactNode } from 
 import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, AreaChart, Area, Brush, ReferenceArea } from 'recharts';
 import { jsPDF } from 'jspdf';
+import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 
@@ -486,36 +487,35 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
   const [widths, setWidths] = useState<Record<string, number>>(
     Object.fromEntries(COLUMNS.map(c => [c.key, c.defaultW]))
   );
+  const [listWidth, setListWidth] = useState(0);
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
 
   useEffect(() => {
-    const updateWidths = () => {
+    const update = () => {
       if (wrapRef.current) {
-        const availableW = wrapRef.current.clientWidth - 32; // Account for padding
+        const availableW = wrapRef.current.clientWidth - 32;
         const totalDefault = COLUMNS.reduce((sum, c) => sum + c.defaultW, 0);
         const totalMin = COLUMNS.reduce((sum, c) => sum + (c as typeof COLUMNS[0] & { minWidth: number }).minWidth, 0);
+        setListWidth(wrapRef.current.clientWidth);
 
         if (availableW < totalMin) {
-          // Very constrained - use minimum widths
           setWidths(Object.fromEntries(COLUMNS.map(c => [c.key, (c as typeof COLUMNS[0] & { minWidth: number }).minWidth])));
         } else if (availableW < totalDefault) {
-          // Constrained - scale down proportionally
           const scale = (availableW - totalMin) / (totalDefault - totalMin);
           setWidths(Object.fromEntries(COLUMNS.map(c => {
             const minW = (c as typeof COLUMNS[0] & { minWidth: number }).minWidth;
             return [c.key, Math.round(minW + (c.defaultW - minW) * scale)];
           })));
         } else {
-          // Extra space - expand all columns proportionally
           const scale = availableW / totalDefault;
           setWidths(Object.fromEntries(COLUMNS.map(c => [c.key, Math.floor(c.defaultW * scale)])));
         }
       }
     };
 
-    updateWidths();
-    window.addEventListener('resize', updateWidths);
-    return () => window.removeEventListener('resize', updateWidths);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
   }, []);
 
   const startResize = (key: string, e: React.MouseEvent) => {
@@ -534,6 +534,101 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
   // Calculate selection state
   const allSelected = resources.length > 0 && resources.every(r => selected?.has(r.id));
   const someSelected = resources.some(r => selected?.has(r.id)) && !allSelected;
+
+  const Row = ({ index, style, data }: ListChildComponentProps) => {
+    const { resources, widths, selected, favorites, onSelect, onToggleFavorite, onResourceClick, onLocationClick, onRgClick, onSubClick, onTypeClick } = data as any;
+    const r = resources[index] as AzureResource;
+    return (
+      <div style={{ ...style, display: 'flex', alignItems: 'center' }} className="resource-table-virtual-row">
+        <div style={{ width: widths.select, textAlign: 'center', flexShrink: 0, padding: '0 14px' }}>
+          {onSelect && (
+            <input
+              type="checkbox"
+              checked={selected?.has(r.id) || false}
+              onChange={e => onSelect(r.id, e.target.checked)}
+              style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)' }}
+            />
+          )}
+        </div>
+        <div style={{ width: widths.favorite, textAlign: 'center', flexShrink: 0, padding: '0 14px' }}>
+          {onToggleFavorite && (
+            <button
+              onClick={() => onToggleFavorite(r.id)}
+              title={favorites?.has(r.id) ? 'Remove from favorites' : 'Add to favorites'}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, borderRadius: 4, transition: 'all 0.2s ease', opacity: favorites?.has(r.id) ? 1 : 0.4 }}
+              onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+              onMouseLeave={e => e.currentTarget.style.opacity = favorites?.has(r.id) ? '1' : '0.4'}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill={favorites?.has(r.id) ? '#fbbf24' : 'none'} stroke={favorites?.has(r.id) ? '#fbbf24' : 'currentColor'} strokeWidth="2">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+            </button>
+          )}
+        </div>
+        <div style={{ width: widths.name, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <button onClick={() => onResourceClick(r)} title={r.name} className="resource-name-link cell-truncate" style={{ fontWeight: 600 }}>
+              {r.name}
+            </button>
+            <button
+              onClick={() => navigator.clipboard.writeText(r.id)}
+              title={`Copy Resource ID: ${r.id}`}
+              style={{ padding: '2px 6px', borderRadius: 4, background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, opacity: 0.6, transition: 'opacity 0.2s ease' }}
+              onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+              onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              ID
+            </button>
+          </div>
+        </div>
+        <div style={{ width: widths.type, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
+          <button className="badge badge-type cell-truncate" onClick={() => onTypeClick(r.type)} title={friendlyType(r.type)}>
+            {friendlyType(r.type)}
+          </button>
+        </div>
+        <div style={{ width: widths.location, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
+          <button className="badge badge-loc cell-truncate" onClick={() => onLocationClick(r.location)} title={r.location}>
+            {r.location}
+          </button>
+        </div>
+        <div style={{ width: widths.resourceGroup, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
+          <button className="badge badge-rg cell-truncate" onClick={() => onRgClick(r.resourceGroup)} title={r.resourceGroup}>
+            {r.resourceGroup}
+          </button>
+        </div>
+        <div style={{ width: widths.subscriptionId, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
+          <button onClick={() => onSubClick(r.subscriptionId)} title={r.subscriptionId} className="cell-truncate" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-2)', width: '100%', textAlign: 'left' }}>
+            {r.subscriptionId}
+          </button>
+        </div>
+        <div style={{ width: widths.optimization, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <ScoreRing score={r.score ?? 100} />
+            {r.optimization && (
+              <span className="badge badge-opt" style={{ fontSize: 9, padding: '2px 6px' }}>
+                {r.optimization}
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{ width: widths.cost, flexShrink: 0, padding: '0 14px', textAlign: 'right' }}>
+          <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>
+            ${(r.cost ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const itemData = useMemo(() => ({
+    resources, widths, selected, favorites,
+    onSelect, onToggleFavorite, onResourceClick,
+    onLocationClick, onRgClick, onSubClick, onTypeClick
+  }), [resources, widths, selected, favorites, onSelect, onToggleFavorite, onResourceClick, onLocationClick, onRgClick, onSubClick, onTypeClick]);
+
+  const HEADER_HEIGHT = 40;
+  const LIST_HEIGHT = 540;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -593,47 +688,19 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
           </div>
         </div>
       )}
-      <table className="resource-table" style={{ width: '100%', tableLayout: 'fixed' }}>
-        <thead>
-          <tr>
-            {COLUMNS.map(c => (
-              <th key={c.key} className={sortConfig.key === c.key ? 'sorted' : ''} onClick={() => c.key !== 'select' && onSort(c.key)} style={{ position: 'relative', width: widths[c.key], textAlign: c.key === 'cost' ? 'right' : c.key === 'select' || c.key === 'favorite' ? 'center' : 'left' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 12, justifyContent: c.key === 'cost' ? 'flex-end' : c.key === 'select' || c.key === 'favorite' ? 'center' : 'flex-start' }}>
-                  {c.key === 'select' && onSelectAll ? (
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      ref={el => { if (el) el.indeterminate = someSelected; }}
-                      onChange={e => onSelectAll(e.target.checked)}
-                      onClick={e => e.stopPropagation()}
-                      style={{
-                        width: 16,
-                        height: 16,
-                        cursor: 'pointer',
-                        accentColor: 'var(--accent)'
-                      }}
-                    />
-                  ) : c.label}
-                  {sortConfig.key === c.key && c.key !== 'select' && c.key !== 'favorite' && (
-                    <span style={{ color: 'var(--accent)', fontSize: 10 }}>{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
-                  )}
-                </span>
-                {c.key !== 'select' && c.key !== 'favorite' && (
-                  <span className="col-resize-handle" onMouseDown={e => startResize(c.key, e)} onClick={e => e.stopPropagation()} />
-                )}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {resources.map((r, i) => (
-            <tr key={r.id || i}>
-              <td style={{ textAlign: 'center' }}>
-                {onSelect && (
+      <div ref={wrapRef} style={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-card)', overflow: 'hidden', height: LIST_HEIGHT }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border)', height: HEADER_HEIGHT, flexShrink: 0 }} className="resource-table-virtual-header">
+          {COLUMNS.map(c => (
+            <div key={c.key} className={sortConfig.key === c.key ? 'sorted' : ''} onClick={() => c.key !== 'select' && onSort(c.key)} style={{ position: 'relative', width: widths[c.key], textAlign: c.key === 'cost' ? 'right' : c.key === 'select' || c.key === 'favorite' ? 'center' : 'left', flexShrink: 0, padding: '10px 14px', cursor: c.key !== 'select' ? 'pointer' : 'default' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 12, justifyContent: c.key === 'cost' ? 'flex-end' : c.key === 'select' || c.key === 'favorite' ? 'center' : 'flex-start' }}>
+                {c.key === 'select' && onSelectAll ? (
                   <input
                     type="checkbox"
-                    checked={selected?.has(r.id) || false}
-                    onChange={e => onSelect(r.id, e.target.checked)}
+                    checked={allSelected}
+                    ref={el => { if (el) el.indeterminate = someSelected; }}
+                    onChange={e => onSelectAll(e.target.checked)}
+                    onClick={e => e.stopPropagation()}
                     style={{
                       width: 16,
                       height: 16,
@@ -641,120 +708,35 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
                       accentColor: 'var(--accent)'
                     }}
                   />
+                ) : c.label}
+                {sortConfig.key === c.key && c.key !== 'select' && c.key !== 'favorite' && (
+                  <span style={{ color: 'var(--accent)', fontSize: 10 }}>{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
                 )}
-              </td>
-              <td style={{ textAlign: 'center' }}>
-                {onToggleFavorite && (
-                  <button
-                    onClick={() => onToggleFavorite(r.id)}
-                    title={favorites?.has(r.id) ? 'Remove from favorites' : 'Add to favorites'}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      padding: 4,
-                      borderRadius: 4,
-                      transition: 'all 0.2s ease',
-                      opacity: favorites?.has(r.id) ? 1 : 0.4
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                    onMouseLeave={e => e.currentTarget.style.opacity = favorites?.has(r.id) ? '1' : '0.4'}
-                  >
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill={favorites?.has(r.id) ? '#fbbf24' : 'none'}
-                      stroke={favorites?.has(r.id) ? '#fbbf24' : 'currentColor'}
-                      strokeWidth="2"
-                    >
-                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                    </svg>
-                  </button>
-                )}
-              </td>
-              <td>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                  <button
-                    onClick={() => onResourceClick(r)}
-                    title={r.name}
-                    className="resource-name-link cell-truncate"
-                    style={{ fontWeight: 600 }}
-                  >
-                    {r.name}
-                  </button>
-                  <button
-                    onClick={() => navigator.clipboard.writeText(r.id).then(() => alert('Resource ID copied to clipboard!'))}
-                    title={`Copy Resource ID: ${r.id}`}
-                    style={{
-                      padding: '2px 6px',
-                      borderRadius: 4,
-                      background: 'var(--bg-surface)',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text-2)',
-                      fontSize: 10,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      opacity: 0.6,
-                      transition: 'opacity 0.2s ease'
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                    onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                    ID
-                  </button>
-                </div>
-              </td>
-              <td>
-                <button className="badge badge-type cell-truncate" onClick={() => onTypeClick(r.type)} title={friendlyType(r.type)}>
-                  {friendlyType(r.type)}
-                </button>
-              </td>
-              <td>
-                <button className="badge badge-loc cell-truncate" onClick={() => onLocationClick(r.location)} title={r.location}>
-                  {r.location}
-                </button>
-              </td>
-              <td>
-                <button className="badge badge-rg cell-truncate" onClick={() => onRgClick(r.resourceGroup)} title={r.resourceGroup}>
-                  {r.resourceGroup}
-                </button>
-              </td>
-              <td>
-                <button 
-                  onClick={() => onSubClick(r.subscriptionId)} 
-                  title={r.subscriptionId} 
-                  className="cell-truncate"
-                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-2)', width: '100%', textAlign: 'left' }}
-                >
-                  {r.subscriptionId}
-                </button>
-              </td>
-              <td>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <ScoreRing score={r.score ?? 100} />
-                  {r.optimization && (
-                    <span className="badge badge-opt" style={{ fontSize: 9, padding: '2px 6px' }}>
-                      {r.optimization}
-                    </span>
-                  )}
-                </div>
-              </td>
-              <td style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: 'var(--accent)', textAlign: 'right' }}>
-                ${(r.cost ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </td>
-            </tr>
+              </span>
+              {c.key !== 'select' && c.key !== 'favorite' && (
+                <span className="col-resize-handle" onMouseDown={e => startResize(c.key, e)} onClick={e => e.stopPropagation()} />
+              )}
+            </div>
           ))}
-          {resources.length === 0 && (
-            <tr><td colSpan={9} style={{ padding: 40 }}>
-              <EmptyState icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>} message="No resources matched your criteria" />
-            </td></tr>
-          )}
-        </tbody>
-      </table>
+        </div>
+        {/* Virtual Body */}
+        {resources.length > 0 && listWidth > 0 ? (
+          <FixedSizeList
+            height={LIST_HEIGHT - HEADER_HEIGHT}
+            itemCount={resources.length}
+            itemSize={48}
+            itemData={itemData}
+            width={listWidth}
+            className="resource-table-virtual-list"
+          >
+            {Row}
+          </FixedSizeList>
+        ) : resources.length === 0 ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: LIST_HEIGHT - HEADER_HEIGHT }}>
+            <EmptyState icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>} message="No resources matched your criteria" />
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -779,7 +761,7 @@ function AIInsightsModal({ resource, onClose, insight, loading, onViewDependenci
               <span style={{ fontSize: 12, color: 'var(--text-2)', fontWeight: 500, padding: '3px 8px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)' }}>{friendlyType(resource.type)}</span>
               {resource.status && <StatusDot status={resource.status} />}
               <button
-                onClick={() => navigator.clipboard.writeText(resource.id).then(() => alert('Resource ID copied to clipboard!'))}
+                onClick={() => navigator.clipboard.writeText(resource.id)}
                 title={`Copy Resource ID: ${resource.id}`}
                 style={{
                   display: 'flex',
@@ -836,7 +818,7 @@ function AIInsightsModal({ resource, onClose, insight, loading, onViewDependenci
               <div className="info-cell-value" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{resource.id}</span>
                 <button
-                  onClick={() => navigator.clipboard.writeText(resource.id).then(() => alert('Resource ID copied to clipboard!'))}
+                  onClick={() => navigator.clipboard.writeText(resource.id)}
                   title="Copy Resource ID"
                   style={{
                     padding: '4px 8px',
@@ -4303,7 +4285,6 @@ export default function App() {
     );
   }, [resources, selectedCost]);
 
-  const totalPages = Math.max(1, Math.ceil(totalResources / itemsPerPage));
 
   const exportCSV = () => {
     const params = new URLSearchParams();
@@ -4977,7 +4958,7 @@ export default function App() {
                   </div>
                   <div className="stat-pill">
                     <span className="stat-label">Showing</span>
-                    <span className="stat-value neutral">{Math.min(itemsPerPage, resources.length).toLocaleString()}</span>
+                    <span className="stat-value neutral">{(showFavoritesOnly ? resources.filter(r => favorites.has(r.id)) : resources).length.toLocaleString()}</span>
                     <span style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>of {totalResources.toLocaleString()}</span>
                   </div>
 
@@ -5002,7 +4983,7 @@ export default function App() {
                 </div>
               ) : (
                 <ResourceTable
-                  resources={(showFavoritesOnly ? resources.filter(r => favorites.has(r.id)) : resources).slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)}
+                  resources={showFavoritesOnly ? resources.filter(r => favorites.has(r.id)) : resources}
                   sortConfig={sortConfig}
                   onSort={handleSort}
                   onLocationClick={loc => { setRegionFilter([loc]); setCurrentPage(1); }}
@@ -5019,24 +5000,6 @@ export default function App() {
                 />
               )}
 
-              {/* Pagination */}
-              {!loading && totalPages > 1 && (
-                <div className="pagination">
-                  <button className="page-btn" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}>«</button>
-                  <button className="page-btn" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>‹</button>
-                  {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
-                    const page = totalPages <= 7 ? i + 1 : currentPage <= 4 ? i + 1 : currentPage >= totalPages - 3 ? totalPages - 6 + i : currentPage - 3 + i;
-                    return (
-                      <button key={page} className={`page-btn ${page === currentPage ? 'active' : ''}`} onClick={() => setCurrentPage(page)}>{page}</button>
-                    );
-                  })}
-                  <button className="page-btn" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>›</button>
-                  <button className="page-btn" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages}>»</button>
-                  <span style={{ fontSize: 12, color: 'var(--text-2)', marginLeft: 4 }}>
-                    {((currentPage - 1) * itemsPerPage) + 1}–{Math.min(currentPage * itemsPerPage, totalResources)} of {totalResources.toLocaleString()}
-                  </span>
-                </div>
-              )}
             </div>
           ) : activeTab === 'costs' ? (
             /* ── Costs Tab ── */

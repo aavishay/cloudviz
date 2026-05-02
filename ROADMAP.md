@@ -93,7 +93,7 @@
 - [ ] PII masking for external reports — Mask resource names in exports/screenshots
 
 ### Frontend
-- [ ] Virtual scrolling for large tables — Support 10k+ resources with react-window
+- [x] Virtual scrolling for large tables — Support 10k+ resources with react-window
 - [ ] Theme transition animations — Smooth dark/light mode switching
 
 ---

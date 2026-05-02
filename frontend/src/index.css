@@ -859,6 +859,60 @@ body, body * {
   height: 48px;
 }
 
+/* ─── Virtual Table (react-window) ──────────────────────────────────────────── */
+.resource-table-virtual-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.resource-table-virtual-header {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  user-select: none;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.resource-table-virtual-header > div {
+  position: relative;
+  text-align: left;
+}
+.resource-table-virtual-header > div:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.resource-table-virtual-header > div.sorted {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.resource-table-virtual-row {
+  border-bottom: 1px solid var(--border);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.resource-table-virtual-row:last-child { border-bottom: none; }
+.resource-table-virtual-row:hover {
+  background: var(--bg-hover);
+  transform: translateX(2px);
+}
+.resource-table-virtual-row:active {
+  background: var(--accent-dim);
+}
+.resource-table-virtual-row > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Table row status indicators */
 .resource-table tbody tr.orphaned {
   background: var(--danger-dim);
