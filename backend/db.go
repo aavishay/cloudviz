@@ -160,6 +160,24 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	}
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_alerts_sub ON alerts(subscription_id)`)
 
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS sla_tracking (
+		resource_id TEXT PRIMARY KEY,
+		resource_name TEXT,
+		resource_group TEXT,
+		subscription_id TEXT,
+		uptime_percentage REAL,
+		downtime_hours REAL,
+		total_hours REAL,
+		status TEXT,
+		last_checked DATETIME
+	)`)
+	if err != nil {
+		log.Printf("Warning: failed to create sla_tracking table: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_sla_sub ON sla_tracking(subscription_id)`); err != nil {
+		log.Printf("Warning: failed to create sla index: %v", err)
+	}
+
 	// Create webhook deliveries table
 	if err := CreateWebhookDeliveriesTable(db); err != nil {
 		return nil, err

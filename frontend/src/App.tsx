@@ -1800,7 +1800,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
   const [dashboardOrder, setDashboardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-dashOrder');
-    return saved ? JSON.parse(saved) : ['insights', 'summary', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
+    return saved ? JSON.parse(saved) : ['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
   });
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -1922,6 +1922,7 @@ export default function App() {
   const [anomalyData, setAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; ratio: number; change: number}>; threshold: number; periodStart: string; periodEnd: string} | null>(null);
   const [enhancedAnomalyData, setEnhancedAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; severity: string; score: number; methods: string[]; zscore?: number; madScore?: number; isolationScore?: number; seasonalScore?: number; trend?: string; dayOfWeek?: string}>; summary: {total: number; bySeverity: Record<string, number>; byMethod: Record<string, number>}; config: {zScoreThreshold: number; madThreshold: number; isolationThreshold: number; seasonalThreshold: number; methodsUsed: string[]}; periodStart: string; periodEnd: string} | null>(null);
   const [enhancedAnomalyLoading, setEnhancedAnomalyLoading] = useState(false);
+  const [slaData, setSlaData] = useState<{periodDays: number; threshold: number; totalVMs: number; data: Array<{resourceId: string; name: string; resourceGroup: string; subscriptionId: string; location: string; uptimePercentage: number; downtimeHours: number; totalHours: number; status: string; hasMetrics: boolean}>} | null>(null);
 
   // Resource group comparison state
   const [rgComparison, setRgComparison] = useState<{
@@ -2236,6 +2237,47 @@ export default function App() {
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: (lowScoreCount + orphanedCount + (costAnomalies.length > 0 ? 1 : 0)) === 0 ? 'var(--accent)' : 'var(--warning)', opacity: 0.6 }} />
       </div>
     </div>
+  );
+
+  const renderSLA = () => (
+    slaData && slaData.data.length > 0 && (
+      <div className="card" style={{ padding: 24, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.3)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            </div>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>VM Uptime (SLA)</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Last {slaData.periodDays} days · {slaData.totalVMs} VMs</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {slaData.data.slice(0, 5).map((vm, i) => {
+            const color = vm.status === 'healthy' ? '#10b981' : vm.status === 'warning' ? '#f59e0b' : '#f43f5e';
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                <div style={{ width: 40, height: 40, borderRadius: '50%', background: `${color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${color}40`, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color }}>{vm.uptimePercentage.toFixed(1)}%</span>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vm.name}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span>{vm.resourceGroup}</span>
+                    <span>·</span>
+                    <span>{vm.downtimeHours > 0 ? `${vm.downtimeHours.toFixed(1)}h down` : 'No downtime'}</span>
+                  </div>
+                </div>
+                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: `${color}15`, color, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {vm.status}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )
   );
 
   const renderCostComparison = () => (
@@ -3225,6 +3267,7 @@ export default function App() {
   const dashboardPanels: { id: string; render: () => React.ReactNode }[] = [
     { id: 'insights', render: renderInsights },
     { id: 'summary', render: renderSummary },
+    { id: 'sla', render: renderSLA },
     { id: 'costComparison', render: renderCostComparison },
     { id: 'chartsRow', render: renderChartsRow },
     { id: 'costBySub', render: () => (
@@ -4135,6 +4178,16 @@ export default function App() {
       .catch(() => { setEnhancedAnomalyLoading(false); });
   }, [activeSubs]);
 
+  // Fetch SLA / VM uptime data
+  useEffect(() => {
+    if (activeSubs.length === 0) return;
+    const params = new URLSearchParams();
+    activeSubs.forEach(s => params.append('subscriptionId', s));
+    fetch(`http://localhost:8080/api/sla?${params}&days=30`)
+      .then(r => r.json())
+      .then(data => { if (data.data) setSlaData(data); })
+      .catch(() => {});
+  }, [activeSubs]);
 
   const fetchAIInsights = async (resource: AzureResource) => {
     setAiLoading(true);
@@ -5965,7 +6018,7 @@ export default function App() {
                     Dashboard Layout
                   </label>
                   <button
-                    onClick={() => setDashboardOrder(['insights', 'summary', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'])}
+                    onClick={() => setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'])}
                     style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-3)', cursor: 'pointer' }}
                   >
                     Reset
@@ -5975,6 +6028,7 @@ export default function App() {
                   {[
                     { id: 'insights', label: 'Quick Insights' },
                     { id: 'summary', label: 'Summary Cards' },
+                    { id: 'sla', label: 'VM Uptime (SLA)' },
                     { id: 'costComparison', label: 'Cost Comparison' },
                     { id: 'chartsRow', label: 'Charts Row' },
                     { id: 'costBySub', label: 'Cost by Subscription' },

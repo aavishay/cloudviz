@@ -890,6 +890,78 @@ func fetchAKSMetrics(ctx context.Context, resourceID string) (map[string][]float
 	return fetchResourceMetrics(ctx, resourceID, "microsoft.containerservice/managedclusters")
 }
 
+// fetchVMAvailability fetches the VmAvailabilityMetric for a VM and returns uptime percentage (0-100)
+// over the given number of days. Falls back to Percentage CPU > 0 as a proxy.
+func fetchVMAvailability(ctx context.Context, resourceID string, days int) (uptimePct float64, downtimeHours float64, err error) {
+	parts := strings.Split(resourceID, "/")
+	if len(parts) < 3 {
+		return 0, 0, fmt.Errorf("invalid resource ID")
+	}
+	subID := parts[2]
+
+	client, err := getMetricsClient(subID)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	endTime := time.Now().UTC()
+	startTime := endTime.AddDate(0, 0, -days)
+	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+
+	// Try VmAvailabilityMetric first (Azure preview metric: 1 = available, 0 = not available)
+	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
+		Timespan:    &timespan,
+		Interval:    to.Ptr("PT1H"),
+		Metricnames: to.Ptr("VmAvailabilityMetric"),
+		Aggregation: to.Ptr("Average"),
+	})
+	if err == nil {
+		metrics := parseMetricsResponse(res)
+		if vals, ok := metrics["VmAvailabilityMetric"]; ok && len(vals) > 0 {
+			upCount := 0
+			for _, v := range vals {
+				if v >= 0.5 {
+					upCount++
+				}
+			}
+			total := float64(len(vals))
+			if total > 0 {
+				uptimePct = float64(upCount) / total * 100
+				downtimeHours = (total - float64(upCount))
+				return uptimePct, downtimeHours, nil
+			}
+		}
+	}
+
+	// Fallback: use Percentage CPU > 0 as proxy for VM running
+	res2, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
+		Timespan:    &timespan,
+		Interval:    to.Ptr("PT1H"),
+		Metricnames: to.Ptr("Percentage CPU"),
+		Aggregation: to.Ptr("Average"),
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+
+	metrics2 := parseMetricsResponse(res2)
+	vals, ok := metrics2["Percentage CPU"]
+	if !ok || len(vals) == 0 {
+		return 0, 0, fmt.Errorf("no CPU metrics available")
+	}
+
+	upCount := 0
+	for _, v := range vals {
+		if v > 0 {
+			upCount++
+		}
+	}
+	total := float64(len(vals))
+	uptimePct = float64(upCount) / total * 100
+	downtimeHours = (total - float64(upCount))
+	return uptimePct, downtimeHours, nil
+}
+
 // getResourceContext looks up a resource from Azure Resource Graph
 func getResourceContext(ctx context.Context, resourceID string) (*AzureResource, error) {
 	cred, err := azidentity.NewDefaultAzureCredential(nil)

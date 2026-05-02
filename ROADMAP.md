@@ -89,7 +89,7 @@
 
 ### Backend
 - [x] Cost allocation (chargeback reports) — Cost by subscription/environment available
-- [ ] SLA monitoring (resource uptime tracking) — VM metrics collection exists
+- [x] SLA monitoring (resource uptime tracking) — `/api/sla` endpoint with VmAvailabilityMetric + CPU fallback, dashboard panel showing uptime % and downtime hours
 - [ ] PII masking for external reports — Mask resource names in exports/screenshots
 
 ### Frontend

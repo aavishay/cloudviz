@@ -57,7 +57,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.5.0",
+		Version: "1.6.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -2235,6 +2235,90 @@ func startServer(port string) {
 		cache.db.Exec("DELETE FROM costs")
 		cache.db.Exec("DELETE FROM cost_type_daily")
 		c.JSON(200, gin.H{"message": "Cache cleared"})
+	})
+
+	// SLA Monitoring endpoint — VM uptime tracking
+	r.GET("/api/sla", func(c *gin.Context) {
+		periodDays := 30
+		if d := c.Query("days"); d != "" {
+			fmt.Sscanf(d, "%d", &periodDays)
+		}
+		if periodDays < 1 || periodDays > 90 {
+			periodDays = 30
+		}
+
+		threshold := 99.0
+		if t := c.Query("threshold"); t != "" {
+			fmt.Sscanf(t, "%f", &threshold)
+		}
+
+		// Get all VMs from the resources cache
+		res, _, err := FetchResourcesWithCosts(c.Request.Context(), nil, nil, nil, nil, "", false, false, false, false, "", "")
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+
+		var vms []AzureResource
+		for _, r := range res {
+			if strings.EqualFold(r.Type, "microsoft.compute/virtualmachines") {
+				vms = append(vms, r)
+			}
+		}
+
+		var results []map[string]any
+		var mu sync.Mutex
+		sem := make(chan struct{}, 8)
+
+		for _, vm := range vms {
+			vm := vm
+			go func() {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				uptime, downtime, err := fetchVMAvailability(c.Request.Context(), vm.ID, periodDays)
+				status := "healthy"
+				if uptime < threshold {
+					status = "critical"
+				} else if uptime < 99.9 {
+					status = "warning"
+				}
+
+				mu.Lock()
+				results = append(results, map[string]any{
+					"resourceId":       vm.ID,
+					"name":             vm.Name,
+					"resourceGroup":    vm.ResourceGroup,
+					"subscriptionId":   vm.SubscriptionID,
+					"location":         vm.Location,
+					"uptimePercentage": uptime,
+					"downtimeHours":    downtime,
+					"totalHours":       float64(periodDays * 24),
+					"status":           status,
+					"hasMetrics":       err == nil,
+				})
+				mu.Unlock()
+			}()
+		}
+
+		// Wait for all goroutines to finish
+		for i := 0; i < len(vms); i++ {
+			sem <- struct{}{}
+		}
+
+		// Sort by uptime asc (worst first)
+		sort.Slice(results, func(i, j int) bool {
+			ui, _ := results[i]["uptimePercentage"].(float64)
+			uj, _ := results[j]["uptimePercentage"].(float64)
+			return ui < uj
+		})
+
+		c.JSON(200, gin.H{
+			"periodDays": periodDays,
+			"threshold":  threshold,
+			"totalVMs":   len(vms),
+			"data":       results,
+		})
 	})
 
 	// Serve Static Files from embedded FS
