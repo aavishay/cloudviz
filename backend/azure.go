@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strings"
@@ -18,10 +19,55 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/costmanagement/armcostmanagement"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/monitor/armmonitor"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
+	"golang.org/x/time/rate"
 )
 
 // metricsClients caches MetricsClient per subscription to avoid recreating them
 var metricsClients sync.Map // map[string]*armmonitor.MetricsClient
+
+// subCostLimiters ensures only one cost API request per subscription is in flight at a time
+var subCostLimiters sync.Map // map[string]*rate.Limiter
+
+// Global 429 cooldown: when any request hits 429, all requests pause for 30s
+var (
+	last429Mu   sync.Mutex
+	last429Time time.Time
+)
+
+func record429() {
+	last429Mu.Lock()
+	last429Time = time.Now()
+	last429Mu.Unlock()
+}
+
+func cooldownWait(ctx context.Context) error {
+	last429Mu.Lock()
+	t := last429Time
+	last429Mu.Unlock()
+
+	if time.Since(t) < 30*time.Second {
+		wait := 30*time.Second - time.Since(t)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// extractSubID parses the subscription ID from a log context string.
+// Handles formats like "<uuid>", "<uuid>/current", "forecast <uuid>".
+func extractSubID(logCtx string) string {
+	s := logCtx
+	if idx := strings.Index(s, " "); idx != -1 {
+		s = s[idx+1:]
+	}
+	if idx := strings.Index(s, "/"); idx != -1 {
+		s = s[:idx]
+	}
+	return s
+}
 
 // Utility functions for code reuse
 
@@ -102,11 +148,32 @@ func getMetricsClient(subID string) (*armmonitor.MetricsClient, error) {
 	return client, nil
 }
 
-// retryAfter429 calls fn with up to 6 retries. On 429 responses it backs off
-// exponentially starting at 30s (30s, 60s, 120s, 240s, 480s, 960s), capped at 960s.
+// retryAfter429 calls fn with up to 4 retries. On 429 responses it backs off
+// exponentially starting at 10s (10s, 20s, 40s, 80s), capped at 80s, with jitter.
 func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, error)) (T, error) {
 	var zero T
-	for retry := 0; retry < 6; retry++ {
+
+	// Per-subscription rate limiter: max 1 cost request per 2s per subscription
+	subID := extractSubID(logCtx)
+	if subID != "" {
+		var lim *rate.Limiter
+		if l, ok := subCostLimiters.Load(subID); ok {
+			lim = l.(*rate.Limiter)
+		} else {
+			lim = rate.NewLimiter(rate.Limit(0.5), 1)
+			if actual, loaded := subCostLimiters.LoadOrStore(subID, lim); loaded {
+				lim = actual.(*rate.Limiter)
+			}
+		}
+		if err := lim.Wait(ctx); err != nil {
+			log.Printf("Per-sub rate limiter error for %s: %v", logCtx, err)
+		}
+	}
+
+	for retry := 0; retry < 4; retry++ {
+		if err := cooldownWait(ctx); err != nil {
+			return zero, err
+		}
 		if err := costLimiter.Wait(ctx); err != nil {
 			log.Printf("Rate limiter error for %s: %v", logCtx, err)
 		}
@@ -117,10 +184,13 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			waitSecs := 30 * (1 << retry)
-			if waitSecs > 960 {
-				waitSecs = 960
+			record429()
+			waitSecs := 10 * (1 << retry)
+			if waitSecs > 80 {
+				waitSecs = 80
 			}
+			// Add 0-5s jitter to prevent thundering herd on retry
+			waitSecs += rand.Intn(5)
 			log.Printf("Rate limit (429) hit for %s, retry %d in %ds", logCtx, retry, waitSecs)
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):

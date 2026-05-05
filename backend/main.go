@@ -41,7 +41,7 @@ var (
 	argClient      *armresourcegraph.Client
 	lastSync       time.Time
 	syncMutex      sync.Mutex
-	costLimiter    = rate.NewLimiter(rate.Limit(2), 5)
+	costLimiter    = rate.NewLimiter(rate.Limit(0.5), 1)
 )
 
 // toAnySlice converts a string slice to []any for SQL query arguments
@@ -57,7 +57,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.7.0",
+		Version: "1.8.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -342,9 +342,12 @@ func startServer(port string) {
 		var allDaily []map[string]any
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5)
+		sem := make(chan struct{}, 2)
 
-		for _, sid := range subs {
+		for i, sid := range subs {
+			if i > 0 {
+				time.Sleep(1 * time.Second)
+			}
 			wg.Add(1)
 			go func(subID string) {
 				defer wg.Done()
@@ -434,9 +437,12 @@ func startServer(port string) {
 		var anomalies []map[string]any
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5)
+		sem := make(chan struct{}, 2)
 
-		for _, sid := range subs {
+		for i, sid := range subs {
+			if i > 0 {
+				time.Sleep(1 * time.Second)
+			}
 			wg.Add(1)
 			go func(subID string) {
 				defer wg.Done()
@@ -597,9 +603,12 @@ func startServer(port string) {
 
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5)
+		sem := make(chan struct{}, 2)
 
-		for _, sid := range subs {
+		for i, sid := range subs {
+			if i > 0 {
+				time.Sleep(1 * time.Second)
+			}
 			wg.Add(1)
 			go func(subID string) {
 				defer wg.Done()
@@ -911,7 +920,7 @@ func startServer(port string) {
 		var idleVMs []map[string]any
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 10)
+		sem := make(chan struct{}, 3)
 
 		for _, r := range res {
 			if !strings.Contains(strings.ToLower(r.Type), "virtualmachine") {
@@ -961,7 +970,7 @@ func startServer(port string) {
 		var recommendations []map[string]any
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 10)
+		sem := make(chan struct{}, 3)
 
 		for _, r := range res {
 			if !strings.Contains(strings.ToLower(r.Type), "virtualmachine") {
@@ -1211,9 +1220,12 @@ func startServer(port string) {
 		var allDaily []map[string]any
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5)
+		sem := make(chan struct{}, 2)
 
-		for _, sid := range subs {
+		for i, sid := range subs {
+			if i > 0 {
+				time.Sleep(1 * time.Second)
+			}
 			wg.Add(1)
 			go func(subID string) {
 				defer wg.Done()
@@ -1483,9 +1495,12 @@ func startServer(port string) {
 		var currentTotal, previousTotal float64
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5)
+		sem := make(chan struct{}, 2)
 
-		for _, sid := range subs {
+		for i, sid := range subs {
+			if i > 0 {
+				time.Sleep(1 * time.Second)
+			}
 			wg.Add(1)
 			go func(subID string) {
 				defer wg.Done()
@@ -1571,10 +1586,13 @@ func startServer(port string) {
 
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5)
+		sem := make(chan struct{}, 2)
 		monthlyCosts := make(map[string]float64)
 
-		for _, sid := range subs {
+		for i, sid := range subs {
+			if i > 0 {
+				time.Sleep(1 * time.Second)
+			}
 			wg.Add(1)
 			go func(subID string) {
 				defer wg.Done()
@@ -1638,12 +1656,15 @@ func startServer(port string) {
 
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5)
+		sem := make(chan struct{}, 2)
 
 		var totalActual, totalForecast float64
 		var errors []string
 
-		for _, sid := range subs {
+		for i, sid := range subs {
+			if i > 0 {
+				time.Sleep(1 * time.Second)
+			}
 			wg.Add(1)
 			go func(subID string) {
 				defer wg.Done()
@@ -2285,7 +2306,7 @@ func startServer(port string) {
 
 		var results []map[string]any
 		var mu sync.Mutex
-		sem := make(chan struct{}, 8)
+		sem := make(chan struct{}, 3)
 
 		for _, vm := range vms {
 			vm := vm
@@ -2455,28 +2476,33 @@ func sseHandler(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
-	msgChan := make(chan streamMsg)
+	msgChan := make(chan streamMsg, len(subs)*2)
 	go func() {
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 15)
-		for _, sid := range subs {
+		sem := make(chan struct{}, 3)
+		for i, sid := range subs {
+			if i > 0 {
+				time.Sleep(2 * time.Second)
+			}
+			curr, ok1 := cache.get(sid, "current")
+			if ok1 {
+				msgChan <- streamMsg{Type: "data", SubID: sid, Data: gin.H{"current": normalizeResults(curr)}}
+				msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
+				continue
+			}
+
+			msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
 			wg.Add(1)
 			go func(id string) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				curr, ok1 := cache.get(id, "current")
-				if ok1 {
-					msgChan <- streamMsg{Type: "data", SubID: id, Data: gin.H{"current": normalizeResults(curr)}}
-				} else {
-					now := time.Now()
-					fetchSubCostsSync(costClient, id, "current", now.AddDate(0, 0, -30), c.Request.Context())
-					if res, ok := cache.get(id, "current"); ok {
-						msgChan <- streamMsg{Type: "data", SubID: id, Data: gin.H{"current": normalizeResults(res)}}
-					}
+				now := time.Now()
+				fetchSubCostsSync(costClient, id, "current", now.AddDate(0, 0, -30), c.Request.Context())
+				if res, ok := cache.get(id, "current"); ok {
+					msgChan <- streamMsg{Type: "data", SubID: id, Data: gin.H{"current": normalizeResults(res)}}
 				}
-				msgChan <- streamMsg{Type: "status", SubID: id, Message: "synced"}
 			}(sid)
 		}
 		wg.Wait()
