@@ -57,7 +57,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.8.0",
+		Version: "1.8.1",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -2476,38 +2476,47 @@ func sseHandler(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
-	msgChan := make(chan streamMsg, len(subs)*2)
+	msgChan := make(chan streamMsg, len(subs)*3)
 	go func() {
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, 3)
-		for i, sid := range subs {
-			if i > 0 {
-				time.Sleep(2 * time.Second)
-			}
+		var uncached []string
+		for _, sid := range subs {
 			curr, ok1 := cache.get(sid, "current")
 			if ok1 {
 				msgChan <- streamMsg{Type: "data", SubID: sid, Data: gin.H{"current": normalizeResults(curr)}}
-				msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
-				continue
 			}
-
 			msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
-			wg.Add(1)
-			go func(id string) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				now := time.Now()
-				fetchSubCostsSync(costClient, id, "current", now.AddDate(0, 0, -30), c.Request.Context())
-				if res, ok := cache.get(id, "current"); ok {
-					msgChan <- streamMsg{Type: "data", SubID: id, Data: gin.H{"current": normalizeResults(res)}}
-				}
-			}(sid)
+			if !ok1 {
+				uncached = append(uncached, sid)
+			}
 		}
-		wg.Wait()
-		msgChan <- streamMsg{Type: "done"}
-		close(msgChan)
+
+		// Fetch uncached subs in background with staggered delays
+		if len(uncached) > 0 {
+			go func(ids []string) {
+				var wg sync.WaitGroup
+				sem := make(chan struct{}, 2)
+				for i, id := range ids {
+					if i > 0 {
+						time.Sleep(2 * time.Second)
+					}
+					wg.Add(1)
+					go func(subID string) {
+						defer wg.Done()
+						sem <- struct{}{}
+						defer func() { <-sem }()
+						now := time.Now()
+						fetchSubCostsSync(costClient, subID, "current", now.AddDate(0, 0, -30), c.Request.Context())
+						if res, ok := cache.get(subID, "current"); ok {
+							msgChan <- streamMsg{Type: "data", SubID: subID, Data: gin.H{"current": normalizeResults(res)}}
+						}
+					}(id)
+				}
+				wg.Wait()
+				msgChan <- streamMsg{Type: "done"}
+			}(uncached)
+		} else {
+			msgChan <- streamMsg{Type: "done"}
+		}
 	}()
 
 	for msg := range msgChan {
