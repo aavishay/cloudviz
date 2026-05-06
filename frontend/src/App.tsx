@@ -1749,7 +1749,7 @@ export default function App() {
   const [costs, setCosts] = useState<CostPrediction[]>([]);
   const [costsLoading, setCostsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [syncedSubIds, setSyncedSubIds] = useState<Set<string>>(new Set());
+  const [dataSubIds, setDataSubIds] = useState<Set<string>>(new Set());
 
 
   const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('cloudviz-search') || '');
@@ -1959,6 +1959,7 @@ export default function App() {
     subs: [], locations: [], rgs: [], types: [],
   });
   const [totalResources, setTotalResources] = useState(0);
+  const [trueTotalResources, setTrueTotalResources] = useState(0);
   const [filteredTotalCost, setFilteredTotalCost] = useState(0);
 
   const debouncedSearch = useDebounce(searchQuery, 500);
@@ -2161,8 +2162,8 @@ export default function App() {
           </div>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
         </div>
-        <div style={{ fontSize: 32, fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>{totalResources.toLocaleString()}</div>
-        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{totalResources === 1 ? 'resource' : 'resources'}</div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>{trueTotalResources.toLocaleString()}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{trueTotalResources === 1 ? 'resource' : 'resources'}</div>
       </div>
 
       <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
@@ -4021,11 +4022,16 @@ export default function App() {
     ) },
   ];
 
-  // ── Fetch filter options
+  // ── Fetch filter options and true total resource count
   useEffect(() => {
     fetch('http://localhost:8080/api/filters')
       .then(r => r.json())
       .then(data => setAllPossibleFilters(data))
+      .catch(console.error);
+
+    fetch('http://localhost:8080/api/resources?limit=1')
+      .then(r => r.json())
+      .then(data => setTrueTotalResources(data.total || 0))
       .catch(console.error);
   }, []);
 
@@ -4259,8 +4265,7 @@ export default function App() {
             const filtered = prev.filter(c => c.subscriptionId !== subId);
             return [...filtered, ...newItems];
           });
-        } else if (msg.type === 'status' && msg.message === 'synced') {
-          setSyncedSubIds(prev => new Set(prev).add(msg.subId));
+          setDataSubIds(prev => new Set(prev).add(subId));
         } else if (msg.type === 'done') {
           es.close();
           setCostsLoading(false);
@@ -4282,7 +4287,7 @@ export default function App() {
     if (isRefreshing) return;
     setIsRefreshing(true);
     setCosts([]);
-    setSyncedSubIds(new Set());
+    setDataSubIds(new Set());
     try {
       await fetch('http://localhost:8080/api/costs/cache', { method: 'DELETE' });
     } catch (err) {
@@ -4307,6 +4312,14 @@ export default function App() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (uniqueSubs.length > 0) fetchCosts(); }, [uniqueSubs]);
+
+  // Auto-complete loading when all subscription data has arrived (don't wait for SSE "done")
+  useEffect(() => {
+    if (dataSubIds.size > 0 && dataSubIds.size === uniqueSubs.length && costsLoading) {
+      setCostsLoading(false);
+      setIsRefreshing(false);
+    }
+  }, [dataSubIds, uniqueSubs, costsLoading]);
 
   // Fetch resource change history
   const fetchHistory = async () => {
@@ -4770,7 +4783,7 @@ export default function App() {
           <button className={`tab ${activeTab === 'resources' ? 'active' : ''}`} onClick={() => setActiveTab('resources')} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 6 }}><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" /></svg>
             Resources
-            {totalResources > 0 && (
+            {resources.length > 0 && (
               <span style={{
                 marginLeft: 4,
                 padding: '2px 8px',
@@ -4782,7 +4795,7 @@ export default function App() {
                 border: `1px solid ${activeTab === 'resources' ? 'var(--accent)' : 'var(--border)'}`,
                 transition: 'all 0.2s ease'
               }}>
-                {totalResources.toLocaleString()}
+                {resources.length.toLocaleString()}
               </span>
             )}
           </button>
@@ -4821,7 +4834,7 @@ export default function App() {
         {costsLoading && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 8, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', marginRight: 8 }}>
             <div className="sync-spinner" style={{ width: 14, height: 14, border: '2px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--accent)' }}>Syncing ({syncedSubIds.size}/{uniqueSubs.length} subs)...</span>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--accent)' }}>Syncing ({dataSubIds.size}/{uniqueSubs.length} subs)...</span>
           </div>
         )}
 
@@ -5650,7 +5663,7 @@ export default function App() {
               {costsLoading && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 12, color: 'var(--text-2)', fontSize: 13 }}>
                   <div className="spinner" />
-                  Syncing financial data ({syncedSubIds.size}/{uniqueSubs.length} subscriptions)...
+                  Syncing financial data ({dataSubIds.size}/{uniqueSubs.length} subscriptions)...
 
                 </div>
               )}
