@@ -338,99 +338,81 @@ func startServer(port string) {
 		now := time.Now()
 		start := now.AddDate(0, 0, -days)
 
+		// 1. Get cached daily data and identify missing subs
 		var allDaily []map[string]any
+		var cachedSubs []string
 		var missingSubs []string
 		for _, sid := range subs {
 			daily, ok := cache.getDailyCosts(sid, start, now)
 			if ok {
 				allDaily = append(allDaily, daily...)
+				cachedSubs = append(cachedSubs, sid)
 			} else {
 				missingSubs = append(missingSubs, sid)
 			}
 		}
 
-		// If all subs cached, return immediately
-		if len(missingSubs) == 0 {
-			byDate := make(map[string]float64)
-			for _, d := range allDaily {
-				if date, ok := d["date"].(string); ok {
-					byDate[date] += d["cost"].(float64)
-				}
-			}
-			var results []map[string]any
-			for i := days - 1; i >= 0; i-- {
-				date := now.AddDate(0, 0, -i)
-				dateStr := date.Format("2006-01-02")
-				results = append(results, map[string]any{
-					"date": dateStr,
-					"cost": byDate[dateStr],
-				})
-			}
-			c.JSON(200, results)
-			return
-		}
-
-		// Launch background fetch for missing subs
-		go func(subsToFetch []string) {
-			for _, sid := range subsToFetch {
-				daily, err := fetchDailyCosts(costClient, sid, start, now, context.Background())
-				if err == nil {
-					cache.setDailyCosts(sid, daily)
-				}
-				time.Sleep(1 * time.Second)
-			}
-		}(missingSubs)
-
-		// If we have partial cached data, return it
-		if len(allDaily) > 0 {
-			byDate := make(map[string]float64)
-			for _, d := range allDaily {
-				if date, ok := d["date"].(string); ok {
-					byDate[date] += d["cost"].(float64)
-				}
-			}
-			var results []map[string]any
-			for i := days - 1; i >= 0; i-- {
-				date := now.AddDate(0, 0, -i)
-				dateStr := date.Format("2006-01-02")
-				results = append(results, map[string]any{
-					"date": dateStr,
-					"cost": byDate[dateStr],
-				})
-			}
-			c.JSON(200, results)
-			return
-		}
-
-		// No cache at all: return fallback immediately and fetch in background
-		go func(subsToFetch []string) {
-			for _, sid := range subsToFetch {
-				daily, err := fetchDailyCosts(costClient, sid, start, now, context.Background())
-				if err == nil {
-					cache.setDailyCosts(sid, daily)
-				}
-				time.Sleep(1 * time.Second)
-			}
-		}(missingSubs)
-
-		// Fallback to aggregated totals spread across days
-		var results []map[string]any
-		totalCost := 0.0
-		rows2, err := cache.db.Query("SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", toAnySlice(subs)...)
+		// 2. Compute monthly totals: all subs vs cached subs
+		totalMonthly := 0.0
+		cachedMonthly := 0.0
+		rowsAll, err := cache.db.Query("SELECT subscription_id, COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+") GROUP BY subscription_id", toAnySlice(subs)...)
 		if err == nil {
-			defer rows2.Close()
-			if rows2.Next() {
-				rows2.Scan(&totalCost)
+			defer rowsAll.Close()
+			for rowsAll.Next() {
+				var subID string
+				var subCost float64
+				rowsAll.Scan(&subID, &subCost)
+				totalMonthly += subCost
+				for _, cs := range cachedSubs {
+					if cs == subID {
+						cachedMonthly += subCost
+						break
+					}
+				}
 			}
 		}
-		dailyAvg := totalCost / float64(days)
+
+		// 3. Build day-by-day map from cached real data
+		byDate := make(map[string]float64)
+		for _, d := range allDaily {
+			if date, ok := d["date"].(string); ok {
+				byDate[date] += d["cost"].(float64)
+			}
+		}
+
+		// 4. Blend: add fallback estimate for missing subs spread evenly
+		if len(missingSubs) > 0 && totalMonthly > cachedMonthly {
+			missingMonthly := totalMonthly - cachedMonthly
+			dailyMissingAvg := missingMonthly / float64(days)
+			for i := days - 1; i >= 0; i-- {
+				dateStr := now.AddDate(0, 0, -i).Format("2006-01-02")
+				byDate[dateStr] += dailyMissingAvg
+			}
+		}
+
+		// 5. Build results
+		var results []map[string]any
 		for i := days - 1; i >= 0; i-- {
-			date := now.AddDate(0, 0, -i)
+			dateStr := now.AddDate(0, 0, -i).Format("2006-01-02")
 			results = append(results, map[string]any{
-				"date": date.Format("2006-01-02"),
-				"cost": dailyAvg,
+				"date": dateStr,
+				"cost": byDate[dateStr],
 			})
 		}
+
+		// 6. Launch background fetch for missing subs (will improve cache for next time)
+		if len(missingSubs) > 0 {
+			go func(subsToFetch []string) {
+				for _, sid := range subsToFetch {
+					daily, err := fetchDailyCosts(costClient, sid, start, now, context.Background())
+					if err == nil {
+						cache.setDailyCosts(sid, daily)
+					}
+					time.Sleep(1 * time.Second)
+				}
+			}(missingSubs)
+		}
+
 		c.JSON(200, results)
 		return
 	})
@@ -1664,65 +1646,81 @@ func startServer(port string) {
 		}
 
 		now := time.Now()
-		// Azure forecast API works best with a recent lookback + forecast window
-		// Use billing month to date for best accuracy
 		days := 30
 		if d := c.Query("days"); d != "" {
 			fmt.Sscanf(d, "%d", &days)
 		}
 		start := now.AddDate(0, 0, -days)
 
+		// 1. Sum cached forecast data
 		var totalActual, totalForecast float64
+		var cachedSubs []string
 		var missingSubs []string
 		for _, sid := range subs {
 			actual, forecast, ok := cache.getForecast(sid, days)
 			if ok {
 				totalActual += actual
 				totalForecast += forecast
+				cachedSubs = append(cachedSubs, sid)
 			} else {
 				missingSubs = append(missingSubs, sid)
 			}
 		}
 
-		// If all subs cached, return immediately
-		if len(missingSubs) == 0 {
-			c.JSON(200, map[string]any{
-				"actualCost":   totalActual,
-				"forecastCost": totalForecast,
-				"periodDays":   days,
-				"start":        start.Format("2006-01-02"),
-				"end":          now.Format("2006-01-02"),
-				"errors":       nil,
-			})
-			return
+		// 2. Compute monthly totals: all subs vs cached subs
+		totalMonthly := 0.0
+		cachedMonthly := 0.0
+		rowsAll, err := cache.db.Query("SELECT subscription_id, COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+") GROUP BY subscription_id", toAnySlice(subs)...)
+		if err == nil {
+			defer rowsAll.Close()
+			for rowsAll.Next() {
+				var subID string
+				var subCost float64
+				rowsAll.Scan(&subID, &subCost)
+				totalMonthly += subCost
+				for _, cs := range cachedSubs {
+					if cs == subID {
+						cachedMonthly += subCost
+						break
+					}
+				}
+			}
 		}
 
-		// Launch background fetch for missing subs, but return cached data now
-		go func(subsToFetch []string) {
-			var mu sync.Mutex
-			var wg sync.WaitGroup
-			sem := make(chan struct{}, 2)
-			for i, sid := range subsToFetch {
-				if i > 0 {
-					time.Sleep(1 * time.Second)
-				}
-				wg.Add(1)
-				go func(subID string) {
-					defer wg.Done()
-					sem <- struct{}{}
-					defer func() { <-sem }()
-					actual, forecast, err := fetchForecast(forecastClient, subID, start, now, context.Background())
-					if err == nil {
-						cache.setForecast(subID, days, actual, forecast)
-						mu.Lock()
-						totalActual += actual
-						totalForecast += forecast
-						mu.Unlock()
-					}
-				}(sid)
+		// 3. Estimate missing subs from monthly cost proportion
+		if len(missingSubs) > 0 && totalMonthly > cachedMonthly {
+			missingMonthly := totalMonthly - cachedMonthly
+			scale := float64(days) / 30.0 // approximate period cost from monthly
+			if scale <= 0 {
+				scale = 1
 			}
-			wg.Wait()
-		}(missingSubs)
+			totalActual += missingMonthly * scale
+			totalForecast += missingMonthly * scale
+		}
+
+		// 4. Launch background fetch for missing subs
+		if len(missingSubs) > 0 {
+			go func(subsToFetch []string) {
+				var wg sync.WaitGroup
+				sem := make(chan struct{}, 2)
+				for i, sid := range subsToFetch {
+					if i > 0 {
+						time.Sleep(1 * time.Second)
+					}
+					wg.Add(1)
+					go func(subID string) {
+						defer wg.Done()
+						sem <- struct{}{}
+						defer func() { <-sem }()
+						actual, forecast, err := fetchForecast(forecastClient, subID, start, now, context.Background())
+						if err == nil {
+							cache.setForecast(subID, days, actual, forecast)
+						}
+					}(sid)
+				}
+				wg.Wait()
+			}(missingSubs)
+		}
 
 		c.JSON(200, map[string]any{
 			"actualCost":   totalActual,
