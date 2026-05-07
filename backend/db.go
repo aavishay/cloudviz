@@ -372,10 +372,6 @@ func (dc *dbCache) getForecast(subID string, days int) (actualCost, forecastCost
 	if err != nil || time.Since(fetchedAt) > 24*time.Hour {
 		return 0, 0, false
 	}
-	// Azure often returns 0 forecast. Fallback: assume costs stay flat.
-	if forecastCost == 0 && actualCost > 0 {
-		forecastCost = actualCost
-	}
 	return actualCost, forecastCost, true
 }
 

@@ -1695,7 +1695,7 @@ func startServer(port string) {
 				scale = 1
 			}
 			totalActual += missingMonthly * scale
-			totalForecast += missingMonthly * scale
+			// Forecast is not available for missing subs; leave totalForecast unchanged
 		}
 
 		// 4. Launch background fetch for missing subs
