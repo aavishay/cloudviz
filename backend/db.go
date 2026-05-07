@@ -372,16 +372,29 @@ func (dc *dbCache) getForecast(subID string, days int) (actualCost, forecastCost
 	if err != nil || time.Since(fetchedAt) > 24*time.Hour {
 		return 0, 0, false
 	}
+	// Azure often returns 0 forecast. Fallback: assume costs stay flat.
+	if forecastCost == 0 && actualCost > 0 {
+		forecastCost = actualCost
+	}
 	return actualCost, forecastCost, true
 }
 
 func (dc *dbCache) setForecast(subID string, days int, actualCost, forecastCost float64) {
-	if _, err := dc.db.Exec("DELETE FROM cost_forecast WHERE subscription_id = ? AND days = ?", subID, days); err != nil {
+	tx, err := dc.db.Begin()
+	if err != nil {
+		log.Printf("Warning: failed to begin forecast tx: %v", err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM cost_forecast WHERE subscription_id = ? AND days = ?", subID, days); err != nil {
 		log.Printf("Warning: failed to delete old forecast: %v", err)
 	}
-	if _, err := dc.db.Exec("INSERT INTO cost_forecast (subscription_id, actual_cost, forecast_cost, days, fetched_at) VALUES (?, ?, ?, ?, ?)",
+	if _, err := tx.Exec("INSERT INTO cost_forecast (subscription_id, actual_cost, forecast_cost, days, fetched_at) VALUES (?, ?, ?, ?, ?)",
 		subID, actualCost, forecastCost, days, time.Now()); err != nil {
 		log.Printf("Warning: failed to insert forecast: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("Warning: failed to commit forecast tx: %v", err)
 	}
 }
 
