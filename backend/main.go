@@ -338,83 +338,101 @@ func startServer(port string) {
 		now := time.Now()
 		start := now.AddDate(0, 0, -days)
 
-		// Fetch real daily cost data from Azure Cost Management for each subscription
 		var allDaily []map[string]any
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, 2)
-
-		for i, sid := range subs {
-			if i > 0 {
-				time.Sleep(1 * time.Second)
-			}
-			wg.Add(1)
-			go func(subID string) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				daily, err := fetchDailyCosts(costClient, subID, start, now, c.Request.Context())
-				if err != nil {
-					log.Printf("Failed to fetch daily costs for %s: %v", subID, err)
-					return
-				}
-				mu.Lock()
+		var missingSubs []string
+		for _, sid := range subs {
+			daily, ok := cache.getDailyCosts(sid, start, now)
+			if ok {
 				allDaily = append(allDaily, daily...)
-				mu.Unlock()
-			}(sid)
-		}
-		wg.Wait()
-
-		// Check if fetched data has any actual cost
-		fetchedTotal := 0.0
-		for _, d := range allDaily {
-			if cost, ok := d["cost"].(float64); ok {
-				fetchedTotal += cost
+			} else {
+				missingSubs = append(missingSubs, sid)
 			}
 		}
 
-		if len(allDaily) == 0 || fetchedTotal == 0 {
-			// Fallback to aggregated totals spread across days
-			var results []map[string]any
-			totalCost := 0.0
-			rows2, err := cache.db.Query("SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", toAnySlice(subs)...)
-			if err == nil {
-				defer rows2.Close()
-				if rows2.Next() {
-					rows2.Scan(&totalCost)
+		// If all subs cached, return immediately
+		if len(missingSubs) == 0 {
+			byDate := make(map[string]float64)
+			for _, d := range allDaily {
+				if date, ok := d["date"].(string); ok {
+					byDate[date] += d["cost"].(float64)
 				}
 			}
-			dailyAvg := totalCost / float64(days)
+			var results []map[string]any
 			for i := days - 1; i >= 0; i-- {
 				date := now.AddDate(0, 0, -i)
+				dateStr := date.Format("2006-01-02")
 				results = append(results, map[string]any{
-					"date": date.Format("2006-01-02"),
-					"cost": dailyAvg,
+					"date": dateStr,
+					"cost": byDate[dateStr],
 				})
 			}
 			c.JSON(200, results)
 			return
 		}
 
-		// Group by date
-		byDate := make(map[string]float64)
-		for _, d := range allDaily {
-			if date, ok := d["date"].(string); ok {
-				byDate[date] += d["cost"].(float64)
+		// Launch background fetch for missing subs
+		go func(subsToFetch []string) {
+			for _, sid := range subsToFetch {
+				daily, err := fetchDailyCosts(costClient, sid, start, now, context.Background())
+				if err == nil {
+					cache.setDailyCosts(sid, daily)
+				}
+				time.Sleep(1 * time.Second)
 			}
+		}(missingSubs)
+
+		// If we have partial cached data, return it
+		if len(allDaily) > 0 {
+			byDate := make(map[string]float64)
+			for _, d := range allDaily {
+				if date, ok := d["date"].(string); ok {
+					byDate[date] += d["cost"].(float64)
+				}
+			}
+			var results []map[string]any
+			for i := days - 1; i >= 0; i-- {
+				date := now.AddDate(0, 0, -i)
+				dateStr := date.Format("2006-01-02")
+				results = append(results, map[string]any{
+					"date": dateStr,
+					"cost": byDate[dateStr],
+				})
+			}
+			c.JSON(200, results)
+			return
 		}
 
+		// No cache at all: return fallback immediately and fetch in background
+		go func(subsToFetch []string) {
+			for _, sid := range subsToFetch {
+				daily, err := fetchDailyCosts(costClient, sid, start, now, context.Background())
+				if err == nil {
+					cache.setDailyCosts(sid, daily)
+				}
+				time.Sleep(1 * time.Second)
+			}
+		}(missingSubs)
+
+		// Fallback to aggregated totals spread across days
 		var results []map[string]any
+		totalCost := 0.0
+		rows2, err := cache.db.Query("SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", toAnySlice(subs)...)
+		if err == nil {
+			defer rows2.Close()
+			if rows2.Next() {
+				rows2.Scan(&totalCost)
+			}
+		}
+		dailyAvg := totalCost / float64(days)
 		for i := days - 1; i >= 0; i-- {
 			date := now.AddDate(0, 0, -i)
-			dateStr := date.Format("2006-01-02")
 			results = append(results, map[string]any{
-				"date": dateStr,
-				"cost": byDate[dateStr],
+				"date": date.Format("2006-01-02"),
+				"cost": dailyAvg,
 			})
 		}
 		c.JSON(200, results)
+		return
 	})
 
 	// Cost anomaly detection endpoint
@@ -1654,48 +1672,65 @@ func startServer(port string) {
 		}
 		start := now.AddDate(0, 0, -days)
 
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, 2)
-
 		var totalActual, totalForecast float64
-		var errors []string
-
-		for i, sid := range subs {
-			if i > 0 {
-				time.Sleep(1 * time.Second)
+		var missingSubs []string
+		for _, sid := range subs {
+			actual, forecast, ok := cache.getForecast(sid, days)
+			if ok {
+				totalActual += actual
+				totalForecast += forecast
+			} else {
+				missingSubs = append(missingSubs, sid)
 			}
-			wg.Add(1)
-			go func(subID string) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				actual, forecast, err := fetchForecast(forecastClient, subID, start, now, c.Request.Context())
-				mu.Lock()
-				if err != nil {
-					errors = append(errors, fmt.Sprintf("%s: %v", subID, err))
-				} else {
-					totalActual += actual
-					totalForecast += forecast
-				}
-				mu.Unlock()
-			}(sid)
 		}
-		wg.Wait()
 
-		if len(errors) > 0 && totalActual == 0 && totalForecast == 0 {
-			c.JSON(502, gin.H{"error": "forecast queries failed", "details": errors})
+		// If all subs cached, return immediately
+		if len(missingSubs) == 0 {
+			c.JSON(200, map[string]any{
+				"actualCost":   totalActual,
+				"forecastCost": totalForecast,
+				"periodDays":   days,
+				"start":        start.Format("2006-01-02"),
+				"end":          now.Format("2006-01-02"),
+				"errors":       nil,
+			})
 			return
 		}
 
+		// Launch background fetch for missing subs, but return cached data now
+		go func(subsToFetch []string) {
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			sem := make(chan struct{}, 2)
+			for i, sid := range subsToFetch {
+				if i > 0 {
+					time.Sleep(1 * time.Second)
+				}
+				wg.Add(1)
+				go func(subID string) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					actual, forecast, err := fetchForecast(forecastClient, subID, start, now, context.Background())
+					if err == nil {
+						cache.setForecast(subID, days, actual, forecast)
+						mu.Lock()
+						totalActual += actual
+						totalForecast += forecast
+						mu.Unlock()
+					}
+				}(sid)
+			}
+			wg.Wait()
+		}(missingSubs)
+
 		c.JSON(200, map[string]any{
 			"actualCost":   totalActual,
-			"forecastCost":  totalForecast,
-			"periodDays":    days,
-			"start":         start.Format("2006-01-02"),
-			"end":           now.Format("2006-01-02"),
-			"errors":        errors,
+			"forecastCost": totalForecast,
+			"periodDays":   days,
+			"start":        start.Format("2006-01-02"),
+			"end":          now.Format("2006-01-02"),
+			"errors":       nil,
 		})
 	})
 
@@ -2272,6 +2307,8 @@ func startServer(port string) {
 	r.DELETE("/api/costs/cache", func(c *gin.Context) {
 		cache.db.Exec("DELETE FROM costs")
 		cache.db.Exec("DELETE FROM cost_type_daily")
+		cache.db.Exec("DELETE FROM cost_forecast")
+		cache.db.Exec("DELETE FROM cost_daily")
 		c.JSON(200, gin.H{"message": "Cache cleared"})
 	})
 

@@ -142,6 +142,33 @@ func newDBCache(dbPath string) (*dbCache, error) {
 		log.Printf("Warning: failed to create index: %v", err)
 	}
 
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS cost_forecast (
+		subscription_id TEXT,
+		actual_cost REAL,
+		forecast_cost REAL,
+		days INTEGER,
+		fetched_at DATETIME
+	)`)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_forecast_sub_days ON cost_forecast(subscription_id, days)`); err != nil {
+		log.Printf("Warning: failed to create forecast index: %v", err)
+	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS cost_daily (
+		subscription_id TEXT,
+		date TEXT,
+		cost REAL,
+		fetched_at DATETIME
+	)`)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_daily_sub_date ON cost_daily(subscription_id, date)`); err != nil {
+		log.Printf("Warning: failed to create daily index: %v", err)
+	}
+
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS alerts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
@@ -336,6 +363,76 @@ func (dc *dbCache) setTypeDaily(cacheKey string, dates []map[string]any, types [
 	if _, err := dc.db.Exec("INSERT INTO cost_type_daily (cache_key, dates, types, fetched_at) VALUES (?, ?, ?, ?)",
 		cacheKey, string(datesJSON), string(typesJSON), now); err != nil {
 		log.Printf("Warning: failed to insert daily costs: %v", err)
+	}
+}
+
+func (dc *dbCache) getForecast(subID string, days int) (actualCost, forecastCost float64, ok bool) {
+	var fetchedAt time.Time
+	err := dc.db.QueryRow("SELECT actual_cost, forecast_cost, fetched_at FROM cost_forecast WHERE subscription_id = ? AND days = ?", subID, days).Scan(&actualCost, &forecastCost, &fetchedAt)
+	if err != nil || time.Since(fetchedAt) > 24*time.Hour {
+		return 0, 0, false
+	}
+	return actualCost, forecastCost, true
+}
+
+func (dc *dbCache) setForecast(subID string, days int, actualCost, forecastCost float64) {
+	if _, err := dc.db.Exec("DELETE FROM cost_forecast WHERE subscription_id = ? AND days = ?", subID, days); err != nil {
+		log.Printf("Warning: failed to delete old forecast: %v", err)
+	}
+	if _, err := dc.db.Exec("INSERT INTO cost_forecast (subscription_id, actual_cost, forecast_cost, days, fetched_at) VALUES (?, ?, ?, ?, ?)",
+		subID, actualCost, forecastCost, days, time.Now()); err != nil {
+		log.Printf("Warning: failed to insert forecast: %v", err)
+	}
+}
+
+func (dc *dbCache) getDailyCosts(subID string, start, end time.Time) ([]map[string]any, bool) {
+	rows, err := dc.db.Query("SELECT date, cost, fetched_at FROM cost_daily WHERE subscription_id = ? AND date >= ? AND date <= ?", subID, start.Format("2006-01-02"), end.Format("2006-01-02"))
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+
+	var results []map[string]any
+	var maxAge time.Duration
+	for rows.Next() {
+		var date string
+		var cost float64
+		var fetchedAt time.Time
+		if err := rows.Scan(&date, &cost, &fetchedAt); err != nil {
+			continue
+		}
+		results = append(results, map[string]any{"date": date, "cost": cost})
+		age := time.Since(fetchedAt)
+		if age > maxAge {
+			maxAge = age
+		}
+	}
+	if len(results) == 0 || maxAge > 24*time.Hour {
+		return results, false
+	}
+	return results, true
+}
+
+func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
+	if _, err := dc.db.Exec("DELETE FROM cost_daily WHERE subscription_id = ?", subID); err != nil {
+		log.Printf("Warning: failed to delete old daily costs: %v", err)
+	}
+	stmt, err := dc.db.Prepare("INSERT INTO cost_daily (subscription_id, date, cost, fetched_at) VALUES (?, ?, ?, ?)")
+	if err != nil {
+		log.Printf("Warning: failed to prepare daily costs: %v", err)
+		return
+	}
+	defer stmt.Close()
+	now := time.Now()
+	for _, item := range items {
+		date, _ := item["date"].(string)
+		cost, _ := item["cost"].(float64)
+		if date == "" {
+			continue
+		}
+		if _, err := stmt.Exec(subID, date, cost, now); err != nil {
+			log.Printf("Warning: failed to insert daily cost: %v", err)
+		}
 	}
 }
 
