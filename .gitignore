@@ -11,7 +11,15 @@ dist/
 build/
 *.exe
 backend/cloudviz-backend
+backend/cloudviz-amd64
+backend/cloudviz-linux
 cloudviz
+
+# Release binaries
+releases/
+
+# Frontend runtime DB
+frontend/cloudviz.db
 
 # Environment files
 .env
