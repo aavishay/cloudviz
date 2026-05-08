@@ -17,6 +17,7 @@ cloudviz
 
 # Release binaries
 releases/
+backend/cloudviz_*
 
 # Frontend runtime DB
 frontend/cloudviz.db
