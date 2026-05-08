@@ -4215,12 +4215,17 @@ export default function App() {
   };
 
   const fetchCosts = (forceAll = false) => {
-    if (uniqueSubs.length === 0 || costsLoading) return;
+    if (uniqueSubs.length === 0) return;
     const existing = forceAll ? new Set<string>() : new Set(costs.map(c => c.subscriptionId));
     const toFetch = activeSubs.filter(s => !existing.has(s));
-    if (toFetch.length === 0) return;
+    if (toFetch.length === 0) {
+      setCostsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
 
     setCostsLoading(true);
+    setDataSubIds(new Set());
     const params = new URLSearchParams();
     toFetch.forEach(s => params.append('subscriptionId', s));
 
