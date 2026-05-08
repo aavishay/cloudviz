@@ -2,23 +2,23 @@ class Cloudviz < Formula
   desc "Azure cloud infrastructure visualization and cost management dashboard"
   homepage "https://github.com/aavishay/cloudviz"
   license "MIT"
-  version "1.3.0"
+  version "1.11.0"
 
   on_macos do
     on_arm do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_darwin_arm64.tar.gz"
-      sha256 "6c326e8a1da1bd5ce136eadaf6b7d5e93a5e5d49be2160f49fdde21d1cf3161c"
+      sha256 "c1bb2858c1e603ec6dff7a3438ad9b47b1b9d7ed61d6c6f990cb9ba94685c469"
     end
     on_intel do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_darwin_amd64.tar.gz"
-      sha256 "0ed108f3ebac23a5fe525092984bae93e6f05cbe937a43ff734f2071adf07216"
+      sha256 "0ad9b085976f47a24126d23f604d96775bf84ce424e78cc4eab55c84fcdebb94"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_linux_amd64.tar.gz"
-      sha256 "ff85cf6ca0f677aaae37ecaab0eef29f75a17cba17ee4c98715eeeacec509ad5"
+      sha256 "b40ea946911ae18ae4057c3b3d4010ea53711df64b121611fbeaaafb33b783e0"
     end
   end
 
@@ -27,7 +27,7 @@ class Cloudviz < Formula
   end
 
   def post_install
-    puts "CloudViz v1.3.0 installed!"
+    puts "CloudViz v1.11.0 installed!"
     puts "Run 'cloudviz serve' to start the server."
     puts "Run 'cloudviz --help' for all available commands."
   end
