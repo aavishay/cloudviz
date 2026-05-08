@@ -2540,14 +2540,22 @@ func sseHandler(c *gin.Context) {
 						sem <- struct{}{}
 						defer func() { <-sem }()
 						now := time.Now()
-						fetchSubCostsSync(costClient, subID, "current", now.AddDate(0, 0, -30), c.Request.Context())
+						ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+						defer cancel()
+						fetchSubCostsSync(costClient, subID, "current", now.AddDate(0, 0, -30), ctx)
 						if res, ok := cache.get(subID, "current"); ok {
 							msgChan <- streamMsg{Type: "data", SubID: subID, Data: gin.H{"current": normalizeResults(res)}}
 						}
 					}(id)
 				}
-				wg.Wait()
-				msgChan <- streamMsg{Type: "done"}
+				done := make(chan struct{})
+				go func() { wg.Wait(); close(done) }()
+				select {
+				case <-done:
+					msgChan <- streamMsg{Type: "done"}
+				case <-time.After(3 * time.Minute):
+					msgChan <- streamMsg{Type: "done"}
+				}
 			}(uncached)
 		} else {
 			msgChan <- streamMsg{Type: "done"}

@@ -1750,6 +1750,8 @@ export default function App() {
   const [costsLoading, setCostsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dataSubIds, setDataSubIds] = useState<Set<string>>(new Set());
+  const dataSubIdsRef = useRef(dataSubIds);
+  useEffect(() => { dataSubIdsRef.current = dataSubIds; }, [dataSubIds]);
 
 
   const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('cloudviz-search') || '');
@@ -1960,6 +1962,7 @@ export default function App() {
   });
   const [totalResources, setTotalResources] = useState(0);
   const [trueTotalResources, setTrueTotalResources] = useState(0);
+  const [resourcesCountLoading, setResourcesCountLoading] = useState(true);
   const [filteredTotalCost, setFilteredTotalCost] = useState(0);
 
   const debouncedSearch = useDebounce(searchQuery, 500);
@@ -2162,8 +2165,8 @@ export default function App() {
           </div>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
         </div>
-        <div style={{ fontSize: 32, fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>{trueTotalResources.toLocaleString()}</div>
-        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{trueTotalResources === 1 ? 'resource' : 'resources'}</div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1 }}>{resourcesCountLoading ? '…' : trueTotalResources.toLocaleString()}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{resourcesCountLoading ? 'loading…' : (trueTotalResources === 1 ? 'resource' : 'resources')}</div>
       </div>
 
       <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
@@ -4031,8 +4034,8 @@ export default function App() {
 
     fetch('http://localhost:8080/api/resources?limit=1')
       .then(r => r.json())
-      .then(data => setTrueTotalResources(data.total || 0))
-      .catch(console.error);
+      .then(data => { setTrueTotalResources(data.total || 0); setResourcesCountLoading(false); })
+      .catch(err => { console.error(err); setResourcesCountLoading(false); });
   }, []);
 
   // Fetch resources
@@ -4222,6 +4225,13 @@ export default function App() {
     toFetch.forEach(s => params.append('subscriptionId', s));
 
     const es = new EventSource(`http://localhost:8080/api/costs/stream?${params.toString()}`);
+    const safetyTimeout = setTimeout(() => {
+      if (dataSubIdsRef.current.size > 0) {
+        setCostsLoading(false);
+        setIsRefreshing(false);
+        es.close();
+      }
+    }, 15000);
 
     es.onmessage = (event) => {
       try {
@@ -4265,8 +4275,17 @@ export default function App() {
             const filtered = prev.filter(c => c.subscriptionId !== subId);
             return [...filtered, ...newItems];
           });
-          setDataSubIds(prev => new Set(prev).add(subId));
+          setDataSubIds(prev => {
+            const next = new Set(prev).add(subId);
+            if (next.size === toFetch.length) {
+              clearTimeout(safetyTimeout);
+              setCostsLoading(false);
+              setIsRefreshing(false);
+            }
+            return next;
+          });
         } else if (msg.type === 'done') {
+          clearTimeout(safetyTimeout);
           es.close();
           setCostsLoading(false);
           setIsRefreshing(false);
@@ -4277,6 +4296,7 @@ export default function App() {
     };
 
     es.onerror = () => {
+      clearTimeout(safetyTimeout);
       es.close();
       setCostsLoading(false);
       setIsRefreshing(false);
@@ -4497,7 +4517,8 @@ export default function App() {
   const costsByType = useMemo(() => {
     const map = new Map<string, { value: number; raw: string }>();
     costs.forEach(c => {
-      const raw = c.resourceType || 'Other';
+      const raw = c.resourceType;
+      if (!raw || raw === 'Other') return; // skip untyped costs (reservations, marketplace, etc.)
       const type = friendlyType(raw);
       const existing = map.get(type);
       if (existing) {
@@ -4795,7 +4816,7 @@ export default function App() {
                 border: `1px solid ${activeTab === 'resources' ? 'var(--accent)' : 'var(--border)'}`,
                 transition: 'all 0.2s ease'
               }}>
-                {resources.length.toLocaleString()}
+                {trueTotalResources > 0 ? trueTotalResources.toLocaleString() : (resources.length > 0 ? resources.length.toLocaleString() : '…')}
               </span>
             )}
           </button>
