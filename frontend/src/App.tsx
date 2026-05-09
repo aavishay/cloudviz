@@ -294,6 +294,457 @@ const EmptyState = ({ icon, message }: { icon?: React.ReactNode; message: string
   </div>
 );
 
+// ─── HistoryView Component ──────────────────────────────────────────────────────
+
+interface HistoryViewProps {
+  history: ResourceChange[];
+  historyLoading: boolean;
+  fetchHistory: () => void;
+  resources: AzureResource[];
+  setSelectedResource: (r: AzureResource | null) => void;
+  setCurrentPage: (p: number) => void;
+  setAlertModal: (modal: { open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info' }) => void;
+}
+
+function HistoryView({ history, historyLoading, fetchHistory, resources, setSelectedResource, setCurrentPage, setAlertModal }: HistoryViewProps) {
+  const [filterType, setFilterType] = useState<'all' | 'created' | 'deleted' | 'modified'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [groupByDate, setGroupByDate] = useState(true);
+
+  const filteredHistory = useMemo(() => {
+    let result = history;
+    if (filterType !== 'all') {
+      result = result.filter(h => h.changeType === filterType);
+    }
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(h =>
+        h.resourceName.toLowerCase().includes(q) ||
+        h.resourceType.toLowerCase().includes(q)
+      );
+    }
+    return result;
+  }, [history, filterType, searchQuery]);
+
+  const groupedHistory = useMemo(() => {
+    if (!groupByDate) return { 'All Changes': filteredHistory };
+    const groups: Record<string, ResourceChange[]> = {};
+    const today = new Date().toDateString();
+    const yesterday = new Date(Date.now() - 86400000).toDateString();
+
+    filteredHistory.forEach(h => {
+      const date = new Date(h.timestamp);
+      const dateStr = date.toDateString();
+      let groupKey: string;
+      if (dateStr === today) groupKey = 'Today';
+      else if (dateStr === yesterday) groupKey = 'Yesterday';
+      else if (Date.now() - date.getTime() < 7 * 86400000) groupKey = 'This Week';
+      else groupKey = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+      if (!groups[groupKey]) groups[groupKey] = [];
+      groups[groupKey].push(h);
+    });
+    return groups;
+  }, [filteredHistory, groupByDate]);
+
+  const stats = useMemo(() => {
+    const created = history.filter(h => h.changeType === 'created').length;
+    const deleted = history.filter(h => h.changeType === 'deleted').length;
+    const modified = history.filter(h => h.changeType === 'modified').length;
+    const totalCost = history.reduce((sum, h) => sum + (h.cost || 0), 0);
+    return { created, deleted, modified, totalCost };
+  }, [history]);
+
+  const handleResourceClick = (h: ResourceChange) => {
+    if (h.changeType === 'deleted') {
+      setAlertModal({
+        open: true,
+        title: 'Resource Deleted',
+        message: `This resource was deleted and is no longer available.\n\nName: ${h.resourceName}\nDeleted: ${new Date(h.timestamp).toLocaleString()}`,
+        icon: 'danger',
+      });
+      return;
+    }
+    const resource = resources.find(r => r.id === h.resourceId);
+    if (resource) {
+      setSelectedResource(resource);
+      setCurrentPage(1);
+    } else {
+      fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(h.resourceId)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.data?.length > 0) {
+            const found = data.data.find((r: AzureResource) => r.id === h.resourceId);
+            if (found) {
+              setSelectedResource(found);
+              setCurrentPage(1);
+            } else {
+              setAlertModal({ open: true, title: 'Resource Not Found', message: `Resource not found.\n\nName: ${h.resourceName}`, icon: 'warning' });
+            }
+          } else {
+            setAlertModal({ open: true, title: 'Resource Not Found', message: `Resource not found.\n\nName: ${h.resourceName}`, icon: 'warning' });
+          }
+        })
+        .catch(() => setAlertModal({ open: true, title: 'Failed to Load', message: `Failed to load resource.\n\nName: ${h.resourceName}`, icon: 'danger' }));
+    }
+  };
+
+  const getChangeColors = (changeType: string) => {
+    switch (changeType) {
+      case 'created': return { bg: 'var(--accent-dim)', border: 'var(--accent)', icon: 'var(--accent)', label: 'Created' };
+      case 'deleted': return { bg: 'var(--danger-dim)', border: 'var(--danger)', icon: 'var(--danger)', label: 'Deleted' };
+      default: return { bg: 'var(--blue-dim)', border: 'var(--blue)', icon: 'var(--blue)', label: 'Modified' };
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Stats Cards */}
+      {history.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+          <div className="card" style={{ padding: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase' }}>Created</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--accent)' }}>{stats.created}</div>
+            </div>
+          </div>
+          <div className="card" style={{ padding: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--danger-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase' }}>Deleted</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--danger)' }}>{stats.deleted}</div>
+            </div>
+          </div>
+          <div className="card" style={{ padding: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 4"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase' }}>Modified</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--blue)' }}>{stats.modified}</div>
+            </div>
+          </div>
+          <div className="card" style={{ padding: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--bg-surface)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase' }}>Total Cost Impact</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--accent)' }}>${stats.totalCost.toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="card" style={{ padding: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          {/* Search */}
+          <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <input
+              type="text"
+              placeholder="Search resources..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{ width: '100%', padding: '10px 12px 10px 36px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 14 }}
+            />
+          </div>
+
+          {/* Filter Buttons */}
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(['all', 'created', 'deleted', 'modified'] as const).map(type => (
+              <button
+                key={type}
+                onClick={() => setFilterType(type)}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  border: '1px solid',
+                  borderColor: filterType === type ? 'var(--accent)' : 'var(--border)',
+                  background: filterType === type ? 'var(--accent)' : 'transparent',
+                  color: filterType === type ? 'white' : 'var(--text-2)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textTransform: 'capitalize'
+                }}
+              >
+                {type === 'all' ? 'All' : `${type} (${stats[type]})`}
+              </button>
+            ))}
+          </div>
+
+          {/* Group Toggle */}
+          <button
+            onClick={() => setGroupByDate(!groupByDate)}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: groupByDate ? 'var(--bg-surface)' : 'transparent',
+              color: 'var(--text-2)',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+            {groupByDate ? 'Grouped' : 'Flat'}
+          </button>
+
+          <button className="btn" onClick={fetchHistory} disabled={historyLoading}>
+            {historyLoading ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>}
+          </button>
+        </div>
+      </div>
+
+      {/* History List */}
+      {historyLoading && history.length === 0 ? (
+        <div className="card" style={{ padding: 60, textAlign: 'center' }}>
+          <div className="spinner" style={{ width: 40, height: 40, margin: '0 auto 20px' }} />
+          <div style={{ color: 'var(--text-2)', fontSize: 15, fontWeight: 600 }}>Loading history...</div>
+          <div style={{ color: 'var(--text-3)', fontSize: 13, marginTop: 8 }}>Fetching resource changes from Azure</div>
+        </div>
+      ) : filteredHistory.length === 0 ? (
+        <div className="card" style={{ padding: 60, textAlign: 'center' }}>
+          <div style={{
+            width: 64,
+            height: 64,
+            borderRadius: '50%',
+            background: 'var(--bg-surface)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 20px'
+          }}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="1.5"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/></svg>
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-1)', marginBottom: 8 }}>{searchQuery ? 'No matching changes found' : 'No changes recorded yet'}</div>
+          <div style={{ fontSize: 13, color: 'var(--text-2)', maxWidth: 400, margin: '0 auto 20px' }}>
+            {searchQuery ? 'Try adjusting your search or filter criteria' : 'Changes will be tracked when resources are created, modified, or deleted in your Azure environment'}
+          </div>
+          {searchQuery && (
+            <button className="btn" onClick={() => { setSearchQuery(''); setFilterType('all'); }}>Clear Filters</button>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {Object.entries(groupedHistory).map(([groupName, items]) => (
+            <div key={groupName}>
+              {groupByDate && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  marginBottom: 12,
+                  padding: '0 8px'
+                }}>
+                  <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                  <span style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: 'var(--text-3)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.1em'
+                  }}>
+                    {groupName}
+                  </span>
+                  <span style={{
+                    fontSize: 11,
+                    color: 'var(--text-2)',
+                    padding: '2px 8px',
+                    background: 'var(--bg-surface)',
+                    borderRadius: 10
+                  }}>
+                    {items.length}
+                  </span>
+                  <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {items.map((h, i) => {
+                  const colors = getChangeColors(h.changeType);
+                  const isCreated = h.changeType === 'created';
+                  const isDeleted = h.changeType === 'deleted';
+                  const timeAgo = getTimeAgo(h.timestamp);
+
+                  return (
+                    <div
+                      key={`${h.resourceId}-${i}`}
+                      onClick={() => handleResourceClick(h)}
+                      className="history-card"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 14,
+                        padding: '14px 16px',
+                        background: 'var(--bg-card)',
+                        border: '1px solid var(--border)',
+                        borderLeft: `4px solid ${colors.border}`,
+                        borderRadius: 12,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        position: 'relative'
+                      }}
+                      onMouseEnter={e => {
+                        e.currentTarget.style.borderColor = colors.border;
+                        e.currentTarget.style.boxShadow = `0 4px 12px ${colors.border}20`;
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.borderColor = 'var(--border)';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                    >
+                      <div style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 10,
+                        background: colors.bg,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        border: `1px solid ${colors.border}40`
+                      }}>
+                        {isCreated ? (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={colors.icon} strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                        ) : isDeleted ? (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={colors.icon} strokeWidth="2.5"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+                        ) : (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={colors.icon} strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        )}
+                      </div>
+
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+                          <span style={{
+                            fontSize: 14,
+                            fontWeight: 700,
+                            color: 'var(--text-1)'
+                          }}>{h.resourceName}</span>
+                          <span style={{
+                            fontSize: 11,
+                            padding: '3px 8px',
+                            borderRadius: 6,
+                            background: colors.bg,
+                            color: colors.icon,
+                            fontWeight: 700,
+                            textTransform: 'uppercase'
+                          }}>
+                            {colors.label}
+                          </span>
+                          <span style={{
+                            fontSize: 12,
+                            color: 'var(--text-3)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 4"/></svg>
+                            {timeAgo}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{
+                            fontSize: 12,
+                            color: 'var(--text-2)',
+                            padding: '3px 8px',
+                            background: 'var(--bg-surface)',
+                            borderRadius: 6,
+                            border: '1px solid var(--border)'
+                          }}>
+                            {friendlyType(h.resourceType)}
+                          </span>
+                          {h.cost > 0 && (
+                            <span style={{
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: isDeleted ? 'var(--danger)' : 'var(--accent)',
+                              padding: '3px 8px',
+                              background: isDeleted ? 'var(--danger-dim)' : 'var(--accent-dim)',
+                              borderRadius: 6
+                            }}>
+                              ${h.cost.toLocaleString('en-US', { maximumFractionDigits: 2 })}/mo
+                            </span>
+                          )}
+                        </div>
+
+                        {!isCreated && !isDeleted && h.field && (
+                          <div style={{
+                            marginTop: 8,
+                            padding: '8px 12px',
+                            background: 'var(--bg-surface)',
+                            borderRadius: 8,
+                            fontSize: 12
+                          }}>
+                            <span style={{ color: 'var(--text-3)' }}>
+                              {h.field === 'resourceGroup' ? 'Resource Group' : h.field === 'resourceLocation' ? 'Location' : h.field === 'subscriptionId' ? 'Subscription' : h.field.charAt(0).toUpperCase() + h.field.slice(1)}:
+                            </span>
+                            {h.field === 'tags' ? (
+                              <span style={{ marginLeft: 6 }}>
+                                <span style={{ color: 'var(--danger)', textDecoration: 'line-through' }}>{h.oldValue ? `${Object.keys(JSON.parse(h.oldValue || '{}')).length} tags` : 'none'}</span>
+                                <span style={{ margin: '0 8px', color: 'var(--text-3)' }}>→</span>
+                                <span style={{ color: 'var(--accent)' }}>{h.newValue ? `${Object.keys(JSON.parse(h.newValue || '{}')).length} tags` : 'none'}</span>
+                              </span>
+                            ) : (
+                              <span style={{ marginLeft: 6 }}>
+                                <span style={{ color: 'var(--danger)' }}>{h.oldValue || '(empty)'}</span>
+                                <span style={{ margin: '0 8px', color: 'var(--text-3)' }}>→</span>
+                                <span style={{ color: 'var(--accent)' }}>{h.newValue || '(empty)'}</span>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="var(--text-3)"
+                        strokeWidth="2"
+                        style={{ flexShrink: 0, opacity: 0.5 }}
+                      ><path d="M9 18l6-6-6-6"/></svg>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function getTimeAgo(timestamp: string): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (seconds < 60) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 // ─── Portal ───────────────────────────────────────────────────────────────────
 
 function Portal({ children }: { children: React.ReactNode }) {
@@ -628,7 +1079,25 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
   }), [resources, widths, selected, favorites, onSelect, onToggleFavorite, onResourceClick, onLocationClick, onRgClick, onSubClick, onTypeClick]);
 
   const HEADER_HEIGHT = 40;
-  const LIST_HEIGHT = 540;
+  const MIN_LIST_HEIGHT = 300;
+
+  // Calculate dynamic list height based on viewport
+  const [listHeight, setListHeight] = useState(540);
+
+  useEffect(() => {
+    const calculateHeight = () => {
+      // Get available height: viewport - header (64px) - filters area (~76px) - padding/margins
+      const headerHeight = 64; // --header-h
+      const filtersHeight = 60; // Approximate filters height
+      const marginsAndPadding = 80; // Additional margins and padding
+      const availableHeight = window.innerHeight - headerHeight - filtersHeight - marginsAndPadding;
+      setListHeight(Math.max(MIN_LIST_HEIGHT, availableHeight));
+    };
+
+    calculateHeight();
+    window.addEventListener('resize', calculateHeight);
+    return () => window.removeEventListener('resize', calculateHeight);
+  }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -688,7 +1157,7 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
           </div>
         </div>
       )}
-      <div ref={wrapRef} style={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-card)', overflow: 'hidden', height: LIST_HEIGHT }}>
+      <div ref={wrapRef} style={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-card)', overflow: 'hidden', height: listHeight }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border)', height: HEADER_HEIGHT, flexShrink: 0 }} className="resource-table-virtual-header">
           {COLUMNS.map(c => (
@@ -722,7 +1191,7 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
         {/* Virtual Body */}
         {resources.length > 0 && listWidth > 0 ? (
           <FixedSizeList
-            height={LIST_HEIGHT - HEADER_HEIGHT}
+            height={listHeight - HEADER_HEIGHT}
             itemCount={resources.length}
             itemSize={48}
             itemData={itemData}
@@ -732,7 +1201,7 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
             {Row}
           </FixedSizeList>
         ) : resources.length === 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: LIST_HEIGHT - HEADER_HEIGHT }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: listHeight - HEADER_HEIGHT }}>
             <EmptyState icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>} message="No resources matched your criteria" />
           </div>
         ) : null}
@@ -3250,15 +3719,6 @@ export default function App() {
 
     return (
       <div
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.effectAllowed = 'move';
-          e.dataTransfer.setData('text/plain', id);
-          handleDragStart(id);
-        }}
-        onDragOver={(e) => handleDragOver(e, id)}
-        onDrop={(e) => handleDrop(e, id)}
-        onDragEnd={handleDragEnd}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         className="panel-drag"
@@ -3268,13 +3728,20 @@ export default function App() {
           border: dndOverId === id ? '2px solid var(--accent)' : '2px solid transparent',
           borderRadius: 16,
           transition: 'opacity 0.2s, border-color 0.15s',
-          cursor: 'move',
           overflow: 'visible',
-          userSelect: 'none',
         }}
       >
         <div
           className="panel-drag-handle"
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', id);
+            handleDragStart(id);
+          }}
+          onDragOver={(e) => handleDragOver(e, id)}
+          onDrop={(e) => handleDrop(e, id)}
+          onDragEnd={handleDragEnd}
           style={{
             position: 'absolute',
             top: 10,
@@ -3282,6 +3749,7 @@ export default function App() {
             zIndex: 100,
             cursor: 'move',
             opacity: isHovered ? 1 : 0,
+            pointerEvents: isHovered ? 'auto' : 'none',
             transition: 'opacity 0.15s',
             display: 'flex',
             alignItems: 'center',
@@ -3294,8 +3762,6 @@ export default function App() {
             color: 'var(--text-3)',
             fontWeight: 600,
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            pointerEvents: 'auto',
-            userSelect: 'none',
           }}
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -3303,7 +3769,7 @@ export default function App() {
           </svg>
           Drag
         </div>
-        <div style={{ overflow: 'auto', height: '100%', userSelect: 'none' }}>{children}</div>
+        <div style={{ overflow: 'auto', height: '100%' }}>{children}</div>
       </div>
     );
   };
@@ -5216,10 +5682,15 @@ export default function App() {
 
               {/* Cost by Environment Bar Chart */}
               {costsByEnvironment.length > 0 && (
-                <div className="card" style={{ padding: 24 }}>
-                  <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost Distribution by Environment</span>
-                    <span className="chart-hint-badge" style={{ fontSize: 10, fontWeight: 600, color: '#22c55e', background: 'rgba(34 197 94 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(34 197 94 / 0.2)' }}>Interactive</span>
+                <div className="card chart-card-clickable" style={{ padding: 24 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost Distribution by Environment</span>
+                    </div>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-surface)', padding: '3px 8px', borderRadius: 4 }}>Click bars</span>
                   </div>
                   <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={costsByEnvironment.filter(e => e.value > 0)} margin={{ left: 20, right: 20 }}>
@@ -5227,23 +5698,11 @@ export default function App() {
                       <XAxis dataKey="name" tick={{ fill: 'var(--text-2)', fontSize: 11 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: 'var(--text-2)', fontSize: 10 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
                       <Tooltip
-                        content={({ active, payload, label }: any) => {
-                          if (!active || !payload || payload.length === 0) return null;
-                          const val = payload[0].value;
-                          return (
-                            <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.4)', padding: 12, minWidth: 160 }}>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 6, borderBottom: '1px solid #334155', paddingBottom: 6 }}>
-                                {label}
-                              </div>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                                <span style={{ fontSize: 11, color: '#94a3b8' }}>Cost</span>
-                                <span style={{ fontSize: 13, fontWeight: 700, color: '#34d399' }}>
-                                  ${Number(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </span>
-                              </div>
-                            </div>
-                          );
-                        }}
+                        formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Cost']}
+                        labelStyle={{ color: 'var(--text-1)', fontWeight: 800, fontSize: 14, marginBottom: 4 }}
+                        itemStyle={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}
+                        contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: '12px 16px' }}
+                        cursor={{ fill: 'var(--accent-dim)' }}
                       />
                       <Bar
                         dataKey="value"
@@ -5261,7 +5720,7 @@ export default function App() {
                             }
                           }
                         }}
-                        style={{ cursor: 'pointer' }}
+                        style={{ cursor: 'pointer', transition: 'all 0.2s ease' }}
                       >
                         {costsByEnvironment.filter(e => e.value > 0).map((_, i) => (
                           <Cell key={i} fill={COLORS[i % COLORS.length]} style={{ cursor: 'pointer', outline: 'none' }} />
@@ -5470,223 +5929,15 @@ export default function App() {
             </div>
           ) : activeTab === 'history' ? (
             /* ── History Tab ── */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {/* History Header */}
-              <div className="card" style={{ padding: 24 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(139 92 246 / 0.1)', border: '1px solid rgba(139 92 246 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" /></svg>
-                    </div>
-                    <div>
-                      <h2 style={{ margin: 0, fontSize: 18, fontWeight: 900, color: 'var(--text-1)' }}>Resource Change History</h2>
-                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-2)' }}>Track changes to your Azure resources over time</p>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-                    {history.length > 0 && (() => {
-                      const totalCost = history.reduce((sum, h) => sum + (h.cost || 0), 0);
-                      return totalCost > 0 ? (
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Monthly Cost</div>
-                          <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--accent)' }}>
-                            ${totalCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </div>
-                        </div>
-                      ) : null;
-                    })()}
-                    <button className="btn" onClick={() => fetchHistory()} disabled={historyLoading} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {historyLoading ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>}
-                      Refresh
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* History Timeline */}
-              {historyLoading && history.length === 0 ? (
-                <div className="card" style={{ padding: 60, textAlign: 'center' }}>
-                  <div className="spinner" style={{ width: 32, height: 32, margin: '0 auto 16px' }} />
-                  <div style={{ color: 'var(--text-2)', fontSize: 13 }}>Loading history...</div>
-                </div>
-              ) : history.length === 0 ? (
-                <div className="card" style={{ padding: 60, textAlign: 'center' }}>
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="1.5" style={{ margin: '0 auto 16px', opacity: 0.5 }}>
-                    <path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
-                  </svg>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-1)', marginBottom: 8 }}>No changes recorded yet</div>
-                  <div style={{ fontSize: 13, color: 'var(--text-2)', maxWidth: 320, margin: '0 auto' }}>
-                    Changes will be tracked when resources are created, modified, or deleted.
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {history.map((h, i) => {
-                    const isCreated = h.changeType === 'created';
-                    const isDeleted = h.changeType === 'deleted';
-                    const bgColor = isCreated ? 'var(--accent-dim)' : isDeleted ? 'var(--danger-dim)' : 'var(--blue-dim)';
-                    const borderColor = isCreated ? 'var(--accent)' : isDeleted ? 'var(--danger)' : 'var(--blue)';
-                    const iconColor = isCreated ? 'var(--accent)' : isDeleted ? 'var(--danger)' : 'var(--blue)';
-
-                    return (
-                      <div
-                        key={i}
-                        onClick={() => {
-                          // Skip deleted resources - they no longer exist
-                          if (h.changeType === 'deleted') {
-                            setAlertModal({
-                              open: true,
-                              title: 'Resource Deleted',
-                              message: `This resource was deleted and is no longer available.\n\nName: ${h.resourceName}\nDeleted: ${new Date(h.timestamp).toLocaleString()}`,
-                              icon: 'danger',
-                            });
-                            return;
-                          }
-                          // Find the resource and navigate to it
-                          const resource = resources.find(r => r.id === h.resourceId);
-                          if (resource) {
-                            setSelectedResource(resource);
-                            setCurrentPage(1);
-                          } else {
-                            // Resource not loaded, fetch it
-                            fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(h.resourceId)}`)
-                              .then(r => r.json())
-                              .then(data => {
-                                if (data.data && data.data.length > 0) {
-                                  // Validate the returned resource matches the requested ID
-                                  const foundResource = data.data.find((r: AzureResource) => r.id === h.resourceId);
-                                  if (foundResource) {
-                                    setSelectedResource(foundResource);
-                                    setCurrentPage(1);
-                                  } else {
-                                    setAlertModal({
-                                      open: true,
-                                      title: 'Resource Not Found',
-                                      message: `Resource not found. It may have been deleted or the ID has changed.\n\nName: ${h.resourceName}`,
-                                      icon: 'warning',
-                                    });
-                                  }
-                                } else {
-                                  setAlertModal({
-                                    open: true,
-                                    title: 'Resource Not Found',
-                                    message: `Resource not found. It may have been deleted or the ID has changed.\n\nName: ${h.resourceName}`,
-                                    icon: 'warning',
-                                  });
-                                }
-                              })
-                              .catch(err => {
-                                console.error('Failed to fetch resource:', err);
-                                setAlertModal({
-                                  open: true,
-                                  title: 'Failed to Load',
-                                  message: `Failed to load resource details.\n\nName: ${h.resourceName}`,
-                                  icon: 'danger',
-                                });
-                              });
-                          }
-                        }}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'flex-start',
-                          gap: 16,
-                          padding: 16,
-                          background: 'var(--bg-card)',
-                          border: '1px solid var(--border)',
-                          borderLeft: `3px solid ${borderColor}`,
-                          borderRadius: 12,
-                          transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                          position: 'relative',
-                          overflow: 'hidden',
-                          cursor: 'pointer'
-                        }}
-                        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.transform = 'translateX(6px)'; e.currentTarget.style.boxShadow = `0 4px 16px ${borderColor}15`; }}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateX(0)'; e.currentTarget.style.boxShadow = 'none'; }}
-                      >
-                        <div style={{ position: 'absolute', inset: 0, background: `${borderColor}08`, opacity: 0, transition: 'opacity 0.2s ease' }} />
-                        <div style={{
-                          width: 36,
-                          height: 36,
-                          borderRadius: 10,
-                          background: bgColor,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flexShrink: 0,
-                          border: `1px solid ${borderColor}33`,
-                          position: 'relative',
-                          zIndex: 1
-                        }}>
-                          {isCreated ? (
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
-                          ) : isDeleted ? (
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth="2.5"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></svg>
-                          ) : (
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                          )}
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                            <span style={{
-                              padding: '3px 8px',
-                              borderRadius: 6,
-                              fontSize: 10,
-                              fontWeight: 700,
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.05em',
-                              background: bgColor,
-                              color: iconColor,
-                              border: `1px solid ${borderColor}33`
-                            }}>
-                              {h.changeType}
-                            </span>
-                            <span style={{ fontSize: 12, color: 'var(--text-3)', fontWeight: 500 }}>
-                              {new Date(h.timestamp).toLocaleString()}
-                            </span>
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: h.cost > 0 ? 2 : 4 }}>
-                            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-1)' }}>{h.resourceName}</span>
-                            <span style={{ fontSize: 11, color: 'var(--text-2)', fontWeight: 500, padding: '2px 6px', background: 'var(--bg-surface)', borderRadius: 4, border: '1px solid var(--border)' }}>
-                              {friendlyType(h.resourceType)}
-                            </span>
-                          </div>
-                          {h.cost > 0 && (
-                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', marginBottom: 4 }}>
-                              ${h.cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} /mo
-                            </div>
-                          )}
-                          <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                            {isCreated ? (
-                              <span style={{ color: 'var(--accent)' }}>New resource added to inventory</span>
-                            ) : isDeleted ? (
-                              <span style={{ color: 'var(--danger)' }}>Resource removed from inventory</span>
-                            ) : (
-                              <span>
-                                <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{h.field === 'resourceGroup' ? 'Resource Group' : h.field === 'resourceLocation' ? 'Location' : h.field === 'subscriptionId' ? 'Subscription' : h.field.charAt(0).toUpperCase() + h.field.slice(1)}</span>
-                                {': '}
-                                {h.field === 'tags' ? (
-                                  <span>
-                                    <span style={{ color: 'var(--danger)' }}>{h.oldValue ? `${Object.keys(JSON.parse(h.oldValue || '{}')).length} tags` : '(no tags)'}</span>
-                                    <span style={{ margin: '0 6px', color: 'var(--text-3)' }}>→</span>
-                                    <span style={{ color: 'var(--accent)' }}>{h.newValue ? `${Object.keys(JSON.parse(h.newValue || '{}')).length} tags` : '(no tags)'}</span>
-                                  </span>
-                                ) : (
-                                  <>
-                                    <span style={{ color: 'var(--danger)' }}>{h.oldValue || '(empty)'}</span>
-                                    <span style={{ margin: '0 6px', color: 'var(--text-3)' }}>→</span>
-                                    <span style={{ color: 'var(--accent)' }}>{h.newValue || '(empty)'}</span>
-                                  </>
-                                )}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <HistoryView
+              history={history}
+              historyLoading={historyLoading}
+              fetchHistory={fetchHistory}
+              resources={resources}
+              setSelectedResource={setSelectedResource}
+              setCurrentPage={setCurrentPage}
+              setAlertModal={setAlertModal}
+            />
           ) : (
             /* ── Cost Tab ── */
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>

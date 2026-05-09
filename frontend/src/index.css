@@ -321,7 +321,9 @@ body, body * {
   flex: 1;
   min-width: 0;
   padding: 24px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: calc(100vh - var(--header-h));
   transition: padding 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
   background: linear-gradient(180deg, var(--bg-base) 0%, rgba(15 22 41 / 0.5) 100%);
 }
@@ -4101,11 +4103,8 @@ button:focus-visible {
   position: relative;
 }
 .panel-drag-handle {
-  pointer-events: auto !important;
+  cursor: move;
 }
-.panel-drag[draggable="true"]:active {
-  cursor: grabbing !important;
-}
-.panel-drag[draggable="true"]:active * {
-  cursor: grabbing !important;
+.panel-drag-handle:active {
+  cursor: grabbing;
 }
