@@ -4100,9 +4100,12 @@ button:focus-visible {
 .panel-drag {
   position: relative;
 }
-.panel-drag:hover .panel-drag-handle {
-  opacity: 1 !important;
+.panel-drag-handle {
+  pointer-events: auto !important;
 }
-.panel-drag:active {
-  cursor: grabbing;
+.panel-drag[draggable="true"]:active {
+  cursor: grabbing !important;
+}
+.panel-drag[draggable="true"]:active * {
+  cursor: grabbing !important;
 }

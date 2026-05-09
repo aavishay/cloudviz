@@ -3245,30 +3245,68 @@ export default function App() {
   };
   const handleDragEnd = () => { setDndDragId(null); setDndOverId(null); };
 
-  const PanelWrapper = ({ id, children }: { id: string; children: React.ReactNode }) => (
-    <div
-      draggable
-      onDragStart={() => handleDragStart(id)}
-      onDragOver={(e) => handleDragOver(e, id)}
-      onDrop={(e) => handleDrop(e, id)}
-      onDragEnd={handleDragEnd}
-      className="panel-drag"
-      style={{
-        opacity: dndDragId && dndDragId !== id ? 0.5 : 1,
-        border: dndOverId === id ? '2px solid var(--accent)' : '2px solid transparent',
-        borderRadius: 16,
-        transition: 'opacity 0.2s, border-color 0.15s',
-        cursor: 'grab',
-        overflow: 'auto',
-      }}
-    >
-      <div className="panel-drag-handle" style={{ position: 'absolute', top: 10, left: 10, zIndex: 10, cursor: 'grab', opacity: 0, transition: 'opacity 0.15s', display: 'flex', alignItems: 'center', gap: 4, padding: '2px 6px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 10, color: 'var(--text-3)', fontWeight: 600 }}>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 9l4-4 4 4M5 15l4 4 4-4"/></svg>
-        Drag
+  const PanelWrapper = ({ id, children }: { id: string; children: React.ReactNode }) => {
+    const [isHovered, setIsHovered] = useState(false);
+
+    return (
+      <div
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', id);
+          handleDragStart(id);
+        }}
+        onDragOver={(e) => handleDragOver(e, id)}
+        onDrop={(e) => handleDrop(e, id)}
+        onDragEnd={handleDragEnd}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        className="panel-drag"
+        style={{
+          position: 'relative',
+          opacity: dndDragId && dndDragId !== id ? 0.5 : 1,
+          border: dndOverId === id ? '2px solid var(--accent)' : '2px solid transparent',
+          borderRadius: 16,
+          transition: 'opacity 0.2s, border-color 0.15s',
+          cursor: 'move',
+          overflow: 'visible',
+          userSelect: 'none',
+        }}
+      >
+        <div
+          className="panel-drag-handle"
+          style={{
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            zIndex: 100,
+            cursor: 'move',
+            opacity: isHovered ? 1 : 0,
+            transition: 'opacity 0.15s',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '4px 8px',
+            background: 'var(--bg-surface)',
+            borderRadius: 6,
+            border: '1px solid var(--border)',
+            fontSize: 10,
+            color: 'var(--text-3)',
+            fontWeight: 600,
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            pointerEvents: 'auto',
+            userSelect: 'none',
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M8 6h12M4 6h.01M8 12h12M4 12h.01M8 18h12M4 18h.01"/>
+          </svg>
+          Drag
+        </div>
+        <div style={{ overflow: 'auto', height: '100%', userSelect: 'none' }}>{children}</div>
       </div>
-      {children}
-    </div>
-  );
+    );
+  };
 
   const dashboardPanels: { id: string; render: () => React.ReactNode }[] = [
     { id: 'insights', render: renderInsights },
@@ -3446,7 +3484,10 @@ export default function App() {
         {Array.isArray(dailyCosts) && dailyCosts.length > 0 && (
           <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
             {(() => {
-              const costs = dailyCosts.map(d => d.cost);
+              // Filter out today's incomplete data for statistics
+              const today = new Date().toISOString().slice(0, 10);
+              const completedDays = dailyCosts.filter(d => d.date !== today);
+              const costs = completedDays.map(d => d.cost);
               const avg = costs.length > 0 ? costs.reduce((a, b) => a + b, 0) / costs.length : 0;
               const max = costs.length > 0 ? Math.max(...costs) : 0;
               const trend = costs.length > 1 && costs[0] > 0 ? ((costs[costs.length - 1] - costs[0]) / costs[0]) * 100 : 0;
@@ -4216,6 +4257,9 @@ export default function App() {
 
   const fetchCosts = (forceAll = false) => {
     if (uniqueSubs.length === 0) return;
+    // Prevent concurrent fetches - if already loading, skip
+    if (costsLoading && !forceAll) return;
+
     const existing = forceAll ? new Set<string>() : new Set(costs.map(c => c.subscriptionId));
     const toFetch = activeSubs.filter(s => !existing.has(s));
     if (toFetch.length === 0) {
@@ -4225,7 +4269,10 @@ export default function App() {
     }
 
     setCostsLoading(true);
-    setDataSubIds(new Set());
+    // Only reset dataSubIds on forceAll (refresh), otherwise keep existing for incremental fetch
+    if (forceAll) {
+      setDataSubIds(new Set());
+    }
     const params = new URLSearchParams();
     toFetch.forEach(s => params.append('subscriptionId', s));
 
@@ -4282,6 +4329,7 @@ export default function App() {
           });
           setDataSubIds(prev => {
             const next = new Set(prev).add(subId);
+            // Compare against toFetch.length (the actual number of subscriptions being fetched)
             if (next.size === toFetch.length) {
               clearTimeout(safetyTimeout);
               setCostsLoading(false);
@@ -4336,7 +4384,12 @@ export default function App() {
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (uniqueSubs.length > 0) fetchCosts(); }, [uniqueSubs]);
+  useEffect(() => {
+    // Only fetch costs when uniqueSubs is stable (has items and filters are loaded)
+    if (uniqueSubs.length > 0 && allPossibleFilters.subs?.length > 0) {
+      fetchCosts();
+    }
+  }, [uniqueSubs, allPossibleFilters.subs]);
 
   // Auto-complete loading when all subscription data has arrived (don't wait for SSE "done")
   useEffect(() => {
@@ -4345,6 +4398,9 @@ export default function App() {
       setIsRefreshing(false);
     }
   }, [dataSubIds, uniqueSubs, costsLoading]);
+
+  // Note: fetchCosts is only triggered by the useEffect above when uniqueSubs/allPossibleFilters.subs changes.
+  // The fetchCosts function now prevents concurrent calls and handles incremental fetching.
 
   // Fetch resource change history
   const fetchHistory = async () => {
@@ -4982,6 +5038,10 @@ export default function App() {
                   <button className="btn" onClick={() => { const name = prompt('Preset name:'); if (!name) return; const preset = { name, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly }; const saved = JSON.parse(localStorage.getItem('cloudviz-filterPresets') || '[]'); localStorage.setItem('cloudviz-filterPresets', JSON.stringify([...saved, preset])); setFilterPresets([...filterPresets, preset]); }} title="Save current filters as preset">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
                     Save Filters
+                  </button>
+                  <button className="btn" onClick={() => { setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies']); }} title="Reset panels to default layout">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12" /><path d="M3 3v9h9" /></svg>
+                    Reset Layout
                   </button>
                   {filterPresets.length > 0 && (
                     <select

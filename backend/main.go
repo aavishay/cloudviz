@@ -57,7 +57,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.12.0",
+		Version: "1.13.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -1651,6 +1651,8 @@ func startServer(port string) {
 			fmt.Sscanf(d, "%d", &days)
 		}
 		start := now.AddDate(0, 0, -days)
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		monthEnd := monthStart.AddDate(0, 1, -1)
 
 		// 1. Sum cached forecast data
 		var totalActual, totalForecast float64
@@ -1712,7 +1714,7 @@ func startServer(port string) {
 						defer wg.Done()
 						sem <- struct{}{}
 						defer func() { <-sem }()
-						actual, forecast, err := fetchForecast(forecastClient, subID, start, now, context.Background())
+						actual, forecast, err := fetchForecast(forecastClient, subID, monthStart, monthEnd, context.Background())
 						if err == nil {
 							cache.setForecast(subID, days, actual, forecast)
 						}
@@ -2435,7 +2437,8 @@ func startServer(port string) {
 	})
 
 	fmt.Printf("CloudViz server starting at :%s\n", port)
-	go backgroundSync(costClient)
+	// Background sync disabled - fetch costs on-demand via SSE only
+	// go backgroundSync(costClient)
 	go openBrowser(fmt.Sprintf("http://localhost:%s", port))
 	r.Run(":" + port)
 }
@@ -2514,52 +2517,36 @@ func sseHandler(c *gin.Context) {
 	msgChan := make(chan streamMsg, len(subs)*3)
 	go func() {
 		var uncached []string
+		// First, send cached data and identify uncached subs
 		for _, sid := range subs {
 			curr, ok1 := cache.get(sid, "current")
 			if ok1 {
 				msgChan <- streamMsg{Type: "data", SubID: sid, Data: gin.H{"current": normalizeResults(curr)}}
-			}
-			msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
-			if !ok1 {
+				msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
+			} else {
 				uncached = append(uncached, sid)
 			}
 		}
 
-		// Fetch uncached subs in background with staggered delays
+		// Fetch uncached subs sequentially (slower but no deadlock)
 		if len(uncached) > 0 {
-			go func(ids []string) {
-				var wg sync.WaitGroup
-				sem := make(chan struct{}, 2)
-				for i, id := range ids {
-					if i > 0 {
-						time.Sleep(2 * time.Second)
-					}
-					wg.Add(1)
-					go func(subID string) {
-						defer wg.Done()
-						sem <- struct{}{}
-						defer func() { <-sem }()
-						now := time.Now()
-						ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-						defer cancel()
-						fetchSubCostsSync(costClient, subID, "current", now.AddDate(0, 0, -30), ctx)
-						if res, ok := cache.get(subID, "current"); ok {
-							msgChan <- streamMsg{Type: "data", SubID: subID, Data: gin.H{"current": normalizeResults(res)}}
-						}
-					}(id)
+			for _, subID := range uncached {
+				now := time.Now()
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				_, err := fetchSubCostsSync(costClient, subID, "current", now.AddDate(0, 0, -30), ctx)
+				cancel()
+				if err != nil {
+					msgChan <- streamMsg{Type: "status", SubID: subID, Message: "error: " + err.Error()}
+					continue
 				}
-				done := make(chan struct{})
-				go func() { wg.Wait(); close(done) }()
-				select {
-				case <-done:
-					msgChan <- streamMsg{Type: "done"}
-				case <-time.After(3 * time.Minute):
-					msgChan <- streamMsg{Type: "done"}
+				if res, ok := cache.get(subID, "current"); ok {
+					msgChan <- streamMsg{Type: "data", SubID: subID, Data: gin.H{"current": normalizeResults(res)}}
 				}
-			}(uncached)
-		} else {
-			msgChan <- streamMsg{Type: "done"}
+				msgChan <- streamMsg{Type: "status", SubID: subID, Message: "synced"}
+				time.Sleep(3 * time.Second) // 3s delay between subs
+			}
 		}
+		msgChan <- streamMsg{Type: "done"}
 	}()
 
 	for msg := range msgChan {
@@ -2573,9 +2560,50 @@ func sseHandler(c *gin.Context) {
 }
 
 func backgroundSync(client *armcostmanagement.QueryClient) {
-	ticker := time.NewTicker(2 * time.Hour)
-	for range ticker.C {
-		// Simplified background sync for CLI brevity
-		log.Println("Background sync would run here...")
+	log.Println("Starting background cost sync...")
+
+	// Fetch all subscriptions from filters
+	ctx := context.Background()
+	res, _, err := FetchResourcesWithCosts(ctx, nil, nil, nil, nil, "", false, false, false, false, "", "")
+	if err != nil {
+		log.Printf("Background sync: failed to get resources: %v", err)
+		return
 	}
+
+	// Get unique subscription IDs
+	subMap := make(map[string]bool)
+	for _, r := range res {
+		subMap[r.SubscriptionID] = true
+	}
+
+	var subs []string
+	for s := range subMap {
+		subs = append(subs, s)
+	}
+	log.Printf("Background sync: found %d subscriptions", len(subs))
+
+	// Fetch costs for each subscription
+	for i, sid := range subs {
+		// Check if already cached
+		if _, ok := cache.get(sid, "current"); ok {
+			continue
+		}
+
+		log.Printf("Background sync: fetching %s (%d/%d)", sid, i+1, len(subs))
+		now := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		_, err := fetchSubCostsSync(client, sid, "current", now.AddDate(0, 0, -30), ctx)
+		cancel()
+
+		if err != nil {
+			log.Printf("Background sync: failed for %s: %v", sid, err)
+		} else {
+			log.Printf("Background sync: completed %s", sid)
+		}
+
+		// Sleep to avoid rate limits - Azure is very strict
+		time.Sleep(30 * time.Second)
+	}
+
+	log.Println("Background sync: completed")
 }
