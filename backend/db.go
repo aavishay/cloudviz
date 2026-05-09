@@ -78,8 +78,25 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON resource_history(timestamp)`); err != nil {
 		log.Printf("Warning: failed to create index: %v", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE resource_history ADD COLUMN resource_type TEXT`); err != nil {
-		log.Printf("Warning: failed to add resource_type column (may already exist): %v", err)
+	// Add resource_type column if it doesn't already exist (SQLite has no IF NOT EXISTS for ADD COLUMN)
+	var hasResourceType bool
+	if rows, err := db.Query("PRAGMA table_info(resource_history)"); err == nil {
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notNull, dfltValue, pk int
+			rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk)
+			if name == "resource_type" {
+				hasResourceType = true
+				break
+			}
+		}
+		rows.Close()
+	}
+	if !hasResourceType {
+		if _, err := db.Exec(`ALTER TABLE resource_history ADD COLUMN resource_type TEXT`); err != nil {
+			log.Printf("Warning: failed to add resource_type column: %v", err)
+		}
 	}
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS budgets (

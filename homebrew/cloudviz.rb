@@ -2,7 +2,7 @@ class Cloudviz < Formula
   desc "Azure cloud infrastructure visualization and cost management dashboard"
   homepage "https://github.com/aavishay/cloudviz"
   license "AGPL-3.0"
-  version "1.14.0"
+  version "1.15.0"
 
   on_macos do
     on_arm do
@@ -27,7 +27,7 @@ class Cloudviz < Formula
   end
 
   def post_install
-    puts "CloudViz v1.14.0 installed!"
+    puts "CloudViz v1.15.0 installed!"
     puts "Run 'cloudviz serve' to start the server."
     puts "Run 'cloudviz --help' for all available commands."
   end

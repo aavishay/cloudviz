@@ -746,14 +746,37 @@ func parseForecastResults(res armcostmanagement.QueryResult) (actualCost, foreca
 		return 0, 0
 	}
 
-	// col[0]=PreTaxCost, col[1]=date(yyyyMMdd as number), col[2]=Currency, col[3]=IsForecast(bool)
+	// Map columns by name — Azure column order varies.
+	// Known columns: PreTaxCost, UsageDate, CostStatus, Currency
+	colCost, colStatus := -1, -1
+	if res.Properties.Columns != nil {
+		for i, col := range res.Properties.Columns {
+			if col.Name == nil {
+				continue
+			}
+			name := strings.ToLower(*col.Name)
+			if name == "pretaxcost" || name == "cost" {
+				colCost = i
+			}
+			if name == "coststatus" || name == "isforecast" || name == "status" {
+				colStatus = i
+			}
+		}
+	}
+	// Fallback to known positions if names didn't match
+	if colCost < 0 {
+		colCost = 0
+	}
+	if colStatus < 0 {
+		colStatus = 2
+	}
+
 	for _, row := range res.Properties.Rows {
-		if len(row) < 2 {
+		if len(row) <= colCost {
 			continue
 		}
 
-		costVal := row[0] // PreTaxCost
-
+		costVal := row[colCost]
 		var cost float64
 		switch v := costVal.(type) {
 		case float64:
@@ -768,24 +791,12 @@ func parseForecastResults(res armcostmanagement.QueryResult) (actualCost, foreca
 			}
 		}
 
-		// IsForecast column is at index 3. Azure returns it as a boolean or string.
-		// Actual rows: IsForecast=false/0, Forecast rows: IsForecast=true/1.
 		isForecastRow := false
-		if len(row) > 3 {
-			switch v := row[3].(type) {
-			case bool:
-				isForecastRow = v
-			case int:
-				isForecastRow = v != 0
-			case int64:
-				isForecastRow = v != 0
-			case string:
-				isForecastRow = v == "1" || strings.EqualFold(v, "true")
-			}
-		} else if len(row) > 2 {
-			// Fallback: older API may put actual/forecast indicator in Currency column
-			currencyVal := fmt.Sprintf("%v", row[2])
-			isForecastRow = len(currencyVal) > 0 && currencyVal[0] == 'F'
+		if colStatus >= 0 && colStatus < len(row) {
+			statusVal := fmt.Sprintf("%v", row[colStatus])
+			isForecastRow = strings.EqualFold(statusVal, "forecast") ||
+				strings.EqualFold(statusVal, "true") ||
+				statusVal == "1"
 		}
 
 		if isForecastRow {
