@@ -4868,11 +4868,15 @@ export default function App() {
   // Note: fetchCosts is only triggered by the useEffect above when uniqueSubs/allPossibleFilters.subs changes.
   // The fetchCosts function now prevents concurrent calls and handles incremental fetching.
 
-  // Fetch resource change history
+  // Fetch resource change history since start of day (browser timezone)
   const fetchHistory = async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch('http://localhost:8080/api/history?limit=100');
+      // Get start of day in browser timezone as ISO 8601
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const since = startOfDay.toISOString();
+      const res = await fetch(`http://localhost:8080/api/history?since=${encodeURIComponent(since)}`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setHistory(data);

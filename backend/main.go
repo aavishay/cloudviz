@@ -2463,7 +2463,17 @@ func openBrowser(url string) {
 }
 
 func historyHandler(c *gin.Context) {
-	rows, err := cache.db.Query(`
+	// Parse 'since' parameter (ISO 8601 timestamp from browser)
+	sinceParam := c.Query("since")
+	var sinceTime time.Time
+	if sinceParam != "" {
+		t, err := time.Parse(time.RFC3339Nano, sinceParam)
+		if err == nil {
+			sinceTime = t
+		}
+	}
+
+	query := `
 		SELECT
 			h.resource_id,
 			COALESCE(h.resource_name, h.resource_id),
@@ -2483,9 +2493,17 @@ func historyHandler(c *gin.Context) {
 					ORDER BY fetched_at DESC LIMIT 1
 				)
 			), 0) as resource_cost
-		FROM resource_history h
-		ORDER BY h.timestamp DESC
-		LIMIT 100`)
+		FROM resource_history h`
+
+	var args []any
+	if !sinceTime.IsZero() {
+		query += ` WHERE h.timestamp >= ?`
+		args = append(args, sinceTime.Unix())
+	}
+
+	query += ` ORDER BY h.timestamp DESC`
+
+	rows, err := cache.db.Query(query, args...)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
