@@ -4743,13 +4743,15 @@ export default function App() {
     toFetch.forEach(s => params.append('subscriptionId', s));
 
     const es = new EventSource(`http://localhost:8080/api/costs/stream?${params.toString()}`);
+    // Safety timeout: 70s per uncached sub (60s fetch + 10s buffer) + 10s base
+    const estimatedMaxTime = Math.max(30000, toFetch.length * 70000 + 10000);
     const safetyTimeout = setTimeout(() => {
       if (dataSubIdsRef.current.size > 0) {
         setCostsLoading(false);
         setIsRefreshing(false);
         es.close();
       }
-    }, 15000);
+    }, estimatedMaxTime);
 
     es.onmessage = (event) => {
       try {
@@ -4814,11 +4816,18 @@ export default function App() {
       }
     };
 
-    es.onerror = () => {
-      clearTimeout(safetyTimeout);
-      es.close();
-      setCostsLoading(false);
-      setIsRefreshing(false);
+    es.onerror = (err) => {
+      console.error('SSE error:', err);
+      // Don't immediately close - let the browser reconnect automatically
+      // Only close if we've already received some data or after a longer delay
+      setTimeout(() => {
+        if (es.readyState === EventSource.CLOSED) {
+          clearTimeout(safetyTimeout);
+          es.close();
+          setCostsLoading(false);
+          setIsRefreshing(false);
+        }
+      }, 5000);
     };
   };
 

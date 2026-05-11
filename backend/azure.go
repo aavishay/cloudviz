@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -153,19 +154,20 @@ func getMetricsClient(subID string) (*armmonitor.MetricsClient, error) {
 func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, error)) (T, error) {
 	var zero T
 
-	// Per-subscription rate limiter: max 1 cost request per 2s per subscription
+	// Per-subscription rate limiter: Azure allows ~10 req/s per subscription
+	// Use 5 req/s with burst of 3 to handle consecutive calls gracefully
 	subID := extractSubID(logCtx)
 	if subID != "" {
 		var lim *rate.Limiter
 		if l, ok := subCostLimiters.Load(subID); ok {
 			lim = l.(*rate.Limiter)
 		} else {
-			lim = rate.NewLimiter(rate.Limit(0.5), 1)
+			lim = rate.NewLimiter(rate.Limit(5), 3)
 			if actual, loaded := subCostLimiters.LoadOrStore(subID, lim); loaded {
 				lim = actual.(*rate.Limiter)
 			}
 		}
-		if err := lim.Wait(ctx); err != nil {
+		if err := lim.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Per-sub rate limiter error for %s: %v", logCtx, err)
 		}
 	}
@@ -174,7 +176,7 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 		if err := cooldownWait(ctx); err != nil {
 			return zero, err
 		}
-		if err := costLimiter.Wait(ctx); err != nil {
+		if err := costLimiter.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Rate limiter error for %s: %v", logCtx, err)
 		}
 

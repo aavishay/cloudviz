@@ -41,7 +41,9 @@ var (
 	argClient      *armresourcegraph.Client
 	lastSync       time.Time
 	syncMutex      sync.Mutex
-	costLimiter    = rate.NewLimiter(rate.Limit(0.5), 1)
+	// Azure Cost Management: ~10 req/s per subscription, but be conservative
+	// Burst of 5 allows short bursts while staying under global limits
+	costLimiter    = rate.NewLimiter(rate.Limit(2), 5)
 )
 
 // toAnySlice converts a string slice to []any for SQL query arguments
@@ -57,7 +59,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.15.0",
+		Version: "1.16.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -450,6 +452,7 @@ func startServer(port string) {
 				defer func() { <-sem }()
 
 				current, err1 := fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
+				time.Sleep(200 * time.Millisecond) // Small delay between consecutive calls to same sub
 				previous, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
 
 				if err1 != nil || err2 != nil {
@@ -617,6 +620,7 @@ func startServer(port string) {
 
 				// Fetch current period costs
 				current, err1 := fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
+				time.Sleep(200 * time.Millisecond) // Small delay between consecutive calls to same sub
 				previous, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
 
 				if err1 != nil || err2 != nil {
@@ -1509,6 +1513,7 @@ func startServer(port string) {
 
 				// Current period
 				curr, err1 := fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
+				time.Sleep(200 * time.Millisecond) // Small delay between consecutive calls to same sub
 				// Previous period
 				prev, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
 
@@ -2528,32 +2533,39 @@ type streamMsg struct {
 
 func sseHandler(c *gin.Context) {
 	subs := c.QueryArray("subscriptionId")
+	log.Printf("SSE: starting stream for %d subscriptions", len(subs))
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
-	msgChan := make(chan streamMsg, len(subs)*3)
+	msgChan := make(chan streamMsg, len(subs)*4) // Larger buffer to prevent blocking
 	go func() {
+		defer close(msgChan)
 		var uncached []string
+		cachedCount := 0
 		// First, send cached data and identify uncached subs
 		for _, sid := range subs {
 			curr, ok1 := cache.get(sid, "current")
 			if ok1 {
+				cachedCount++
 				msgChan <- streamMsg{Type: "data", SubID: sid, Data: gin.H{"current": normalizeResults(curr)}}
 				msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
 			} else {
 				uncached = append(uncached, sid)
 			}
 		}
+		log.Printf("SSE: %d cached, %d uncached subscriptions", cachedCount, len(uncached))
 
 		// Fetch uncached subs sequentially (slower but no deadlock)
 		if len(uncached) > 0 {
-			for _, subID := range uncached {
+			for i, subID := range uncached {
+				log.Printf("SSE: fetching sub %d/%d: %s", i+1, len(uncached), subID)
 				now := time.Now()
 				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 				_, err := fetchSubCostsSync(costClient, subID, "current", now.AddDate(0, 0, -30), ctx)
 				cancel()
 				if err != nil {
+					log.Printf("SSE: error fetching %s: %v", subID, err)
 					msgChan <- streamMsg{Type: "status", SubID: subID, Message: "error: " + err.Error()}
 					continue
 				}
@@ -2561,18 +2573,38 @@ func sseHandler(c *gin.Context) {
 					msgChan <- streamMsg{Type: "data", SubID: subID, Data: gin.H{"current": normalizeResults(res)}}
 				}
 				msgChan <- streamMsg{Type: "status", SubID: subID, Message: "synced"}
-				time.Sleep(3 * time.Second) // 3s delay between subs
+				log.Printf("SSE: completed sub %d/%d: %s", i+1, len(uncached), subID)
+				if i < len(uncached)-1 {
+					time.Sleep(3 * time.Second) // 3s delay between subs
+				}
 			}
 		}
+		log.Printf("SSE: sending done message")
 		msgChan <- streamMsg{Type: "done"}
 	}()
 
-	for msg := range msgChan {
-		data, _ := json.Marshal(msg)
-		c.SSEvent("message", string(data))
-		c.Writer.Flush()
-		if msg.Type == "done" {
-			break
+	// Keep-alive ticker to prevent connection timeouts
+	keepAlive := time.NewTicker(5 * time.Second)
+	defer keepAlive.Stop()
+
+	clientDisconnected := c.Request.Context().Done()
+	for {
+		select {
+		case <-clientDisconnected:
+			log.Printf("SSE: client disconnected")
+			return
+		case msg := <-msgChan:
+			data, _ := json.Marshal(msg)
+			c.SSEvent("message", string(data))
+			c.Writer.Flush()
+			if msg.Type == "done" {
+				log.Printf("SSE: stream completed")
+				return
+			}
+		case <-keepAlive.C:
+			// Send keep-alive comment to prevent timeout
+			c.Writer.WriteString(":keepalive\n\n")
+			c.Writer.Flush()
 		}
 	}
 }
