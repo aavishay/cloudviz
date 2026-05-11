@@ -18,7 +18,7 @@ class Cloudviz < Formula
   on_linux do
     on_intel do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_linux_amd64.tar.gz"
-      sha256 "PLACEHOLDER_LINUX_SHA256"
+      sha256 "bd2254988f465359b19996b747d12d7fc8db2cdfacb40be6da92188f61500f01"
     end
   end
 
