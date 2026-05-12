@@ -10,11 +10,13 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/costmanagement/armcostmanagement"
@@ -1460,4 +1462,150 @@ func getEnvFromTags(tags map[string]string) string {
 		}
 	}
 	return "Untagged"
+}
+
+// ActivityLogEvent represents an Azure Activity Log event
+type ActivityLogEvent struct {
+	Caller        string    `json:"caller"`
+	OperationName string    `json:"operationName"`
+	ResourceID    string    `json:"resourceId"`
+	EventTimestamp time.Time `json:"eventTimestamp"`
+}
+
+// fetchActivityLogs fetches Azure Activity Logs for a subscription within a time range
+func fetchActivityLogs(ctx context.Context, subscriptionID string, startTime, endTime time.Time) (map[string][]ActivityLogEvent, error) {
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get credentials: %w", err)
+	}
+
+	// Build the Activity Logs API URL
+	filter := fmt.Sprintf("eventTimestamp ge '%s' and eventTimestamp le '%s'",
+		startTime.Format(time.RFC3339),
+		endTime.Format(time.RFC3339))
+
+	url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/providers/Microsoft.Insights/eventtypes/management/values?$filter=%s&api-version=2015-04-01",
+		subscriptionID, url.QueryEscape(filter))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{
+		Scopes: []string{"https://management.azure.com/.default"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("activity logs API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Value []struct {
+			Caller         json.RawMessage `json:"caller"`
+			OperationName struct {
+				Value string `json:"value"`
+			} `json:"operationName"`
+			ResourceID     *string `json:"resourceId"`
+			EventTimestamp string `json:"eventTimestamp"`
+		} `json:"value"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode activity logs: %w", err)
+	}
+
+	// Group events by resource ID for easy lookup
+	events := make(map[string][]ActivityLogEvent)
+	for _, v := range result.Value {
+		if v.ResourceID == nil {
+			continue
+		}
+
+		// Parse timestamp
+		ts, _ := time.Parse(time.RFC3339, v.EventTimestamp)
+
+		// Parse caller - can be string or object
+		caller := "Unknown"
+		if len(v.Caller) > 0 {
+			// Try as string first
+			var callerStr string
+			if err := json.Unmarshal(v.Caller, &callerStr); err == nil {
+				caller = callerStr
+			} else {
+				// Try as object with emailAddress
+				var callerObj struct {
+					Email string `json:"emailAddress"`
+				}
+				if err := json.Unmarshal(v.Caller, &callerObj); err == nil && callerObj.Email != "" {
+					caller = callerObj.Email
+				}
+			}
+		}
+
+		event := ActivityLogEvent{
+			Caller:         caller,
+			OperationName:  v.OperationName.Value,
+			ResourceID:     *v.ResourceID,
+			EventTimestamp: ts,
+		}
+
+		// Normalize resource ID (lowercase for matching)
+		resourceIDLower := strings.ToLower(*v.ResourceID)
+		events[resourceIDLower] = append(events[resourceIDLower], event)
+	}
+
+	return events, nil
+}
+
+// findUserForChange looks up the user who made a change to a resource
+func findUserForChange(activityLogs map[string][]ActivityLogEvent, resourceID string, changeTime time.Time) string {
+	resourceIDLower := strings.ToLower(resourceID)
+
+	events, ok := activityLogs[resourceIDLower]
+	if !ok {
+		return "Unknown"
+	}
+
+	// Find the closest event to the change time (within 5 minutes)
+	var bestMatch *ActivityLogEvent
+	bestDiff := time.Hour // max diff
+
+	for i := range events {
+		diff := events[i].EventTimestamp.Sub(changeTime)
+		if diff < 0 {
+			diff = -diff
+		}
+
+		// Only consider write operations
+		if !strings.Contains(events[i].OperationName, "/write") &&
+		   !strings.Contains(events[i].OperationName, "/delete") &&
+		   !strings.Contains(events[i].OperationName, "/create") {
+			continue
+		}
+
+		if diff < bestDiff && diff < 5*time.Minute {
+			bestDiff = diff
+			bestMatch = &events[i]
+		}
+	}
+
+	if bestMatch != nil {
+		return bestMatch.Caller
+	}
+	return "Unknown"
 }

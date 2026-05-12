@@ -287,7 +287,8 @@ func startServer(port string) {
 				res[i].SubscriptionID = "masked-sub"
 			}
 		}
-		recordResourceChanges(cache.db, res)
+		// Record changes asynchronously to not block the response
+		go recordResourceChanges(cache.db, res)
 		c.JSON(200, gin.H{"data": res, "totalCost": totalCost, "total": len(res)})
 	})
 
@@ -2441,6 +2442,400 @@ func startServer(port string) {
 		c.Data(200, contentType, data)
 	})
 
+	// Enhanced Reporting Endpoints
+	r.GET("/api/reports/resource-group-costs", func(c *gin.Context) {
+		subs := c.QueryArray("subscriptionId")
+		if len(subs) == 0 {
+			// Get all visible subscriptions
+			subs = getVisibleSubscriptions(c.Request.Context())
+		}
+
+		var reports []ResourceGroupCostReport
+		now := time.Now()
+		currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		previousMonthStart := currentMonthStart.AddDate(0, -1, 0)
+		previousMonthEnd := currentMonthStart.Add(-time.Second)
+
+		for _, subID := range subs {
+			// Get subscription name
+			subName := getSubscriptionName(c.Request.Context(), subID)
+
+			// Get resource groups for this subscription
+			rgs := getResourceGroupsForSubscription(c.Request.Context(), subID)
+
+			for _, rg := range rgs {
+				// Fetch current month costs
+				currentCost := fetchResourceGroupCost(c.Request.Context(), subID, rg, currentMonthStart, now)
+				previousCost := fetchResourceGroupCost(c.Request.Context(), subID, rg, previousMonthStart, previousMonthEnd)
+
+				// Get resources in this RG
+				resources, _, _ := FetchResourcesWithCosts(c.Request.Context(), []string{subID}, []string{rg}, nil, nil, "", false, false, false, false, "", "")
+
+				// Calculate top cost resources
+				var topResources []ResourceCostSummary
+				sort.Slice(resources, func(i, j int) bool {
+					return resources[i].Cost > resources[j].Cost
+				})
+				totalCost := 0.0
+				for _, r := range resources {
+					totalCost += r.Cost
+				}
+				for i, r := range resources {
+					if i >= 5 {
+						break
+					}
+					percent := 0.0
+					if totalCost > 0 {
+						percent = (r.Cost / totalCost) * 100
+					}
+					topResources = append(topResources, ResourceCostSummary{
+						ResourceID:   r.ID,
+						ResourceName: r.Name,
+						ResourceType: r.Type,
+						MonthlyCost:  r.Cost,
+						CostPercent:  percent,
+					})
+				}
+
+				change := currentCost - previousCost
+				changePercent := 0.0
+				if previousCost > 0 {
+					changePercent = (change / previousCost) * 100
+				}
+
+				reports = append(reports, ResourceGroupCostReport{
+					ResourceGroup:       rg,
+					SubscriptionID:      subID,
+					SubscriptionName:    subName,
+					CurrentMonthCost:    currentCost,
+					PreviousMonthCost:   previousCost,
+					CostChange:          change,
+					CostChangePercent:   changePercent,
+					ResourceCount:       len(resources),
+					TopCostResources:    topResources,
+				})
+			}
+		}
+
+		c.JSON(200, reports)
+	})
+
+	r.GET("/api/reports/daily-trends", func(c *gin.Context) {
+		subID := c.Query("subscriptionId")
+		if subID == "" {
+			c.JSON(400, gin.H{"error": "subscriptionId is required"})
+			return
+		}
+
+		now := time.Now()
+		currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		previousMonthStart := currentMonthStart.AddDate(0, -1, 0)
+		previousMonthEnd := currentMonthStart.Add(-time.Second)
+
+		subName := getSubscriptionName(c.Request.Context(), subID)
+
+		// Fetch daily costs for both months
+		currentDaily, err1 := fetchDailyCostsWithCache(c.Request.Context(), subID, currentMonthStart, now)
+		previousDaily, err2 := fetchDailyCostsWithCache(c.Request.Context(), subID, previousMonthStart, previousMonthEnd)
+
+		if err1 != nil || err2 != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to fetch daily costs: %v, %v", err1, err2)})
+			return
+		}
+
+		// Build daily trends
+		var trends []DailyCostTrend
+		currentTotal := 0.0
+		previousTotal := 0.0
+
+		// Create a map for previous month costs by day
+		previousByDay := make(map[int]float64)
+		for _, d := range previousDaily {
+			if day, ok := d["day"].(int); ok {
+				if cost, ok := d["cost"].(float64); ok {
+					previousByDay[day] = cost
+					previousTotal += cost
+				}
+			}
+		}
+
+		// Build trends for each day of current month so far
+		for _, d := range currentDaily {
+			if day, ok := d["day"].(int); ok {
+				if currentCost, ok := d["cost"].(float64); ok {
+					previousCost := previousByDay[day]
+					change := currentCost - previousCost
+					changePercent := 0.0
+					if previousCost > 0 {
+						changePercent = (change / previousCost) * 100
+					}
+
+					trends = append(trends, DailyCostTrend{
+						Date:            fmt.Sprintf("%02d", day),
+						CurrentMonth:    currentCost,
+						PreviousMonth:   previousCost,
+						Change:          change,
+						ChangePercent:   changePercent,
+					})
+					currentTotal += currentCost
+				}
+			}
+		}
+
+		// Sort trends by day
+		sort.Slice(trends, func(i, j int) bool {
+			return trends[i].Date < trends[j].Date
+		})
+
+		// Calculate overall change
+		overallChange := currentTotal - previousTotal
+		overallChangePercent := 0.0
+		if previousTotal > 0 {
+			overallChangePercent = (overallChange / previousTotal) * 100
+		}
+
+		// Project month-end cost based on daily average so far
+		daysInMonth := float64(daysInCurrentMonth())
+		daysElapsed := float64(now.Day())
+		projectedMonthEnd := 0.0
+		if daysElapsed > 0 {
+			dailyAverage := currentTotal / daysElapsed
+			projectedMonthEnd = dailyAverage * daysInMonth
+		}
+
+		report := CostTrendReport{
+			SubscriptionID:       subID,
+			SubscriptionName:     subName,
+			DailyTrends:          trends,
+			CurrentMonthTotal:    currentTotal,
+			PreviousMonthTotal:   previousTotal,
+			OverallChange:        overallChange,
+			OverallChangePercent: overallChangePercent,
+			ProjectedMonthEnd:    projectedMonthEnd,
+		}
+
+		c.JSON(200, report)
+	})
+
+	r.GET("/api/reports/enhanced", func(c *gin.Context) {
+		subs := c.QueryArray("subscriptionId")
+		if len(subs) == 0 {
+			subs = getVisibleSubscriptions(c.Request.Context())
+		}
+
+		now := time.Now()
+		currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		previousMonthStart := currentMonthStart.AddDate(0, -1, 0)
+		previousMonthEnd := currentMonthStart.Add(-time.Second)
+
+		var rgReports []ResourceGroupCostReport
+		var trendReports []CostTrendReport
+		var topChanges []CostChangeItem
+		totalCurrentCost := 0.0
+		totalPreviousCost := 0.0
+		totalResources := 0
+		totalRGs := 0
+
+		for _, subID := range subs {
+			subName := getSubscriptionName(c.Request.Context(), subID)
+
+			// Get resource groups
+			rgs := getResourceGroupsForSubscription(c.Request.Context(), subID)
+
+			for _, rg := range rgs {
+				currentCost := fetchResourceGroupCost(c.Request.Context(), subID, rg, currentMonthStart, now)
+				previousCost := fetchResourceGroupCost(c.Request.Context(), subID, rg, previousMonthStart, previousMonthEnd)
+
+				resources, _, _ := FetchResourcesWithCosts(c.Request.Context(), []string{subID}, []string{rg}, nil, nil, "", false, false, false, false, "", "")
+
+				totalCurrentCost += currentCost
+				totalPreviousCost += previousCost
+				totalResources += len(resources)
+				totalRGs++
+
+				// Track changes
+				change := currentCost - previousCost
+				changePercent := 0.0
+				if previousCost > 0 {
+					changePercent = (change / previousCost) * 100
+				}
+
+				var changeType string
+				if previousCost == 0 && currentCost > 0 {
+					changeType = "new"
+				} else if change > 0 {
+					changeType = "increased"
+				} else if change < 0 {
+					changeType = "decreased"
+				} else {
+					changeType = "stable"
+				}
+
+				topChanges = append(topChanges, CostChangeItem{
+					ResourceGroup: rg,
+					ChangeType:    changeType,
+					CurrentCost:   currentCost,
+					PreviousCost:  previousCost,
+					ChangeAmount:  change,
+					ChangePercent: changePercent,
+				})
+
+				// Sort top resources in RG
+				sort.Slice(resources, func(i, j int) bool {
+					return resources[i].Cost > resources[j].Cost
+				})
+
+				var topResources []ResourceCostSummary
+				rgTotal := 0.0
+				for _, r := range resources {
+					rgTotal += r.Cost
+				}
+				for i, r := range resources {
+					if i >= 5 {
+						break
+					}
+					percent := 0.0
+					if rgTotal > 0 {
+						percent = (r.Cost / rgTotal) * 100
+					}
+					topResources = append(topResources, ResourceCostSummary{
+						ResourceID:   r.ID,
+						ResourceName: r.Name,
+						ResourceType: r.Type,
+						MonthlyCost:  r.Cost,
+						CostPercent:  percent,
+					})
+				}
+
+				changePct := 0.0
+				if previousCost > 0 {
+					changePct = (change / previousCost) * 100
+				}
+
+				rgReports = append(rgReports, ResourceGroupCostReport{
+					ResourceGroup:       rg,
+					SubscriptionID:      subID,
+					SubscriptionName:    subName,
+					CurrentMonthCost:    currentCost,
+					PreviousMonthCost:   previousCost,
+					CostChange:          change,
+					CostChangePercent:   changePct,
+					ResourceCount:       len(resources),
+					TopCostResources:    topResources,
+				})
+			}
+
+			// Get daily trends for this subscription
+			currentDaily, _ := fetchDailyCostsWithCache(c.Request.Context(), subID, currentMonthStart, now)
+			previousDaily, _ := fetchDailyCostsWithCache(c.Request.Context(), subID, previousMonthStart, previousMonthEnd)
+
+			var trends []DailyCostTrend
+			subCurrentTotal := 0.0
+			subPreviousTotal := 0.0
+
+			previousByDay := make(map[int]float64)
+			for _, d := range previousDaily {
+				if day, ok := d["day"].(int); ok {
+					if cost, ok := d["cost"].(float64); ok {
+						previousByDay[day] = cost
+						subPreviousTotal += cost
+					}
+				}
+			}
+
+			for _, d := range currentDaily {
+				if day, ok := d["day"].(int); ok {
+					if currentCost, ok := d["cost"].(float64); ok {
+						previousCost := previousByDay[day]
+						change := currentCost - previousCost
+						changePercent := 0.0
+						if previousCost > 0 {
+							changePercent = (change / previousCost) * 100
+						}
+						trends = append(trends, DailyCostTrend{
+							Date:            fmt.Sprintf("%02d", day),
+							CurrentMonth:    currentCost,
+							PreviousMonth:   previousCost,
+							Change:          change,
+							ChangePercent:   changePercent,
+						})
+						subCurrentTotal += currentCost
+					}
+				}
+			}
+
+			sort.Slice(trends, func(i, j int) bool {
+				return trends[i].Date < trends[j].Date
+			})
+
+			overallChange := subCurrentTotal - subPreviousTotal
+			overallChangePercent := 0.0
+			if subPreviousTotal > 0 {
+				overallChangePercent = (overallChange / subPreviousTotal) * 100
+			}
+
+			daysInMonth := float64(daysInCurrentMonth())
+			daysElapsed := float64(now.Day())
+			projectedMonthEnd := 0.0
+			if daysElapsed > 0 {
+				dailyAverage := subCurrentTotal / daysElapsed
+				projectedMonthEnd = dailyAverage * daysInMonth
+			}
+
+			trendReports = append(trendReports, CostTrendReport{
+				SubscriptionID:       subID,
+				SubscriptionName:     subName,
+				DailyTrends:          trends,
+				CurrentMonthTotal:    subCurrentTotal,
+				PreviousMonthTotal:   subPreviousTotal,
+				OverallChange:        overallChange,
+				OverallChangePercent: overallChangePercent,
+				ProjectedMonthEnd:    projectedMonthEnd,
+			})
+		}
+
+		// Sort top changes by absolute change amount
+		sort.Slice(topChanges, func(i, j int) bool {
+			return math.Abs(topChanges[i].ChangeAmount) > math.Abs(topChanges[j].ChangeAmount)
+		})
+
+		// Limit to top 10 changes
+		if len(topChanges) > 10 {
+			topChanges = topChanges[:10]
+		}
+
+		// Calculate overall change
+		totalChange := totalCurrentCost - totalPreviousCost
+		totalChangePercent := 0.0
+		if totalPreviousCost > 0 {
+			totalChangePercent = (totalChange / totalPreviousCost) * 100
+		}
+
+		avgCostPerResource := 0.0
+		if totalResources > 0 {
+			avgCostPerResource = totalCurrentCost / float64(totalResources)
+		}
+
+		report := EnhancedReport{
+			GeneratedAt:    now,
+			ReportPeriod:   currentMonthStart.Format("January 2006"),
+			ResourceGroupReports: rgReports,
+			CostTrends:     trendReports,
+			TopChanges:     topChanges,
+			Summary: ReportSummary{
+				TotalCurrentMonthCost:  totalCurrentCost,
+				TotalPreviousMonthCost: totalPreviousCost,
+				TotalChange:            totalChange,
+				TotalChangePercent:     totalChangePercent,
+				TotalResourceGroups:    totalRGs,
+				TotalResources:         totalResources,
+				AvgCostPerResource:     avgCostPerResource,
+			},
+		}
+
+		c.JSON(200, report)
+	})
+
 	fmt.Printf("CloudViz server starting at :%s\n", port)
 	// Background sync disabled - fetch costs on-demand via SSE only
 	// go backgroundSync(costClient)
@@ -2478,7 +2873,16 @@ func historyHandler(c *gin.Context) {
 		}
 	}
 
+	// Optimized query: use a CTE for latest costs instead of correlated subquery
 	query := `
+		WITH latest_costs AS (
+			SELECT resource_id, SUM(cost) as total_cost
+			FROM costs
+			WHERE period = (
+				SELECT MAX(period) FROM costs LIMIT 1
+			)
+			GROUP BY resource_id
+		)
 		SELECT
 			h.resource_id,
 			COALESCE(h.resource_name, h.resource_id),
@@ -2488,17 +2892,10 @@ func historyHandler(c *gin.Context) {
 			h.old_value,
 			h.new_value,
 			h.timestamp,
-			COALESCE((
-				SELECT SUM(c.cost)
-				FROM costs c
-				WHERE LOWER(c.resource_id) = LOWER(h.resource_id)
-				AND c.period = (
-					SELECT period FROM costs
-					WHERE LOWER(resource_id) = LOWER(h.resource_id)
-					ORDER BY fetched_at DESC LIMIT 1
-				)
-			), 0) as resource_cost
-		FROM resource_history h`
+			COALESCE(lc.total_cost, 0) as resource_cost,
+			COALESCE(h.changed_by, 'Unknown') as changed_by
+		FROM resource_history h
+		LEFT JOIN latest_costs lc ON LOWER(lc.resource_id) = LOWER(h.resource_id)`
 
 	var args []any
 	if !sinceTime.IsZero() {
@@ -2506,7 +2903,7 @@ func historyHandler(c *gin.Context) {
 		args = append(args, sinceTime.Unix())
 	}
 
-	query += ` ORDER BY h.timestamp DESC`
+	query += ` ORDER BY h.timestamp DESC LIMIT 1000`
 
 	rows, err := cache.db.Query(query, args...)
 	if err != nil {
@@ -2518,7 +2915,7 @@ func historyHandler(c *gin.Context) {
 	var history []ResourceChange
 	for rows.Next() {
 		var h ResourceChange
-		rows.Scan(&h.ResourceID, &h.ResourceName, &h.ResourceType, &h.ChangeType, &h.Field, &h.OldValue, &h.NewValue, &h.Timestamp, &h.Cost)
+		rows.Scan(&h.ResourceID, &h.ResourceName, &h.ResourceType, &h.ChangeType, &h.Field, &h.OldValue, &h.NewValue, &h.Timestamp, &h.Cost, &h.ChangedBy)
 		history = append(history, h)
 	}
 	c.JSON(200, history)
@@ -2656,4 +3053,143 @@ func backgroundSync(client *armcostmanagement.QueryClient) {
 	}
 
 	log.Println("Background sync: completed")
+}
+
+// Helper functions for enhanced reporting
+
+// getVisibleSubscriptions returns list of subscription IDs from fetched resources
+func getVisibleSubscriptions(ctx context.Context) []string {
+	res, _, err := FetchResourcesWithCosts(ctx, nil, nil, nil, nil, "", false, false, false, false, "", "")
+	if err != nil {
+		return []string{}
+	}
+
+	subMap := make(map[string]bool)
+	for _, r := range res {
+		subMap[r.SubscriptionID] = true
+	}
+
+	var subs []string
+	for s := range subMap {
+		subs = append(subs, s)
+	}
+	return subs
+}
+
+// getResourceGroupsForSubscription returns resource groups for a subscription
+func getResourceGroupsForSubscription(ctx context.Context, subID string) []string {
+	// Use existing resources to get resource groups
+	res, _, err := FetchResourcesWithCosts(ctx, []string{subID}, nil, nil, nil, "", false, false, false, false, "", "")
+	if err != nil {
+		return []string{}
+	}
+
+	rgMap := make(map[string]bool)
+	for _, r := range res {
+		if r.SubscriptionID == subID && r.ResourceGroup != "" {
+			rgMap[r.ResourceGroup] = true
+		}
+	}
+
+	var rgs []string
+	for rg := range rgMap {
+		rgs = append(rgs, rg)
+	}
+	return rgs
+}
+
+// fetchResourceGroupCost calculates cost for a resource group from cached data
+func fetchResourceGroupCost(ctx context.Context, subID, rg string, start, end time.Time) float64 {
+	// Try to get from cache
+	if cache != nil {
+		res, ok := cache.get(subID, "current")
+		if ok {
+			totalCost := 0.0
+			if res.Properties != nil && res.Properties.Rows != nil {
+				for _, row := range res.Properties.Rows {
+					if len(row) >= 5 {
+						// Find ResourceGroup column (usually index 1)
+						if rgVal, ok := row[1].(string); ok {
+							if strings.EqualFold(rgVal, rg) {
+								if cost, ok := row[4].(float64); ok {
+									totalCost += cost
+								}
+							}
+						}
+					}
+				}
+			}
+			return totalCost
+		}
+	}
+
+	// Fallback: calculate from resources
+	res, _, err := FetchResourcesWithCosts(ctx, []string{subID}, []string{rg}, nil, nil, "", false, false, false, false, "", "")
+	if err != nil {
+		return 0
+	}
+
+	totalCost := 0.0
+	for _, r := range res {
+		totalCost += r.Cost
+	}
+	return totalCost
+}
+
+// fetchDailyCostsWithCache fetches daily costs with caching
+func fetchDailyCostsWithCache(ctx context.Context, subID string, start, end time.Time) ([]map[string]any, error) {
+	if cache != nil {
+		daily, ok := cache.getDailyCosts(subID, start, end)
+		if ok {
+			return daily, nil
+		}
+	}
+
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := armcostmanagement.NewQueryClient(cred, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	daily, err := fetchDailyCosts(client, subID, start, end, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if cache != nil {
+		cache.setDailyCosts(subID, daily)
+	}
+
+	return daily, nil
+}
+
+// getSubscriptionName returns the display name of a subscription
+func getSubscriptionName(ctx context.Context, subID string) string {
+	// Try to get from resources
+	res, _, err := FetchResourcesWithCosts(ctx, []string{subID}, nil, nil, nil, "", false, false, false, false, "", "")
+	if err != nil {
+		return subID
+	}
+
+	for _, r := range res {
+		if r.SubscriptionID == subID {
+			// Subscription name is usually available in tags or we use ID
+			return subID[:8] + "..." // Shorten for display
+		}
+	}
+
+	return subID
+}
+
+// daysInCurrentMonth returns the number of days in the current month
+func daysInCurrentMonth() int {
+	now := time.Now()
+	nextMonth := now.AddDate(0, 1, 0)
+	firstOfNextMonth := time.Date(nextMonth.Year(), nextMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
+	firstOfCurrentMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return int(firstOfNextMonth.Sub(firstOfCurrentMonth).Hours() / 24)
 }

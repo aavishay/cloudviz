@@ -87,6 +87,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
 }
 
 /* Smooth theme transitions */
@@ -293,7 +294,6 @@ body, body * {
   position: sticky;
   top: var(--header-h);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-  position: relative;
 }
 
 .sidebar::before {

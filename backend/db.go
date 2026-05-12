@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -96,6 +97,27 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if !hasResourceType {
 		if _, err := db.Exec(`ALTER TABLE resource_history ADD COLUMN resource_type TEXT`); err != nil {
 			log.Printf("Warning: failed to add resource_type column: %v", err)
+		}
+	}
+
+	// Add changed_by column if it doesn't exist
+	var hasChangedBy bool
+	if rows, err := db.Query("PRAGMA table_info(resource_history)"); err == nil {
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notNull, dfltValue, pk int
+			rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk)
+			if name == "changed_by" {
+				hasChangedBy = true
+				break
+			}
+		}
+		rows.Close()
+	}
+	if !hasChangedBy {
+		if _, err := db.Exec(`ALTER TABLE resource_history ADD COLUMN changed_by TEXT`); err != nil {
+			log.Printf("Warning: failed to add changed_by column: %v", err)
 		}
 	}
 
@@ -485,6 +507,28 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 		}
 	}
 
+	// Get unique subscription IDs from new and old resources
+	subMap := make(map[string]bool)
+	for _, r := range newResources {
+		subMap[r.SubscriptionID] = true
+	}
+	for _, r := range oldMap {
+		subMap[r.SubscriptionID] = true
+	}
+
+	// Fetch activity logs for all subscriptions (last 2 hours to cover sync interval)
+	ctx := context.Background()
+	activityLogs := make(map[string]map[string][]ActivityLogEvent) // subID -> resourceID -> events
+	for subID := range subMap {
+		startTime := now.Add(-2 * time.Hour)
+		logs, err := fetchActivityLogs(ctx, subID, startTime, now)
+		if err != nil {
+			log.Printf("Warning: failed to fetch activity logs for sub %s: %v", subID, err)
+			continue
+		}
+		activityLogs[subID] = logs
+	}
+
 	// Use a single transaction for all changes
 	tx, err := db.Begin()
 	if err != nil {
@@ -493,7 +537,7 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	}
 	defer tx.Rollback()
 
-	changeStmt, err := tx.Prepare(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+	changeStmt, err := tx.Prepare(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		log.Printf("Error: failed to prepare change statement: %v", err)
 		return
@@ -501,37 +545,51 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	defer changeStmt.Close()
 
 	newMap := make(map[string]AzureResource)
+	changeTime := now
 	for _, r := range newResources {
 		newMap[r.ID] = r
+		// Get activity logs for this resource's subscription
+		subLogs := activityLogs[r.SubscriptionID]
+
 		if old, exists := oldMap[r.ID]; exists {
 			if old.Name != r.Name {
-				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "name", old.Name, r.Name)
+				user := findUserForChange(subLogs, r.ID, changeTime)
+				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "name", old.Name, r.Name, user)
 			}
 			if old.Status != r.Status {
-				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "status", old.Status, r.Status)
+				user := findUserForChange(subLogs, r.ID, changeTime)
+				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "status", old.Status, r.Status, user)
 			}
 			if old.Location != r.Location {
-				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "location", old.Location, r.Location)
+				user := findUserForChange(subLogs, r.ID, changeTime)
+				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "location", old.Location, r.Location, user)
 			}
 			if old.ResourceGroup != r.ResourceGroup {
-				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup)
+				user := findUserForChange(subLogs, r.ID, changeTime)
+				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup, user)
 			}
 			if old.Type != r.Type {
-				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "type", old.Type, r.Type)
+				user := findUserForChange(subLogs, r.ID, changeTime)
+				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "type", old.Type, r.Type, user)
 			}
 			oldTagsJSON, _ := json.Marshal(old.Tags)
 			newTagsJSON, _ := json.Marshal(r.Tags)
 			if string(oldTagsJSON) != string(newTagsJSON) {
-				recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "modified", "tags", string(oldTagsJSON), string(newTagsJSON))
+				user := findUserForChange(subLogs, r.ID, changeTime)
+				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "tags", string(oldTagsJSON), string(newTagsJSON), user)
 			}
 		} else {
-			recordChangeStmt(changeStmt, r.ID, r.Name, r.Type, "created", "", "", "")
+			user := findUserForChange(subLogs, r.ID, changeTime)
+			recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "created", "", "", "", user)
 		}
 	}
 
 	for id, old := range oldMap {
 		if _, exists := newMap[id]; !exists {
-			recordChangeStmt(changeStmt, id, old.Name, old.Type, "deleted", "", "", "")
+			// Get activity logs for this resource's subscription
+			subLogs := activityLogs[old.SubscriptionID]
+			user := findUserForChange(subLogs, id, changeTime)
+			recordChangeStmtWithUser(changeStmt, id, old.Name, old.Type, "deleted", "", "", "", user)
 		}
 	}
 
@@ -562,16 +620,24 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	}
 }
 
-// recordChangeStmt records a change using a prepared statement
-func recordChangeStmt(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {
-	if _, err := stmt.Exec(resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now()); err != nil {
+// recordChangeStmtWithUser records a change with user information
+func recordChangeStmtWithUser(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, user string) {
+	if user == "" {
+		user = "Unknown"
+	}
+	if _, err := stmt.Exec(resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now(), user); err != nil {
 		log.Printf("Warning: failed to record change: %v", err)
 	}
 }
 
+// recordChangeStmt records a change using a prepared statement (backward compatible)
+func recordChangeStmt(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {
+	recordChangeStmtWithUser(stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, "Unknown")
+}
+
 func recordChange(db *sql.DB, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {
-	if _, err := db.Exec(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now()); err != nil {
+	if _, err := db.Exec(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now(), "Unknown"); err != nil {
 		log.Printf("Warning: failed to record change: %v", err)
 	}
 }

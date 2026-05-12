@@ -145,6 +145,7 @@ interface ResourceChange {
   newValue: string;
   timestamp: string;
   cost: number;
+  changedBy: string;
 }
 
 // ─── Resource type labels ─────────────────────────────────────────────────────
@@ -313,8 +314,9 @@ function HistoryView({ history, historyLoading, fetchHistory, resources, setSele
 
   const filteredHistory = useMemo(() => {
     let result = history;
+    // Normalize changeType to lowercase for comparison
     if (filterType !== 'all') {
-      result = result.filter(h => h.changeType === filterType);
+      result = result.filter(h => (h.changeType || '').toLowerCase() === filterType);
     }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -675,6 +677,21 @@ function HistoryView({ history, historyLoading, fetchHistory, resources, setSele
                               borderRadius: 6
                             }}>
                               ${h.cost.toLocaleString('en-US', { maximumFractionDigits: 2 })}/mo
+                            </span>
+                          )}
+                          {h.changedBy && h.changedBy !== 'Unknown' && (
+                            <span style={{
+                              fontSize: 11,
+                              color: 'var(--text-3)',
+                              padding: '2px 6px',
+                              background: 'var(--bg-surface)',
+                              borderRadius: 4,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4
+                            }}>
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                              {h.changedBy}
                             </span>
                           )}
                         </div>
@@ -2386,6 +2403,9 @@ export default function App() {
   const [commitmentSavings, setCommitmentSavings] = useState<any>(null);
   const [typeTrendData, setTypeTrendData] = useState<any>(null);
   const [envFilter, setEnvFilter] = useState(() => localStorage.getItem('cloudviz-envFilter') || '');
+
+  // Enhanced reporting state
+  const [enhancedReportData, setEnhancedReportData] = useState<any>(null);
   useEffect(() => { localStorage.setItem('cloudviz-envFilter', envFilter); }, [envFilter]);
   const [piiMasking, setPiiMasking] = useState(() => localStorage.getItem('cloudviz-piiMasking') === 'true');
   useEffect(() => { localStorage.setItem('cloudviz-piiMasking', String(piiMasking)); }, [piiMasking]);
@@ -4926,93 +4946,354 @@ export default function App() {
     window.open(`http://localhost:8080/api/export?${params}`, '_blank');
   };
 
-  const exportPDF = () => {
+  // Fetch enhanced report data for PDF export
+  const fetchEnhancedReportData = async () => {
+    try {
+      const params = new URLSearchParams();
+      subFilter.forEach(f => params.append('subscriptionId', f));
+
+      const response = await fetch(`http://localhost:8080/api/reports/enhanced?${params}`);
+      if (!response.ok) throw new Error('Failed to fetch enhanced report');
+      const data = await response.json();
+      setEnhancedReportData(data);
+      return data;
+    } catch (err) {
+      console.error('Error fetching enhanced report:', err);
+      return null;
+    }
+  };
+
+  const exportPDF = async () => {
+    // Fetch enhanced data first
+    const reportData = enhancedReportData || await fetchEnhancedReportData();
+
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     let y = 20;
 
-    // Title
-    doc.setFontSize(20);
-    doc.setTextColor(16, 185, 129);
-    doc.text('CloudViz FinOps Report', pageWidth / 2, y, { align: 'center' });
-    y += 10;
+    // Helper function to draw a colored bar chart
+    const drawBar = (x: number, yPos: number, width: number, height: number, color: [number, number, number]) => {
+      doc.setFillColor(color[0], color[1], color[2]);
+      doc.rect(x, yPos - height, width, height, 'F');
+    };
 
-    doc.setFontSize(10);
-    doc.setTextColor(100);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, pageWidth / 2, y, { align: 'center' });
-    y += 15;
+    // Helper function to draw a horizontal bar with label
+    const drawHorizontalBar = (x: number, yPos: number, maxWidth: number, value: number, maxValue: number, color: [number, number, number], label: string, valueText: string) => {
+      const barWidth = maxValue > 0 ? (value / maxValue) * maxWidth : 0;
 
-    // Summary stats
-    doc.setFontSize(14);
-    doc.setTextColor(30);
-    doc.text('Cost Summary', 20, y);
-    y += 8;
-
-    doc.setFontSize(10);
-    doc.setTextColor(60);
-    const totalCostFormatted = `$${(filteredTotalCost || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-    const resourceCount = totalResources || 0;
-    doc.text(`Total Monthly Cost: ${totalCostFormatted}`, 20, y); y += 6;
-    doc.text(`Total Resources: ${resourceCount}`, 20, y); y += 6;
-    doc.text(`Orphaned Resources: ${orphanedCount || 0}`, 20, y); y += 6;
-    doc.text(`Potential Monthly Savings: $${(totalPotentialSavings || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 20, y); y += 12;
-
-    // Top cost by type
-    if (costsByType.length > 0) {
-      doc.setFontSize(14);
-      doc.setTextColor(30);
-      doc.text('Cost by Resource Type', 20, y);
-      y += 8;
-
+      // Label
       doc.setFontSize(9);
       doc.setTextColor(60);
-      costsByType.slice(0, 8).forEach(item => {
-        doc.text(`${item.name}: $${item.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`, 25, y);
-        y += 5;
+      doc.text(label, x, yPos);
+
+      // Bar background
+      doc.setFillColor(230, 230, 230);
+      doc.rect(x + 60, yPos - 4, maxWidth, 6, 'F');
+
+      // Colored bar
+      if (barWidth > 0) {
+        drawBar(x + 60, yPos - 1, barWidth, 6, color);
+      }
+
+      // Value text
+      doc.setFontSize(8);
+      doc.setTextColor(100);
+      doc.text(valueText, x + 60 + maxWidth + 5, yPos);
+    };
+
+    // Title with colored header
+    doc.setFillColor(16, 185, 129);
+    doc.rect(0, 0, pageWidth, 35, 'F');
+    doc.setFontSize(22);
+    doc.setTextColor(255, 255, 255);
+    doc.text('CloudViz Enhanced FinOps Report', pageWidth / 2, 22, { align: 'center' });
+
+    // Generation info
+    y = 45;
+    doc.setFontSize(10);
+    doc.setTextColor(100);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 20, y);
+    if (reportData?.reportPeriod) {
+      doc.text(`Period: ${reportData.reportPeriod}`, pageWidth - 20, y, { align: 'right' });
+    }
+    y += 12;
+
+    // Executive Summary with color highlight
+    doc.setFillColor(240, 253, 244);
+    doc.rect(15, y - 6, pageWidth - 30, 55, 'F');
+    doc.setDrawColor(16, 185, 129);
+    doc.setLineWidth(0.5);
+    doc.rect(15, y - 6, pageWidth - 30, 55, 'S');
+
+    doc.setFontSize(16);
+    doc.setTextColor(16, 185, 129);
+    doc.text('Executive Summary', 20, y);
+    y += 10;
+
+    doc.setFontSize(11);
+    doc.setTextColor(30);
+    if (reportData?.summary) {
+      const summary = reportData.summary;
+      const currentFormatted = `$${summary.totalCurrentMonthCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+      const prevFormatted = `$${summary.totalPreviousMonthCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+      const changeFormatted = `${summary.totalChangePercent >= 0 ? '+' : ''}${summary.totalChangePercent.toFixed(1)}%`;
+      const changeColor = summary.totalChange > 0 ? [220, 38, 38] : [16, 185, 129];
+
+      doc.text(`Total Current Month Cost:`, 25, y); y += 7;
+      doc.setFontSize(14);
+      doc.setTextColor(16, 185, 129);
+      doc.text(currentFormatted, 35, y); y += 12;
+
+      doc.setFontSize(11);
+      doc.setTextColor(30);
+      doc.text(`Previous Month: ${prevFormatted}`, 25, y); y += 7;
+      doc.text(`Change: `, 25, y);
+      doc.setTextColor(changeColor[0], changeColor[1], changeColor[2]);
+      doc.text(changeFormatted, 45, y); y += 10;
+
+      doc.setTextColor(60);
+      doc.setFontSize(10);
+      doc.text(`Total Resource Groups: ${summary.totalResourceGroups}`, 25, y); y += 6;
+      doc.text(`Total Resources: ${summary.totalResources.toLocaleString()}`, 25, y); y += 6;
+      doc.text(`Avg Cost/Resource: $${summary.avgCostPerResource.toFixed(2)}`, 25, y); y += 6;
+    } else {
+      // Fallback to existing data
+      doc.text(`Total Monthly Cost: $${(filteredTotalCost || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`, 25, y); y += 7;
+      doc.text(`Total Resources: ${(totalResources || 0).toLocaleString()}`, 25, y); y += 7;
+      doc.text(`Orphaned Resources: ${orphanedCount || 0}`, 25, y); y += 7;
+    }
+    y += 10;
+
+    // Resource Group Cost Breakdown with colorful bars
+    if (reportData?.resourceGroupReports && reportData.resourceGroupReports.length > 0) {
+      if (y > 200) { doc.addPage(); y = 20; }
+
+      doc.setFontSize(14);
+      doc.setTextColor(30);
+      doc.text('Resource Group Cost Breakdown', 20, y);
+      y += 8;
+
+      // Sort by current cost descending
+      const sortedRGs = [...reportData.resourceGroupReports].sort((a, b) => b.currentMonthCost - a.currentMonthCost).slice(0, 10);
+      const maxCost = Math.max(...sortedRGs.map(rg => rg.currentMonthCost));
+
+      doc.setFontSize(9);
+      sortedRGs.forEach((rg, idx) => {
+        const colors: [number, number, number][] = [
+          [16, 185, 129], [59, 130, 246], [139, 92, 246], [249, 115, 22], [236, 72, 153],
+          [14, 165, 233], [168, 85, 247], [234, 179, 8], [239, 68, 68], [100, 116, 139]
+        ];
+        const color = colors[idx % colors.length];
+        const changeText = rg.costChange >= 0 ? `+${rg.costChangePercent.toFixed(1)}%` : `${rg.costChangePercent.toFixed(1)}%`;
+
+        const label = rg.resourceGroup.length > 20 ? rg.resourceGroup.substring(0, 20) + '...' : rg.resourceGroup;
+        const valueText = `$${rg.currentMonthCost.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${changeText})`;
+
+        drawHorizontalBar(20, y, 90, rg.currentMonthCost, maxCost, color, label, valueText);
+        y += 10;
         if (y > 270) { doc.addPage(); y = 20; }
       });
       y += 8;
     }
 
-    // Optimization opportunities
-    if (optimizationOpportunities.length > 0) {
-      if (y > 240) { doc.addPage(); y = 20; }
+    // Top Cost Changes section
+    if (reportData?.topChanges && reportData.topChanges.length > 0) {
+      if (y > 230) { doc.addPage(); y = 20; }
+
       doc.setFontSize(14);
       doc.setTextColor(30);
-      doc.text('Top Optimization Opportunities', 20, y);
-      y += 8;
+      doc.text('Top Cost Changes', 20, y);
+      y += 10;
 
-      doc.setFontSize(9);
-      doc.setTextColor(60);
-      optimizationOpportunities.slice(0, 10).forEach((o: { resource: { name: string }; reason: string; potentialSavings: number }) => {
-        doc.text(`• ${o.resource.name}: ${o.reason} ($${o.potentialSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo)`, 25, y);
-        y += 5;
+      doc.setFontSize(10);
+      reportData.topChanges.slice(0, 8).forEach((change: any) => {
+        const changeIcon = change.changeType === 'increased' ? '▲' : change.changeType === 'decreased' ? '▼' : '●';
+        const changeTextColor = change.changeAmount > 0 ? [220, 38, 38] : change.changeAmount < 0 ? [16, 185, 129] : [100, 116, 139];
+
+        doc.setTextColor(changeTextColor[0], changeTextColor[1], changeTextColor[2]);
+        doc.text(changeIcon, 25, y);
+        doc.setTextColor(60);
+        doc.text(`${change.resourceGroup}`, 35, y);
+        doc.text(`${change.changeType.toUpperCase()}`, 90, y);
+        doc.text(`$${Math.abs(change.changeAmount).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 140, y);
+        doc.text(`${change.changePercent >= 0 ? '+' : ''}${change.changePercent.toFixed(1)}%`, pageWidth - 30, y, { align: 'right' });
+        y += 8;
         if (y > 270) { doc.addPage(); y = 20; }
       });
       y += 8;
+    }
+
+    // Daily Trends Visualization
+    if (reportData?.costTrends && reportData.costTrends.length > 0) {
+      reportData.costTrends.forEach((trend: any) => {
+        if (y > 180) { doc.addPage(); y = 20; }
+
+        doc.setFontSize(14);
+        doc.setTextColor(30);
+        doc.text(`Daily Cost Trends - ${trend.subscriptionName}`, 20, y);
+        y += 12;
+
+        // Daily comparison chart
+        if (trend.dailyTrends.length > 0) {
+          const chartData = trend.dailyTrends.slice(-15); // Last 15 days
+
+          doc.setFontSize(8);
+          doc.setTextColor(100);
+          doc.text('Day', 20, y);
+          doc.text('Current', 50, y);
+          doc.text('Previous', 80, y);
+          doc.text('Change', 110, y);
+          y += 6;
+
+          chartData.forEach((day: any) => {
+            const changeText = day.changePercent >= 0 ? `+${day.changePercent.toFixed(0)}%` : `${day.changePercent.toFixed(0)}%`;
+            const changeColor = day.change > 0 ? [220, 38, 38] : day.change < 0 ? [16, 185, 129] : [100, 116, 139];
+
+            doc.setTextColor(60);
+            doc.text(day.date, 20, y);
+            doc.text(`$${day.currentMonth.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 50, y);
+            doc.text(`$${day.previousMonth.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 80, y);
+            doc.setTextColor(changeColor[0], changeColor[1], changeColor[2]);
+            doc.text(changeText, 110, y);
+            y += 6;
+            if (y > 270) { doc.addPage(); y = 20; }
+          });
+
+          // Summary for this subscription
+          y += 4;
+          doc.setFontSize(9);
+          doc.setTextColor(60);
+          const projectedText = `$${trend.projectedMonthEnd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+          doc.text(`Current Month Total: $${trend.currentMonthTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 25, y);
+          y += 6;
+          doc.text(`Previous Month: $${trend.previousMonthTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 25, y);
+          y += 6;
+          doc.text(`Projected Month-End: ${projectedText}`, 25, y);
+          y += 12;
+        }
+      });
+    }
+
+    // Top Resource Groups Detail
+    if (reportData?.resourceGroupReports && reportData.resourceGroupReports.length > 0) {
+      if (y > 200) { doc.addPage(); y = 20; }
+
+      doc.setFontSize(14);
+      doc.setTextColor(30);
+      doc.text('Top Resource Groups Detail', 20, y);
+      y += 10;
+
+      const topRGs = reportData.resourceGroupReports
+        .sort((a: any, b: any) => b.currentMonthCost - a.currentMonthCost)
+        .slice(0, 5);
+
+      topRGs.forEach((rg: any) => {
+        if (y > 240) { doc.addPage(); y = 20; }
+
+        // RG header with subtle background
+        doc.setFillColor(248, 250, 252);
+        doc.rect(15, y - 6, pageWidth - 30, 35, 'F');
+
+        doc.setFontSize(11);
+        doc.setTextColor(30);
+        doc.text((rg as any).resourceGroup, 20, y);
+        y += 7;
+
+        doc.setFontSize(9);
+        doc.setTextColor(60);
+        doc.text(`Subscription: ${(rg as any).subscriptionName}`, 25, y); y += 5;
+        doc.text(`Resources: ${(rg as any).resourceCount}`, 25, y); y += 5;
+        doc.text(`Cost: $${(rg as any).currentMonthCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}`, 25, y);
+
+        const changeText = `${rg.costChange >= 0 ? '+' : ''}$${rg.costChange.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${rg.costChangePercent >= 0 ? '+' : ''}${rg.costChangePercent.toFixed(1)}%)`;
+        const changeColor = rg.costChange > 0 ? [220, 38, 38] : [16, 185, 129];
+        doc.setTextColor(changeColor[0], changeColor[1], changeColor[2]);
+        doc.text(changeText, 120, y);
+        y += 10;
+
+        // Top resources in this RG
+        if (rg.topCostResources && rg.topCostResources.length > 0) {
+          doc.setFontSize(8);
+          doc.setTextColor(100);
+          doc.text('Top Resources:', 25, y); y += 5;
+
+          (rg as any).topCostResources.slice(0, 3).forEach((res: any) => {
+            doc.setTextColor(80);
+            doc.text(`• ${res.resourceName} (${res.resourceType.split('/').pop()})`, 30, y);
+            doc.text(`$${res.monthlyCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, pageWidth - 35, y, { align: 'right' });
+            y += 5;
+          });
+        }
+        y += 10;
+      });
+    }
+
+    // Optimization opportunities
+    if (optimizationOpportunities.length > 0) {
+      if (y > 220) { doc.addPage(); y = 20; }
+
+      doc.setFillColor(254, 242, 242);
+      doc.rect(15, y - 6, pageWidth - 30, 8, 'F');
+      doc.setDrawColor(239, 68, 68);
+      doc.setLineWidth(0.5);
+      doc.rect(15, y - 6, pageWidth - 30, 8, 'S');
+
+      doc.setFontSize(14);
+      doc.setTextColor(239, 68, 68);
+      doc.text('Optimization Opportunities', 20, y);
+      y += 15;
+
+      doc.setFontSize(9);
+      doc.setTextColor(60);
+      optimizationOpportunities.slice(0, 8).forEach((o: { resource: { name: string }; reason: string; potentialSavings: number }) => {
+        doc.setTextColor(220, 38, 38);
+        doc.text('•', 25, y);
+        doc.setTextColor(60);
+        doc.text(`${o.resource.name}`, 32, y);
+        y += 5;
+        doc.text(`  ${o.reason}`, 32, y);
+        doc.setTextColor(220, 38, 38);
+        doc.text(`Save $${o.potentialSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo`, pageWidth - 35, y, { align: 'right' });
+        y += 8;
+        if (y > 270) { doc.addPage(); y = 20; }
+      });
+      y += 5;
     }
 
     // Budget status
     if (budgetLimit > 0) {
       if (y > 250) { doc.addPage(); y = 20; }
+
       doc.setFontSize(14);
       doc.setTextColor(30);
       doc.text('Budget Status', 20, y);
-      y += 8;
+      y += 10;
+
+      const budgetPct = filteredTotalCost > 0 ? (filteredTotalCost / budgetLimit) * 100 : 0;
+      const budgetColor: [number, number, number] = budgetPct > 100 ? [239, 68, 68] : budgetPct > 80 ? [234, 179, 8] : [16, 185, 129];
 
       doc.setFontSize(10);
       doc.setTextColor(60);
-      const budgetPct = filteredTotalCost > 0 ? ((filteredTotalCost / budgetLimit) * 100).toFixed(1) : '0';
-      doc.text(`Budget Limit: $${budgetLimit.toLocaleString()}`, 20, y); y += 6;
-      doc.text(`Current Spend: ${budgetPct}% of budget`, 20, y); y += 12;
+      doc.text(`Budget Limit: $${budgetLimit.toLocaleString()}`, 25, y); y += 6;
+      doc.text(`Current Spend: ${budgetPct.toFixed(1)}%`, 25, y); y += 8;
+
+      // Budget bar
+      doc.setFillColor(230, 230, 230);
+      doc.rect(25, y, pageWidth - 50, 10, 'F');
+      const filledWidth = Math.min((budgetPct / 100) * (pageWidth - 50), pageWidth - 50);
+      doc.setFillColor(budgetColor[0], budgetColor[1], budgetColor[2]);
+      doc.rect(25, y, filledWidth, 10, 'F');
+      y += 15;
     }
 
     // Footer
-    doc.setFontSize(8);
-    doc.setTextColor(150);
-    doc.text('CloudViz - Azure FinOps Dashboard', pageWidth / 2, 290, { align: 'center' });
+    doc.setFillColor(16, 185, 129);
+    doc.rect(0, 290, pageWidth, 15, 'F');
+    doc.setFontSize(9);
+    doc.setTextColor(255, 255, 255);
+    doc.text('CloudViz - Azure FinOps Dashboard', pageWidth / 2, 298, { align: 'center' });
 
-    doc.save(`cloudviz-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+    doc.save(`cloudviz-enhanced-report-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   const debouncedCostSearch = useDebounce(costSearchQuery, 300);
