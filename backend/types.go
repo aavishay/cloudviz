@@ -15,6 +15,11 @@ type AzureResource struct {
 	Optimization   string            `json:"optimization,omitempty"`
 	Score          int               `json:"score"`
 	IsOrphaned     bool              `json:"isOrphaned"`
+	CreatedBy      string            `json:"createdBy,omitempty"`      // Email or username of creator
+	CreatedByType  string            `json:"createdByType,omitempty"`  // "user", "service_principal", "managed_identity"
+	CreatedAt      time.Time         `json:"createdAt,omitempty"`      // Creation timestamp
+	LastModifiedBy string            `json:"lastModifiedBy,omitempty"` // Last modifier email/username
+	LastModifiedAt time.Time         `json:"lastModifiedAt,omitempty"`
 }
 
 type ResourceChange struct {

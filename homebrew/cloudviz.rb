@@ -2,23 +2,23 @@ class Cloudviz < Formula
   desc "Azure cloud infrastructure visualization and cost management dashboard"
   homepage "https://github.com/aavishay/cloudviz"
   license "AGPL-3.0"
-  version "1.18.0"
+  version "1.19.0"
 
   on_macos do
     on_arm do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_darwin_arm64.tar.gz"
-      sha256 "efb4b372460096a4f4336d417d43524233a126e21e1ffa2737f07ff78be2b0f7"
+      sha256 "5d661c277bd6b6fda8afb1286264621d3024ef7e8f32f2ea4f4bd8fc2d6b3d18"
     end
     on_intel do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_darwin_amd64.tar.gz"
-      sha256 "95ba091b610669ea917475e2149935bd5357346149205299e2053e5ceca03196"
+      sha256 "9d827948fc90fa686d075793fc95488be82c86169749ad8473d73253c49f2a38"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_linux_amd64.tar.gz"
-      sha256 "bdbc37c7799b0212703b4e38838a11c2637c448146719d45724f61568ecacfd7"
+      sha256 "95cbb470eac5a022966deca7385e52bd6b43b5ce53348681a62ba044acb72417"
     end
   end
 

@@ -17,7 +17,9 @@ type dbCache struct {
 }
 
 func newDBCache(dbPath string) (*dbCache, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
+	// file: URI enables per-connection _pragma parameters (applied on every new connection in the pool)
+	dsn := "file:" + dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(15000)&_pragma=synchronous(NORMAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +81,9 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON resource_history(timestamp)`); err != nil {
 		log.Printf("Warning: failed to create index: %v", err)
 	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_date_change ON resource_history(date(datetime(timestamp,'localtime')), change_type)`); err != nil {
+		log.Printf("Warning: failed to create date index: %v", err)
+	}
 	// Add resource_type column if it doesn't already exist (SQLite has no IF NOT EXISTS for ADD COLUMN)
 	var hasResourceType bool
 	if rows, err := db.Query("PRAGMA table_info(resource_history)"); err == nil {
@@ -120,6 +125,56 @@ func newDBCache(dbPath string) (*dbCache, error) {
 			log.Printf("Warning: failed to add changed_by column: %v", err)
 		}
 	}
+
+	// Add resource_cost column to history if missing
+	var hasResourceCost bool
+	if rows, err := db.Query("PRAGMA table_info(resource_history)"); err == nil {
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notNull, dfltValue, pk int
+			rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk)
+			if name == "resource_cost" {
+				hasResourceCost = true
+				break
+			}
+		}
+		rows.Close()
+	}
+	if !hasResourceCost {
+		if _, err := db.Exec(`ALTER TABLE resource_history ADD COLUMN resource_cost REAL DEFAULT 0`); err != nil {
+			log.Printf("Warning: failed to add resource_cost column: %v", err)
+		}
+	}
+
+	// Retroactively fill changed_by from resource tags for 'Unknown' created events
+	go func() {
+		rows, err := db.Query(`SELECT DISTINCT h.resource_id, r.tags FROM resource_history h JOIN resources r ON LOWER(h.resource_id) = LOWER(r.id) WHERE (h.changed_by IS NULL OR h.changed_by = 'Unknown') AND h.change_type = 'created' AND r.tags IS NOT NULL AND r.tags != '{}'`)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		type pair struct{ id, tags string }
+		var pairs []pair
+		for rows.Next() {
+			var p pair
+			if rows.Scan(&p.id, &p.tags) == nil {
+				pairs = append(pairs, p)
+			}
+		}
+		rows.Close()
+		for _, p := range pairs {
+			var tags map[string]string
+			if err := json.Unmarshal([]byte(p.tags), &tags); err != nil {
+				continue
+			}
+			creator := extractCreatorFromTags(tags)
+			if creator == "" {
+				continue
+			}
+			db.Exec(`UPDATE resource_history SET changed_by = ? WHERE resource_id = ? AND change_type = 'created' AND (changed_by IS NULL OR changed_by = 'Unknown')`, creator, p.id)
+		}
+	}()
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS budgets (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -499,13 +554,16 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 		var tagsJSON string
 		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.Location, &r.SubscriptionID, &r.ResourceGroup, &tagsJSON, &r.Status); err == nil {
 			if tagsJSON != "" {
-				if err := json.Unmarshal([]byte(tagsJSON), &r.Tags); err != nil {
-					log.Printf("Warning: failed to unmarshal tags: %v", err)
-				}
+				_ = json.Unmarshal([]byte(tagsJSON), &r.Tags)
 			}
 			oldMap[r.ID] = r
 		}
 	}
+	rows.Close()
+
+	// Skip detailed change recording on the very first sync (oldMap empty = initial load)
+	// to avoid recording 400K+ "created" events that flood the history table uselessly
+	isInitialLoad := len(oldMap) == 0
 
 	// Get unique subscription IDs from new and old resources
 	subMap := make(map[string]bool)
@@ -516,17 +574,19 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 		subMap[r.SubscriptionID] = true
 	}
 
-	// Fetch activity logs for all subscriptions (last 2 hours to cover sync interval)
+	// Fetch activity logs only on incremental syncs (skip initial load to avoid huge transactions)
 	ctx := context.Background()
-	activityLogs := make(map[string]map[string][]ActivityLogEvent) // subID -> resourceID -> events
-	for subID := range subMap {
-		startTime := now.Add(-2 * time.Hour)
-		logs, err := fetchActivityLogs(ctx, subID, startTime, now)
-		if err != nil {
-			log.Printf("Warning: failed to fetch activity logs for sub %s: %v", subID, err)
-			continue
+	activityLogs := make(map[string]map[string][]ActivityLogEvent)
+	if !isInitialLoad {
+		for subID := range subMap {
+			startTime := now.Add(-2 * time.Hour)
+			logs, err := fetchActivityLogs(ctx, subID, startTime, now)
+			if err != nil {
+				log.Printf("Warning: failed to fetch activity logs for sub %s: %v", subID, err)
+				continue
+			}
+			activityLogs[subID] = logs
 		}
-		activityLogs[subID] = logs
 	}
 
 	// Use a single transaction for all changes
@@ -537,59 +597,79 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	}
 	defer tx.Rollback()
 
-	changeStmt, err := tx.Prepare(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	changeStmt, err := tx.Prepare(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by, resource_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		log.Printf("Error: failed to prepare change statement: %v", err)
 		return
 	}
 	defer changeStmt.Close()
 
+	// Build a cost map from the current costs table so we can capture cost at change time
+	costMap := make(map[string]float64)
+	if costRows, err := db.Query(`SELECT resource_id, SUM(cost) FROM costs WHERE period = 'current' GROUP BY resource_id`); err == nil {
+		for costRows.Next() {
+			var rid string
+			var cost float64
+			if costRows.Scan(&rid, &cost) == nil {
+				costMap[strings.ToLower(rid)] = cost
+			}
+		}
+		costRows.Close()
+	}
+	costFor := func(id string) float64 { return costMap[strings.ToLower(id)] }
+
 	newMap := make(map[string]AzureResource)
 	changeTime := now
 	for _, r := range newResources {
 		newMap[r.ID] = r
-		// Get activity logs for this resource's subscription
+		if isInitialLoad {
+			continue
+		}
 		subLogs := activityLogs[r.SubscriptionID]
 
 		if old, exists := oldMap[r.ID]; exists {
 			if old.Name != r.Name {
 				user := findUserForChange(subLogs, r.ID, changeTime)
-				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "name", old.Name, r.Name, user)
+				recordChangeStmtWithCost(changeStmt, r.ID, r.Name, r.Type, "modified", "name", old.Name, r.Name, user, 0)
 			}
 			if old.Status != r.Status {
 				user := findUserForChange(subLogs, r.ID, changeTime)
-				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "status", old.Status, r.Status, user)
+				recordChangeStmtWithCost(changeStmt, r.ID, r.Name, r.Type, "modified", "status", old.Status, r.Status, user, 0)
 			}
 			if old.Location != r.Location {
 				user := findUserForChange(subLogs, r.ID, changeTime)
-				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "location", old.Location, r.Location, user)
+				recordChangeStmtWithCost(changeStmt, r.ID, r.Name, r.Type, "modified", "location", old.Location, r.Location, user, 0)
 			}
 			if old.ResourceGroup != r.ResourceGroup {
 				user := findUserForChange(subLogs, r.ID, changeTime)
-				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup, user)
+				recordChangeStmtWithCost(changeStmt, r.ID, r.Name, r.Type, "modified", "resourceGroup", old.ResourceGroup, r.ResourceGroup, user, 0)
 			}
 			if old.Type != r.Type {
 				user := findUserForChange(subLogs, r.ID, changeTime)
-				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "type", old.Type, r.Type, user)
+				recordChangeStmtWithCost(changeStmt, r.ID, r.Name, r.Type, "modified", "type", old.Type, r.Type, user, 0)
 			}
 			oldTagsJSON, _ := json.Marshal(old.Tags)
 			newTagsJSON, _ := json.Marshal(r.Tags)
 			if string(oldTagsJSON) != string(newTagsJSON) {
 				user := findUserForChange(subLogs, r.ID, changeTime)
-				recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "modified", "tags", string(oldTagsJSON), string(newTagsJSON), user)
+				recordChangeStmtWithCost(changeStmt, r.ID, r.Name, r.Type, "modified", "tags", string(oldTagsJSON), string(newTagsJSON), user, 0)
 			}
 		} else {
 			user := findUserForChange(subLogs, r.ID, changeTime)
-			recordChangeStmtWithUser(changeStmt, r.ID, r.Name, r.Type, "created", "", "", "", user)
+			if user == "Unknown" && r.CreatedBy != "" {
+				user = r.CreatedBy
+			}
+			recordChangeStmtWithCost(changeStmt, r.ID, r.Name, r.Type, "created", "", "", "", user, costFor(r.ID))
 		}
 	}
 
-	for id, old := range oldMap {
-		if _, exists := newMap[id]; !exists {
-			// Get activity logs for this resource's subscription
-			subLogs := activityLogs[old.SubscriptionID]
-			user := findUserForChange(subLogs, id, changeTime)
-			recordChangeStmtWithUser(changeStmt, id, old.Name, old.Type, "deleted", "", "", "", user)
+	if !isInitialLoad {
+		for id, old := range oldMap {
+			if _, exists := newMap[id]; !exists {
+				subLogs := activityLogs[old.SubscriptionID]
+				user := findUserForChange(subLogs, id, changeTime)
+				recordChangeStmtWithCost(changeStmt, id, old.Name, old.Type, "deleted", "", "", "", user, costFor(id))
+			}
 		}
 	}
 
@@ -620,19 +700,24 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	}
 }
 
-// recordChangeStmtWithUser records a change with user information
-func recordChangeStmtWithUser(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, user string) {
+// recordChangeStmtWithCost records a change with user and resource cost at time of change
+func recordChangeStmtWithCost(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, user string, cost float64) {
 	if user == "" {
 		user = "Unknown"
 	}
-	if _, err := stmt.Exec(resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now(), user); err != nil {
+	if _, err := stmt.Exec(resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now(), user, cost); err != nil {
 		log.Printf("Warning: failed to record change: %v", err)
 	}
 }
 
+// recordChangeStmtWithUser records a change with user information (kept for compatibility)
+func recordChangeStmtWithUser(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, user string) {
+	recordChangeStmtWithCost(stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, user, 0)
+}
+
 // recordChangeStmt records a change using a prepared statement (backward compatible)
 func recordChangeStmt(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {
-	recordChangeStmtWithUser(stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, "Unknown")
+	recordChangeStmtWithCost(stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, "Unknown", 0)
 }
 
 func recordChange(db *sql.DB, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {

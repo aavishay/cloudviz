@@ -60,7 +60,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.18.0",
+		Version: "1.19.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -236,6 +236,7 @@ func startServer(port string) {
 		rgs := c.QueryArray("resourceGroup")
 		types := c.QueryArray("type")
 		locs := c.QueryArray("location")
+		creators := c.QueryArray("createdBy")
 		search := c.Query("search")
 		orphaned := c.Query("orphaned") == "true"
 		unattachedDiskOnly := c.Query("unattachedDiskOnly") == "true"
@@ -248,6 +249,20 @@ func startServer(port string) {
 		mask := c.Query("mask") == "true"
 
 		res, totalCost, err := FetchResourcesWithCosts(c.Request.Context(), subs, rgs, types, locs, search, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly, tagKey, tagValue)
+
+		// Filter by creator if specified
+		if len(creators) > 0 {
+			var filtered []AzureResource
+			for _, r := range res {
+				for _, creator := range creators {
+					if r.CreatedBy == creator || (creator == "unknown" && r.CreatedBy == "") {
+						filtered = append(filtered, r)
+						break
+					}
+				}
+			}
+			res = filtered
+		}
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -300,12 +315,15 @@ func startServer(port string) {
 			return
 		}
 
-		subs, rgs, types, locs := make(map[string]bool), make(map[string]bool), make(map[string]bool), make(map[string]bool)
+		subs, rgs, types, locs, creators := make(map[string]bool), make(map[string]bool), make(map[string]bool), make(map[string]bool), make(map[string]bool)
 		for _, r := range res {
 			subs[r.SubscriptionID] = true
 			rgs[r.ResourceGroup] = true
 			types[r.Type] = true
 			locs[r.Location] = true
+			if r.CreatedBy != "" {
+				creators[r.CreatedBy] = true
+			}
 		}
 
 		keys := func(m map[string]bool) []string {
@@ -324,6 +342,7 @@ func startServer(port string) {
 			"rgs":       keys(rgs),
 			"types":     keys(types),
 			"locations": keys(locs),
+			"creators":  keys(creators),
 		})
 	})
 
@@ -1413,75 +1432,244 @@ func startServer(port string) {
 		c.JSON(200, results)
 	})
 
-	// Waste detection: always-on resources in non-production environments
+	// Waste detection: queries SQLite cache directly (no live Azure calls needed)
 	r.GET("/api/waste/detect", func(c *gin.Context) {
-		res, _, err := FetchResourcesWithCosts(c.Request.Context(), nil, nil, nil, nil, "", false, false, false, false, "", "")
+		if cache == nil {
+			c.JSON(500, gin.H{"error": "cache not initialized"})
+			return
+		}
+
+		// Fetch cost map for latest period (resource_id -> cost)
+		costMap := make(map[string]float64)
+		var maxPeriod string
+		if err := cache.db.QueryRow("SELECT MAX(period) FROM costs").Scan(&maxPeriod); err == nil && maxPeriod != "" {
+			costRows, cerr := cache.db.Query(
+				"SELECT resource_id, SUM(cost) FROM costs WHERE period = ? GROUP BY resource_id", maxPeriod)
+			if cerr == nil {
+				defer costRows.Close()
+				for costRows.Next() {
+					var rid string
+					var cost float64
+					if costRows.Scan(&rid, &cost) == nil {
+						costMap[strings.ToLower(rid)] = cost
+					}
+				}
+			}
+		}
+
+		// Fetch all resources
+		rows, err := cache.db.Query(
+			"SELECT id, name, type, location, subscription_id, resource_group, COALESCE(tags, '{}') FROM resources")
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
+		defer rows.Close()
 
-		var waste []map[string]any
-		for _, r := range res {
-			if !strings.Contains(strings.ToLower(r.Type), "virtualmachine") {
+		type wasteItem struct {
+			ResourceID     string
+			Name           string
+			Type           string
+			Location       string
+			SubscriptionID string
+			ResourceGroup  string
+			Tags           string
+			Cost           float64
+		}
+
+		var items []wasteItem
+		for rows.Next() {
+			var it wasteItem
+			if err := rows.Scan(&it.ResourceID, &it.Name, &it.Type, &it.Location,
+				&it.SubscriptionID, &it.ResourceGroup, &it.Tags); err != nil {
+				continue
+			}
+			it.Cost = costMap[strings.ToLower(it.ResourceID)]
+			items = append(items, it)
+		}
+
+		// Helper: parse tags JSON into a map
+		parseTags := func(tagsJSON string) map[string]string {
+			out := make(map[string]string)
+			if tagsJSON == "" || tagsJSON == "{}" {
+				return out
+			}
+			var raw map[string]interface{}
+			if err := json.Unmarshal([]byte(tagsJSON), &raw); err != nil {
+				return out
+			}
+			for k, v := range raw {
+				if v == nil {
+					out[strings.ToLower(k)] = ""
+				} else {
+					out[strings.ToLower(k)] = fmt.Sprint(v)
+				}
+			}
+			return out
+		}
+
+		// Category tracking
+		type categoryStats struct {
+			Count   int     `json:"count"`
+			Savings float64 `json:"savings"`
+		}
+		byCategory := map[string]*categoryStats{
+			"orphaned_disk": {},
+			"orphaned_nic":  {},
+			"orphaned_pip":  {},
+			"dev_vm_247":    {},
+			"low_score":     {},
+		}
+
+		var wasteItems []map[string]any
+		seen := make(map[string]bool) // avoid double-counting by resourceId
+
+		addItem := func(category, label, suggestion, severity string, it wasteItem, savings float64) {
+			if seen[it.ResourceID] {
+				return
+			}
+			seen[it.ResourceID] = true
+			wasteItems = append(wasteItems, map[string]any{
+				"resourceId":       it.ResourceID,
+				"name":             it.Name,
+				"resourceGroup":    it.ResourceGroup,
+				"subscriptionId":   it.SubscriptionID,
+				"type":             it.Type,
+				"location":         it.Location,
+				"category":         category,
+				"categoryLabel":    label,
+				"monthlyCost":      it.Cost,
+				"potentialSavings": savings,
+				"suggestion":       suggestion,
+				"severity":         severity,
+			})
+			byCategory[category].Count++
+			byCategory[category].Savings += savings
+		}
+
+		for _, it := range items {
+			typeLow := strings.ToLower(it.Type)
+			nameLow := strings.ToLower(it.Name)
+			rgLow := strings.ToLower(it.ResourceGroup)
+			tags := parseTags(it.Tags)
+
+			// ── Category 1: orphaned_disk ──────────────────────────────────────
+			if strings.Contains(typeLow, "compute/disks") {
+				diskState, hasDiskState := tags["diskstate"]
+				if !hasDiskState || diskState == "unattached" || diskState == "" {
+					// Disk is unattached or has no diskState tag — treat as orphaned
+					sev := "high"
+					if it.Cost == 0 {
+						sev = "medium"
+					}
+					addItem("orphaned_disk", "Orphaned Disk",
+						"Delete this unattached disk to eliminate storage costs",
+						sev, it, it.Cost)
+				}
 				continue
 			}
 
-			// Infer environment from RG name
-			rgLow := strings.ToLower(r.ResourceGroup)
-			env := ""
-			if strings.Contains(rgLow, "prod") || strings.Contains(rgLow, "production") {
-				env = "production"
-			} else if strings.Contains(rgLow, "dev") || strings.Contains(rgLow, "development") {
-				env = "development"
-			} else if strings.Contains(rgLow, "stag") || strings.Contains(rgLow, "staging") {
-				env = "staging"
-			} else if strings.Contains(rgLow, "test") || strings.Contains(rgLow, "qa") {
-				env = "test"
-			}
-
-			if env == "" || env == "production" {
-				continue // skip production and unclassified
-			}
-
-			// Check if name contains non-dev keywords (could be accidentally running prod workloads)
-			nameLow := strings.ToLower(r.Name)
-			isActuallyDev := strings.Contains(nameLow, "dev") || strings.Contains(nameLow, "test") || strings.Contains(nameLow, "sandbox") || strings.Contains(nameLow, "lab")
-
-			if !isActuallyDev && r.Cost > 0 {
-				// This is a likely waste: non-dev-named VM in a non-prod RG
-				estimatedWaste := r.Cost
-				if r.Score >= 80 {
-					estimatedWaste = r.Cost * 0.5 // if it has good score, less waste
+			// ── Category 2: orphaned_nic ───────────────────────────────────────
+			if strings.Contains(typeLow, "network/networkinterfaces") {
+				_, hasVM := tags["virtualmachine"]
+				_, hasIP := tags["ipconfigurations"]
+				if !hasVM && !hasIP {
+					sev := "medium"
+					addItem("orphaned_nic", "Unattached NIC",
+						"Remove this unattached network interface to reduce clutter and potential costs",
+						sev, it, it.Cost)
 				}
-				waste = append(waste, map[string]any{
-					"resourceId":   r.ID,
-					"name":        r.Name,
-					"resourceGroup": r.ResourceGroup,
-					"subscriptionId": r.SubscriptionID,
-					"type":        r.Type,
-					"environment":  env,
-					"monthlyCost": r.Cost,
-					"wasteType":   "non-dev in " + env,
-					"suggestion":  "Verify if this workload should run 24/7 or be stopped during off-hours",
-					"potentialSavings": estimatedWaste,
-				})
+				continue
+			}
+
+			// ── Category 3: orphaned_pip ───────────────────────────────────────
+			if strings.Contains(typeLow, "network/publicipaddresses") {
+				_, hasIPConf := tags["ipconfiguration"]
+				_, hasAssoc := tags["associatedresource"]
+				if !hasIPConf && !hasAssoc {
+					sev := "medium"
+					if it.Cost > 0 {
+						sev = "high"
+					}
+					addItem("orphaned_pip", "Unassigned Public IP",
+						"Release this unassigned public IP address to stop incurring charges",
+						sev, it, it.Cost)
+				}
+				continue
+			}
+
+			// ── Category 4: dev_vm_247 ─────────────────────────────────────────
+			if strings.Contains(typeLow, "compute/virtualmachines") && !strings.Contains(typeLow, "scalesets") {
+				isDevEnv := strings.Contains(nameLow, "dev") || strings.Contains(nameLow, "test") ||
+					strings.Contains(nameLow, "staging") || strings.Contains(nameLow, "stag") ||
+					strings.Contains(nameLow, "qa") || strings.Contains(nameLow, "sandbox") ||
+					strings.Contains(rgLow, "dev") || strings.Contains(rgLow, "test") ||
+					strings.Contains(rgLow, "staging") || strings.Contains(rgLow, "stag") ||
+					strings.Contains(rgLow, "qa") || strings.Contains(rgLow, "sandbox")
+				if isDevEnv && it.Cost > 0 {
+					savings := it.Cost * 0.6 // assume 60% savings from scheduling off-hours
+					addItem("dev_vm_247", "Dev/Test VM 24/7",
+						"Schedule this dev/test VM to stop during off-hours (nights & weekends) to save ~60% of compute cost",
+						"high", it, savings)
+					continue
+				}
+			}
+
+			// ── Category 5: low_score ──────────────────────────────────────────
+			if it.Cost > 50 {
+				// Infer score heuristically (mirrors scoreResource in azure.go)
+				score := 70 // default reasonable score
+				if strings.Contains(typeLow, "compute/virtualmachines") {
+					if strings.Contains(nameLow, "dev") || strings.Contains(nameLow, "test") ||
+						strings.Contains(rgLow, "dev") || strings.Contains(rgLow, "test") {
+						score = 45
+					}
+				} else if strings.Contains(typeLow, "compute/disks") {
+					score = 20
+				} else if strings.Contains(typeLow, "network/networkinterfaces") {
+					score = 25
+				} else if strings.Contains(typeLow, "network/publicipaddresses") {
+					score = 30
+				} else if strings.Contains(typeLow, "compute/snapshots") {
+					score = 35
+				}
+				if score < 35 {
+					savings := it.Cost * 0.5
+					addItem("low_score", "Low Utilization",
+						"This resource has low efficiency score — review usage and consider rightsizing or deletion",
+						"medium", it, savings)
+				}
 			}
 		}
 
-		sort.Slice(waste, func(i, j int) bool {
-			return waste[i]["potentialSavings"].(float64) > waste[j]["potentialSavings"].(float64)
+		// Sort by potentialSavings descending
+		sort.Slice(wasteItems, func(i, j int) bool {
+			si, _ := wasteItems[i]["potentialSavings"].(float64)
+			sj, _ := wasteItems[j]["potentialSavings"].(float64)
+			return si > sj
 		})
 
-		var totalWaste float64
-		for _, w := range waste {
-			totalWaste += w["potentialSavings"].(float64)
+		var totalSavings float64
+		for _, w := range wasteItems {
+			if s, ok := w["potentialSavings"].(float64); ok {
+				totalSavings += s
+			}
+		}
+
+		// Build byCategory response (convert pointers to values)
+		byCatResp := map[string]map[string]any{}
+		for k, v := range byCategory {
+			byCatResp[k] = map[string]any{
+				"count":   v.Count,
+				"savings": v.Savings,
+			}
 		}
 
 		c.JSON(200, map[string]any{
-			"items":      waste,
-			"totalCount": len(waste),
-			"totalWaste": totalWaste,
+			"items":        wasteItems,
+			"totalCount":   len(wasteItems),
+			"totalSavings": totalSavings,
+			"byCategory":   byCatResp,
 		})
 	})
 
@@ -1856,6 +2044,7 @@ func startServer(port string) {
 
 	r.GET("/api/costs/stream", sseHandler)
 	r.GET("/api/history", historyHandler)
+	r.GET("/api/history/cost-drivers", costDriversHandler)
 
 	// Resource Group Comparison endpoint
 	r.GET("/api/resource-groups/comparison", func(c *gin.Context) {
@@ -3080,62 +3269,300 @@ func openBrowser(url string) {
 }
 
 func historyHandler(c *gin.Context) {
-	// Parse 'since' parameter (ISO 8601 timestamp from browser)
 	sinceParam := c.Query("since")
 	var sinceTime time.Time
 	if sinceParam != "" {
-		t, err := time.Parse(time.RFC3339Nano, sinceParam)
-		if err == nil {
+		// Accept RFC3339 or RFC3339Nano
+		if t, err := time.Parse(time.RFC3339Nano, sinceParam); err == nil {
+			sinceTime = t
+		} else if t, err := time.Parse(time.RFC3339, sinceParam); err == nil {
 			sinceTime = t
 		}
 	}
+	// Convert to local-timezone bounds so the idx_history_timestamp index is used
+	// (avoids datetime() function wrapper that prevents index use on 1.2M rows).
+	var queryArgs []any
+	baseQuery := `SELECT h.resource_id, COALESCE(h.resource_name, h.resource_id),
+		COALESCE(h.resource_type, ''), h.change_type, h.field_name, h.old_value,
+		h.new_value, h.timestamp, COALESCE(h.resource_cost, 0),
+		COALESCE(h.changed_by, 'Unknown')
+		FROM resource_history h`
+	if !sinceTime.IsZero() {
+		local := sinceTime.In(time.Local)
+		baseQuery += ` WHERE h.timestamp >= ?`
+		queryArgs = append(queryArgs, local)
+	}
+	baseQuery += ` ORDER BY h.timestamp DESC LIMIT 1000`
 
-	// Optimized query: use a CTE for latest costs instead of correlated subquery
-	query := `
-		WITH latest_costs AS (
-			SELECT resource_id, SUM(cost) as total_cost
-			FROM costs
-			WHERE period = (
-				SELECT MAX(period) FROM costs LIMIT 1
-			)
-			GROUP BY resource_id
-		)
+	rows, err := cache.db.Query(baseQuery, queryArgs...)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	type rawRow struct {
+		ResourceChange
+		StoredCost float64
+	}
+	var rawRows []rawRow
+	var needCost []string
+	for rows.Next() {
+		var r rawRow
+		if rows.Scan(&r.ResourceID, &r.ResourceName, &r.ResourceType, &r.ChangeType,
+			&r.Field, &r.OldValue, &r.NewValue, &r.Timestamp, &r.StoredCost, &r.ChangedBy) == nil {
+			rawRows = append(rawRows, r)
+			if r.StoredCost == 0 {
+				needCost = append(needCost, strings.ToLower(r.ResourceID))
+			}
+		}
+	}
+	rows.Close()
+
+	// Batch-lookup costs only for rows that need it
+	costMap := make(map[string]float64)
+	if len(needCost) > 0 {
+		placeholders := make([]string, len(needCost))
+		args := make([]interface{}, len(needCost))
+		for i, id := range needCost {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		cr, err2 := cache.db.Query(
+			`SELECT LOWER(resource_id), SUM(cost) FROM costs WHERE LOWER(resource_id) IN (`+strings.Join(placeholders, ",")+`) AND period='current' GROUP BY LOWER(resource_id)`,
+			args...)
+		if err2 == nil {
+			for cr.Next() {
+				var rid string
+				var cost float64
+				cr.Scan(&rid, &cost)
+				costMap[rid] = cost
+			}
+			cr.Close()
+		}
+	}
+
+	var history []ResourceChange
+	for _, r := range rawRows {
+		h := r.ResourceChange
+		if r.StoredCost > 0 {
+			h.Cost = r.StoredCost
+		} else {
+			h.Cost = costMap[strings.ToLower(r.ResourceID)]
+		}
+		history = append(history, h)
+	}
+
+	// Build per-day cost impact summary from the same window
+	type daySummary struct {
+		Date          string  `json:"date"`
+		TotalDailyCost float64 `json:"totalDailyCost"` // actual spend that day from cost_daily
+		AddedCost     float64 `json:"addedCost"`      // monthly cost added by new resources / 30
+		RemovedCost   float64 `json:"removedCost"`    // monthly cost removed by deletions / 30
+		CreatedCount  int     `json:"createdCount"`
+		DeletedCount  int     `json:"deletedCount"`
+	}
+	dayMap := make(map[string]*daySummary)
+	for _, h := range history {
+		if h.Cost == 0 {
+			continue
+		}
+		day := h.Timestamp.Format("2006-01-02")
+		if dayMap[day] == nil {
+			dayMap[day] = &daySummary{Date: day}
+		}
+		daily := h.Cost / 30.0
+		switch strings.ToLower(h.ChangeType) {
+		case "created":
+			dayMap[day].AddedCost += daily
+			dayMap[day].CreatedCount++
+		case "deleted":
+			dayMap[day].RemovedCost += daily
+			dayMap[day].DeletedCount++
+		}
+	}
+
+	// Enrich with actual daily totals from cost_daily
+	if len(dayMap) > 0 {
+		for day, ds := range dayMap {
+			var total float64
+			cache.db.QueryRow(`SELECT COALESCE(SUM(cost),0) FROM cost_daily WHERE date = ?`, day).Scan(&total)
+			ds.TotalDailyCost = total
+		}
+	}
+
+	var dailyImpact []daySummary
+	for _, ds := range dayMap {
+		dailyImpact = append(dailyImpact, *ds)
+	}
+	sort.Slice(dailyImpact, func(i, j int) bool { return dailyImpact[i].Date > dailyImpact[j].Date })
+
+	c.JSON(200, gin.H{
+		"items":       history,
+		"dailyImpact": dailyImpact,
+	})
+}
+
+func costDriversHandler(c *gin.Context) {
+	// Default to today; accept ?date=YYYY-MM-DD override
+	dateParam := c.Query("date")
+	var targetDate string
+	if dateParam != "" {
+		targetDate = dateParam
+	} else {
+		targetDate = time.Now().Format("2006-01-02")
+	}
+	t, _ := time.Parse("2006-01-02", targetDate)
+	// Use local-timezone range bounds so idx_history_timestamp index is used
+	rangeStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+	rangeEnd := rangeStart.AddDate(0, 0, 1)
+
+	prevDate := rangeStart.AddDate(0, 0, -1).Format("2006-01-02")
+
+	type CostDriver struct {
+		ResourceID    string  `json:"resourceId"`
+		ResourceName  string  `json:"resourceName"`
+		ResourceType  string  `json:"resourceType"`
+		ResourceGroup string  `json:"resourceGroup"`
+		ChangeType    string  `json:"changeType"`
+		MonthlyCost   float64 `json:"monthlyCost"`
+		DailyCost     float64 `json:"dailyCost"`
+		ChangedBy     string  `json:"changedBy"`
+	}
+
+	// Step 1: fetch created/deleted events for the day — uses idx_history_timestamp index, very fast.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	rows, err := cache.db.QueryContext(ctx, `
 		SELECT
 			h.resource_id,
 			COALESCE(h.resource_name, h.resource_id),
 			COALESCE(h.resource_type, ''),
 			h.change_type,
-			h.field_name,
-			h.old_value,
-			h.new_value,
-			h.timestamp,
-			COALESCE(lc.total_cost, 0) as resource_cost,
-			COALESCE(h.changed_by, 'Unknown') as changed_by
+			COALESCE(h.resource_cost, 0),
+			COALESCE(h.changed_by,'Unknown')
 		FROM resource_history h
-		LEFT JOIN latest_costs lc ON LOWER(lc.resource_id) = LOWER(h.resource_id)`
-
-	var args []any
-	if !sinceTime.IsZero() {
-		query += ` WHERE h.timestamp >= ?`
-		args = append(args, sinceTime.Unix())
-	}
-
-	query += ` ORDER BY h.timestamp DESC LIMIT 1000`
-
-	rows, err := cache.db.Query(query, args...)
+		WHERE h.timestamp >= ? AND h.timestamp < ?
+		  AND h.change_type IN ('created','deleted')
+		GROUP BY h.resource_id, h.change_type`, rangeStart, rangeEnd)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	defer rows.Close()
 
-	var history []ResourceChange
-	for rows.Next() {
-		var h ResourceChange
-		rows.Scan(&h.ResourceID, &h.ResourceName, &h.ResourceType, &h.ChangeType, &h.Field, &h.OldValue, &h.NewValue, &h.Timestamp, &h.Cost, &h.ChangedBy)
-		history = append(history, h)
+	type rawEntry struct {
+		ResourceID   string
+		ResourceName string
+		ResourceType string
+		ChangeType   string
+		StoredCost   float64
+		ChangedBy    string
 	}
-	c.JSON(200, history)
+	var entries []rawEntry
+	var needCost []string // resource_ids where stored cost is 0
+	for rows.Next() {
+		var e rawEntry
+		if rows.Scan(&e.ResourceID, &e.ResourceName, &e.ResourceType, &e.ChangeType, &e.StoredCost, &e.ChangedBy) == nil {
+			entries = append(entries, e)
+			if e.StoredCost == 0 {
+				needCost = append(needCost, strings.ToLower(e.ResourceID))
+			}
+		}
+	}
+	rows.Close()
+
+	// Step 2: batch-lookup costs only for resources that need it (much smaller set than full costs table scan).
+	costMap := make(map[string]float64)
+	if len(needCost) > 0 {
+		placeholders := make([]string, len(needCost))
+		args := make([]interface{}, len(needCost))
+		for i, id := range needCost {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		costRows, err2 := cache.db.QueryContext(ctx,
+			`SELECT LOWER(resource_id), SUM(cost) FROM costs WHERE LOWER(resource_id) IN (`+strings.Join(placeholders, ",")+`) AND period='current' GROUP BY LOWER(resource_id)`,
+			args...)
+		if err2 == nil {
+			for costRows.Next() {
+				var rid string
+				var cost float64
+				costRows.Scan(&rid, &cost)
+				costMap[rid] = cost
+			}
+			costRows.Close()
+		}
+	}
+
+	// Step 3: extract resource_group from resource ID path, merge costs, filter zeros.
+	rgFrom := func(id string) string {
+		lower := strings.ToLower(id)
+		const marker = "/resourcegroups/"
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			return ""
+		}
+		rest := id[idx+len(marker):]
+		if slash := strings.Index(rest, "/"); slash >= 0 {
+			return rest[:slash]
+		}
+		return rest
+	}
+
+	var drivers []CostDriver
+	for _, e := range entries {
+		cost := e.StoredCost
+		if cost == 0 {
+			cost = costMap[strings.ToLower(e.ResourceID)]
+		}
+		if cost == 0 {
+			continue
+		}
+		drivers = append(drivers, CostDriver{
+			ResourceID:    e.ResourceID,
+			ResourceName:  e.ResourceName,
+			ResourceType:  e.ResourceType,
+			ResourceGroup: rgFrom(e.ResourceID),
+			ChangeType:    e.ChangeType,
+			MonthlyCost:   cost,
+			DailyCost:     cost / 30.0,
+			ChangedBy:     e.ChangedBy,
+		})
+	}
+	sort.Slice(drivers, func(i, j int) bool { return drivers[i].MonthlyCost > drivers[j].MonthlyCost })
+	if len(drivers) > 30 {
+		drivers = drivers[:30]
+	}
+
+	// Daily totals
+	var targetTotal, prevTotal float64
+	cache.db.QueryRow(`SELECT COALESCE(SUM(cost),0) FROM cost_daily WHERE date=?`, targetDate).Scan(&targetTotal)
+	cache.db.QueryRow(`SELECT COALESCE(SUM(cost),0) FROM cost_daily WHERE date=?`, prevDate).Scan(&prevTotal)
+
+	// Aggregate added vs removed
+	var totalAdded, totalRemoved float64
+	var addedCount, removedCount int
+	for _, d := range drivers {
+		if d.ChangeType == "created" {
+			totalAdded += d.DailyCost
+			addedCount++
+		} else {
+			totalRemoved += d.DailyCost
+			removedCount++
+		}
+	}
+
+	c.JSON(200, gin.H{
+		"date":         targetDate,
+		"prevDate":     prevDate,
+		"dailyTotal":   targetTotal,
+		"prevTotal":    prevTotal,
+		"delta":        targetTotal - prevTotal,
+		"addedCost":    totalAdded,
+		"removedCost":  totalRemoved,
+		"addedCount":   addedCount,
+		"removedCount": removedCount,
+		"drivers":      drivers,
+	})
 }
 
 type streamMsg struct {
@@ -3170,27 +3597,38 @@ func sseHandler(c *gin.Context) {
 		}
 		log.Printf("SSE: %d cached, %d uncached subscriptions", cachedCount, len(uncached))
 
-		// Fetch uncached subs sequentially (slower but no deadlock)
+		// Fetch uncached subs in parallel batches of 4.
+		// Each sub gets up to 5 minutes to handle internal 429 retries.
 		if len(uncached) > 0 {
-			for i, subID := range uncached {
-				log.Printf("SSE: fetching sub %d/%d: %s", i+1, len(uncached), subID)
-				now := time.Now()
-				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-				_, err := fetchSubCostsSync(costClient, subID, "current", now.AddDate(0, 0, -30), ctx)
-				cancel()
-				if err != nil {
-					log.Printf("SSE: error fetching %s: %v", subID, err)
-					msgChan <- streamMsg{Type: "status", SubID: subID, Message: "error: " + err.Error()}
-					continue
+			const batchSize = 4
+			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
+				end := batchStart + batchSize
+				if end > len(uncached) {
+					end = len(uncached)
 				}
-				if res, ok := cache.get(subID, "current"); ok {
-					msgChan <- streamMsg{Type: "data", SubID: subID, Data: gin.H{"current": normalizeResults(res)}}
+				batch := uncached[batchStart:end]
+				var wg sync.WaitGroup
+				for _, subID := range batch {
+					wg.Add(1)
+					go func(sid string) {
+						defer wg.Done()
+						log.Printf("SSE: fetching sub %d/%d: %s", batchStart+1, len(uncached), sid)
+						now := time.Now()
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+						_, err := fetchSubCostsSync(costClient, sid, "current", now.AddDate(0, 0, -30), ctx)
+						cancel()
+						if err != nil {
+							log.Printf("SSE: error fetching %s: %v", sid, err)
+							msgChan <- streamMsg{Type: "status", SubID: sid, Message: "error: " + err.Error()}
+							return
+						}
+						if res, ok := cache.get(sid, "current"); ok {
+							msgChan <- streamMsg{Type: "data", SubID: sid, Data: gin.H{"current": normalizeResults(res)}}
+						}
+						msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
+					}(subID)
 				}
-				msgChan <- streamMsg{Type: "status", SubID: subID, Message: "synced"}
-				log.Printf("SSE: completed sub %d/%d: %s", i+1, len(uncached), subID)
-				if i < len(uncached)-1 {
-					time.Sleep(3 * time.Second) // 3s delay between subs
-				}
+				wg.Wait()
 			}
 		}
 		log.Printf("SSE: sending done message")

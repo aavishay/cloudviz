@@ -100,6 +100,11 @@ interface AzureResource {
   status?: string;
   score?: number;
   isOrphaned?: boolean;
+  createdBy?: string;
+  createdByType?: string;
+  createdAt?: string;
+  lastModifiedBy?: string;
+  lastModifiedAt?: string;
 }
 
 interface CostPrediction {
@@ -295,7 +300,224 @@ const EmptyState = ({ icon, message }: { icon?: React.ReactNode; message: string
   </div>
 );
 
+// ─── WasteView Component ────────────────────────────────────────────────────────
+
+interface WasteViewProps {
+  wasteData: any;
+  wasteLoading: boolean;
+  fetchWaste: () => void;
+  setSearchQuery: (q: string) => void;
+  setActiveTab: (tab: any) => void;
+  setCurrentPage: (p: number) => void;
+}
+
+const WASTE_CATEGORY_META: Record<string, { label: string; color: string; bg: string }> = {
+  orphaned_disk: { label: 'Orphaned Disks', color: 'var(--danger)', bg: 'rgba(239,68,68,0.08)' },
+  orphaned_nic:  { label: 'Unattached NICs', color: 'var(--warning)', bg: 'rgba(245,158,11,0.08)' },
+  orphaned_pip:  { label: 'Unassigned PIPs', color: 'var(--warning)', bg: 'rgba(245,158,11,0.08)' },
+  dev_vm_247:    { label: 'Dev VMs 24/7', color: '#8b5cf6', bg: 'rgba(139,92,246,0.08)' },
+  low_score:     { label: 'Low Utilization', color: 'var(--text-2)', bg: 'var(--bg-surface)' },
+};
+
+function WasteView({ wasteData, wasteLoading, fetchWaste, setSearchQuery, setActiveTab, setCurrentPage }: WasteViewProps) {
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+
+  const items: any[] = wasteData?.items || [];
+  const byCategory: Record<string, { count: number; savings: number }> = wasteData?.byCategory || {};
+  const totalSavings: number = wasteData?.totalSavings || 0;
+  const totalCount: number = wasteData?.totalCount || 0;
+
+  const orphanedCount = (byCategory.orphaned_disk?.count || 0) + (byCategory.orphaned_nic?.count || 0) + (byCategory.orphaned_pip?.count || 0);
+  const devVmCount = byCategory.dev_vm_247?.count || 0;
+  const lowScoreCount = byCategory.low_score?.count || 0;
+
+  const filteredItems = categoryFilter === 'all' ? items : items.filter((it: any) => it.category === categoryFilter);
+
+  const severityColor = (sev: string) => {
+    if (sev === 'high') return 'var(--danger)';
+    if (sev === 'medium') return 'var(--warning)';
+    return 'var(--text-3)';
+  };
+
+  const severityBg = (sev: string) => {
+    if (sev === 'high') return 'rgba(239,68,68,0.1)';
+    if (sev === 'medium') return 'rgba(245,158,11,0.1)';
+    return 'var(--bg-surface)';
+  };
+
+  if (wasteLoading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320, gap: 16, color: 'var(--text-2)' }}>
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+        <span style={{ fontSize: 15, fontWeight: 500 }}>Analyzing resources...</span>
+      </div>
+    );
+  }
+
+  if (!wasteData) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320, gap: 16, color: 'var(--text-2)' }}>
+        <button className="btn btn-primary" onClick={fetchWaste} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.36" /></svg>
+          Run Waste Analysis
+        </button>
+      </div>
+    );
+  }
+
+  if (totalCount === 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320, gap: 12, color: 'var(--text-2)' }}>
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="1.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
+        <span style={{ fontSize: 16, fontWeight: 600, color: '#22c55e' }}>No waste detected</span>
+        <span style={{ fontSize: 13 }}>All resources appear to be appropriately utilized.</span>
+        <button className="btn" onClick={fetchWaste} style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.36" /></svg>
+          Refresh
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text-1)' }}>Waste Detection</h2>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-3)' }}>Identifies idle, orphaned, and over-provisioned resources</p>
+        </div>
+        <button className="btn" onClick={fetchWaste} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.36" /></svg>
+          Refresh
+        </button>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+        <div className="card" style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Potential Savings</div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--danger)' }}>${totalSavings.toLocaleString(undefined, { maximumFractionDigits: 0 })}<span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-3)' }}>/mo</span></div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>{totalCount} waste items found</div>
+        </div>
+        <div className="card" style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Orphaned Resources</div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--warning)' }}>{orphanedCount}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>Disks, NICs &amp; Public IPs</div>
+        </div>
+        <div className="card" style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Dev VMs Running 24/7</div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: '#8b5cf6' }}>{devVmCount}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>Could be scheduled off-hours</div>
+        </div>
+        <div className="card" style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Low Score Resources</div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text-2)' }}>{lowScoreCount}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>Cost &gt;$50/mo, low efficiency</div>
+        </div>
+      </div>
+
+      {/* Category filter tabs */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {[
+          { id: 'all', label: `All (${totalCount})` },
+          { id: 'orphaned_disk', label: `Orphaned Disks (${byCategory.orphaned_disk?.count || 0})` },
+          { id: 'orphaned_nic', label: `Unattached NICs (${byCategory.orphaned_nic?.count || 0})` },
+          { id: 'orphaned_pip', label: `Unassigned PIPs (${byCategory.orphaned_pip?.count || 0})` },
+          { id: 'dev_vm_247', label: `Dev VMs (${byCategory.dev_vm_247?.count || 0})` },
+          { id: 'low_score', label: `Low Score (${byCategory.low_score?.count || 0})` },
+        ].map(cat => (
+          <button
+            key={cat.id}
+            onClick={() => setCategoryFilter(cat.id)}
+            className={categoryFilter === cat.id ? 'btn btn-primary' : 'btn'}
+            style={{ fontSize: 12, padding: '5px 14px' }}
+          >
+            {cat.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Items list */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {filteredItems.length === 0 ? (
+          <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
+            No items in this category
+          </div>
+        ) : filteredItems.map((item: any, idx: number) => {
+          const meta = WASTE_CATEGORY_META[item.category] || { label: item.categoryLabel, color: 'var(--text-2)', bg: 'var(--bg-surface)' };
+          return (
+            <div
+              key={item.resourceId || idx}
+              className="card"
+              style={{ padding: '14px 18px', cursor: 'pointer', transition: 'box-shadow 0.15s' }}
+              onClick={() => {
+                setSearchQuery(item.name || '');
+                setActiveTab('resources');
+                setCurrentPage(1);
+              }}
+              title="Click to view in Resources tab"
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>{item.name}</span>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                      background: meta.bg, color: meta.color, border: `1px solid ${meta.color}`,
+                      textTransform: 'uppercase', letterSpacing: '0.05em'
+                    }}>
+                      {item.categoryLabel || meta.label}
+                    </span>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                      background: severityBg(item.severity), color: severityColor(item.severity),
+                      textTransform: 'uppercase', letterSpacing: '0.05em'
+                    }}>
+                      {item.severity}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 4 }}>
+                    <span>{item.resourceGroup}</span>
+                    {item.location && <span style={{ marginLeft: 8, opacity: 0.7 }}>· {item.location}</span>}
+                    <span style={{ marginLeft: 8, opacity: 0.6, fontFamily: 'monospace', fontSize: 11 }}>{item.type?.split('/').slice(-1)[0]}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>{item.suggestion}</div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  {item.monthlyCost > 0 && (
+                    <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 2 }}>
+                      Cost: <strong>${item.monthlyCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>/mo
+                    </div>
+                  )}
+                  {item.potentialSavings > 0 && (
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#22c55e' }}>
+                      Save ${item.potentialSavings.toLocaleString(undefined, { maximumFractionDigits: 2 })}/mo
+                    </div>
+                  )}
+                  {item.potentialSavings === 0 && (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>No direct cost</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── HistoryView Component ──────────────────────────────────────────────────────
+
+interface DayImpact {
+  date: string;
+  totalDailyCost: number;
+  addedCost: number;
+  removedCost: number;
+  createdCount: number;
+  deletedCount: number;
+}
 
 interface HistoryViewProps {
   history: ResourceChange[];
@@ -305,18 +527,25 @@ interface HistoryViewProps {
   setSelectedResource: (r: AzureResource | null) => void;
   setCurrentPage: (p: number) => void;
   setAlertModal: (modal: { open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info' }) => void;
+  dailyImpact: DayImpact[];
+  costDrivers: any;
+  costDriversLoading: boolean;
+  fetchCostDrivers: (date?: string) => void;
 }
 
-function HistoryView({ history, historyLoading, fetchHistory, resources, setSelectedResource, setCurrentPage, setAlertModal }: HistoryViewProps) {
+function HistoryView({ history, historyLoading, fetchHistory, resources, setSelectedResource, setCurrentPage, setAlertModal, dailyImpact, costDrivers, costDriversLoading }: HistoryViewProps) {
   const [filterType, setFilterType] = useState<'all' | 'created' | 'deleted' | 'modified'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [groupByDate, setGroupByDate] = useState(true);
+  const [costImpactOnly, setCostImpactOnly] = useState(false);
 
   const filteredHistory = useMemo(() => {
     let result = history;
-    // Normalize changeType to lowercase for comparison
     if (filterType !== 'all') {
       result = result.filter(h => (h.changeType || '').toLowerCase() === filterType);
+    }
+    if (costImpactOnly) {
+      result = result.filter(h => (h.cost || 0) > 0 && (h.changeType === 'created' || h.changeType === 'deleted'));
     }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -355,6 +584,21 @@ function HistoryView({ history, historyLoading, fetchHistory, resources, setSele
     const modified = history.filter(h => h.changeType === 'modified').length;
     const totalCost = history.reduce((sum, h) => sum + (h.cost || 0), 0);
     return { created, deleted, modified, totalCost };
+  }, [history]);
+
+  const topUsers = useMemo(() => {
+    const counts: Record<string, { total: number; created: number; deleted: number; modified: number }> = {};
+    history.forEach(h => {
+      const user = h.changedBy || 'Unknown';
+      if (!counts[user]) counts[user] = { total: 0, created: 0, deleted: 0, modified: 0 };
+      counts[user].total++;
+      const ct = (h.changeType || '').toLowerCase() as 'created' | 'deleted' | 'modified';
+      if (ct === 'created' || ct === 'deleted' || ct === 'modified') counts[user][ct]++;
+    });
+    return Object.entries(counts)
+      .sort((a, b) => b[1].total - a[1].total)
+      .slice(0, 8)
+      .map(([user, c]) => ({ user, ...c }));
   }, [history]);
 
   const handleResourceClick = (h: ResourceChange) => {
@@ -443,6 +687,227 @@ function HistoryView({ history, historyLoading, fetchHistory, resources, setSele
         </div>
       )}
 
+      {/* Top Users Leaderboard */}
+      {topUsers.length > 0 && (
+        <div className="card" style={{ padding: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Top Users by Activity</div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Ranked by total resource changes in this period</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {topUsers.map((u, idx) => {
+              const maxCount = topUsers[0].total;
+              const barPct = Math.round((u.total / maxCount) * 100);
+              const isUnknown = u.user === 'Unknown';
+              const avatarColors = ['var(--accent)', 'var(--blue)', '#a855f7', '#f59e0b', '#ec4899', '#06b6d4', '#84cc16', '#f97316'];
+              const color = isUnknown ? 'var(--text-3)' : avatarColors[idx % avatarColors.length];
+              const initials = isUnknown ? '?' : u.user.split('@')[0].slice(0, 2).toUpperCase();
+              return (
+                <div key={u.user} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 22, textAlign: 'right', fontSize: 11, fontWeight: 700, color: idx < 3 ? 'var(--accent)' : 'var(--text-3)', flexShrink: 0 }}>
+                    #{idx + 1}
+                  </div>
+                  <div style={{ width: 30, height: 30, borderRadius: '50%', background: isUnknown ? 'var(--bg-surface)' : `${color}22`, border: `1.5px solid ${color}55`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color }}>{initials}</span>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: isUnknown ? 'var(--text-3)' : 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }} title={u.user}>
+                        {u.user}
+                      </span>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginLeft: 8 }}>
+                        {u.created > 0 && <span style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 700 }}>{u.created}↑</span>}
+                        {u.deleted > 0 && <span style={{ fontSize: 10, color: 'var(--danger)', fontWeight: 700 }}>{u.deleted}↓</span>}
+                        {u.modified > 0 && <span style={{ fontSize: 10, color: 'var(--blue)', fontWeight: 700 }}>{u.modified}✎</span>}
+                        <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-2)' }}>{u.total}</span>
+                      </div>
+                    </div>
+                    <div style={{ height: 4, background: 'var(--bg-surface)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${barPct}%`, background: isUnknown ? 'var(--border)' : color, borderRadius: 2, transition: 'width 0.4s ease' }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Yesterday's Cost Drivers */}
+      {(costDrivers || costDriversLoading) && (
+        <div className="card" style={{ padding: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg,var(--warning),#d97706)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
+                  Top Cost Drivers — {costDrivers ? new Date(costDrivers.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) : 'Yesterday'}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Resource changes with the biggest spend impact</div>
+              </div>
+            </div>
+            {costDrivers && (
+              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                {costDrivers.prevTotal > 0 && (
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Day-over-day</div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: costDrivers.delta > 0 ? 'var(--danger)' : 'var(--accent)' }}>
+                      {costDrivers.delta > 0 ? '+' : ''} ${Math.abs(costDrivers.delta).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                    </div>
+                  </div>
+                )}
+                {costDrivers.dailyTotal > 0 && (
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Total spend</div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-1)' }}>${costDrivers.dailyTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {costDriversLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 0', justifyContent: 'center' }}>
+              <div className="spinner" style={{ width: 18, height: 18 }} />
+              <span style={{ color: 'var(--text-3)', fontSize: 13 }}>Analyzing cost changes…</span>
+            </div>
+          ) : costDrivers?.drivers?.length > 0 ? (
+            <>
+              {/* Summary pills */}
+              <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+                {costDrivers.addedCount > 0 && (
+                  <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 20, background: 'var(--accent-dim)', color: 'var(--accent)', fontWeight: 600, border: '1px solid var(--accent)33' }}>
+                    +${(costDrivers.addedCost).toLocaleString('en-US', { maximumFractionDigits: 2 })}/day from {costDrivers.addedCount} new
+                  </span>
+                )}
+                {costDrivers.removedCount > 0 && (
+                  <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 20, background: 'var(--danger-dim)', color: 'var(--danger)', fontWeight: 600, border: '1px solid var(--danger)33' }}>
+                    −${(costDrivers.removedCost).toLocaleString('en-US', { maximumFractionDigits: 2 })}/day from {costDrivers.removedCount} deleted
+                  </span>
+                )}
+              </div>
+
+              {/* Driver rows */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {costDrivers.drivers.map((d: any, i: number) => {
+                  const isCreated = d.changeType === 'created';
+                  const color = isCreated ? 'var(--accent)' : 'var(--danger)';
+                  const bg = isCreated ? 'var(--accent-dim)' : 'var(--danger-dim)';
+                  const maxCost = costDrivers.drivers[0]?.dailyCost || 1;
+                  const barPct = Math.round((d.dailyCost / maxCost) * 100);
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer' }}
+                      onClick={() => { setCurrentPage(1); }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: isCreated ? 'var(--accent)' : 'var(--danger)', minWidth: 16, textAlign: 'center' }}>{isCreated ? '+' : '−'}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }} title={d.resourceName}>{d.resourceName}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                            {d.changedBy && d.changedBy !== 'Unknown' && (
+                              <span style={{ fontSize: 10, color: 'var(--text-3)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.changedBy}>{d.changedBy.split('@')[0]}</span>
+                            )}
+                            <span style={{ fontSize: 12, fontWeight: 800, color, background: bg, padding: '2px 8px', borderRadius: 10 }}>
+                              {isCreated ? '+' : '−'}${d.dailyCost.toLocaleString('en-US', { maximumFractionDigits: 2 })}/day
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ flex: 1, height: 3, background: 'var(--border)', borderRadius: 2 }}>
+                            <div style={{ height: '100%', width: `${barPct}%`, background: color, borderRadius: 2 }} />
+                          </div>
+                          <span style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>{d.resourceType?.split('/').slice(-1)[0]} · {d.resourceGroup}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div style={{ padding: '16px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
+              No cost-impacting changes found for yesterday
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Daily Cost Impact */}
+      {dailyImpact.length > 0 && (
+        <div className="card" style={{ padding: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2"><path d="M3 3v18h18"/><path d="M9 17V9M15 17V5M21 17v-4"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Daily Cost Impact</div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Resource changes with direct spend impact</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {dailyImpact.map(day => {
+              const netDaily = day.addedCost - day.removedCost;
+              const hasImpact = day.addedCost > 0 || day.removedCost > 0;
+              if (!hasImpact) return null;
+              const dateLabel = (() => {
+                const d = new Date(day.date + 'T12:00:00');
+                const today = new Date(); today.setHours(12,0,0,0);
+                const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+                if (d.toDateString() === today.toDateString()) return 'Today';
+                if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+                return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+              })();
+              return (
+                <div key={day.date} style={{ padding: '12px 16px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>{dateLabel}</span>
+                    {day.totalDailyCost > 0 && (
+                      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                        Total spend: <strong style={{ color: 'var(--text-1)' }}>${day.totalDailyCost.toLocaleString('en-US', { maximumFractionDigits: 0 })}</strong>
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {day.addedCost > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'var(--accent-dim)', borderRadius: 8, border: '1px solid var(--accent)33' }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                        <div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{day.createdCount} created</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>+${day.addedCost.toLocaleString('en-US', { maximumFractionDigits: 2 })}/day</div>
+                        </div>
+                      </div>
+                    )}
+                    {day.removedCost > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'var(--danger-dim)', borderRadius: 8, border: '1px solid var(--danger)33' }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+                        <div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{day.deletedCount} deleted</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger)' }}>-${day.removedCost.toLocaleString('en-US', { maximumFractionDigits: 2 })}/day</div>
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: netDaily > 0 ? 'var(--warning-dim, rgba(245,158,11,0.1))' : 'var(--accent-dim)', borderRadius: 8, border: `1px solid ${netDaily > 0 ? 'var(--warning)' : 'var(--accent)'}33`, marginLeft: 'auto' }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Net daily impact</div>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: netDaily > 0 ? 'var(--warning)' : 'var(--accent)' }}>
+                          {netDaily > 0 ? '+' : ''}{netDaily.toLocaleString('en-US', { maximumFractionDigits: 2 })}/day
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -501,6 +966,26 @@ function HistoryView({ history, historyLoading, fetchHistory, resources, setSele
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
             {groupByDate ? 'Grouped' : 'Flat'}
+          </button>
+
+          <button
+            onClick={() => setCostImpactOnly(!costImpactOnly)}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: `1px solid ${costImpactOnly ? 'var(--accent)' : 'var(--border)'}`,
+              background: costImpactOnly ? 'var(--accent-dim)' : 'transparent',
+              color: costImpactOnly ? 'var(--accent)' : 'var(--text-2)',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Cost Impact
           </button>
 
           <button className="btn" onClick={fetchHistory} disabled={historyLoading}>
@@ -667,33 +1152,68 @@ function HistoryView({ history, historyLoading, fetchHistory, resources, setSele
                           }}>
                             {friendlyType(h.resourceType)}
                           </span>
-                          {h.cost > 0 && (
+                          {h.cost > 0 && (isCreated || isDeleted) && (
+                            <span style={{
+                              fontSize: 12,
+                              fontWeight: 700,
+                              color: isDeleted ? 'var(--danger)' : 'var(--accent)',
+                              padding: '3px 10px',
+                              background: isDeleted ? 'var(--danger-dim)' : 'var(--accent-dim)',
+                              borderRadius: 20,
+                              border: `1px solid ${isDeleted ? 'var(--danger)' : 'var(--accent)'}44`,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4
+                            }}>
+                              {isDeleted ? '−' : '+'} ${h.cost.toLocaleString('en-US', { maximumFractionDigits: 2 })}/mo
+                            </span>
+                          )}
+                          {h.cost > 0 && !isCreated && !isDeleted && (
                             <span style={{
                               fontSize: 12,
                               fontWeight: 600,
-                              color: isDeleted ? 'var(--danger)' : 'var(--accent)',
+                              color: 'var(--text-3)',
                               padding: '3px 8px',
-                              background: isDeleted ? 'var(--danger-dim)' : 'var(--accent-dim)',
+                              background: 'var(--bg-surface)',
                               borderRadius: 6
                             }}>
                               ${h.cost.toLocaleString('en-US', { maximumFractionDigits: 2 })}/mo
                             </span>
                           )}
-                          {h.changedBy && h.changedBy !== 'Unknown' && (
-                            <span style={{
-                              fontSize: 11,
-                              color: 'var(--text-3)',
-                              padding: '2px 6px',
-                              background: 'var(--bg-surface)',
-                              borderRadius: 4,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 4
-                            }}>
-                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                              {h.changedBy}
-                            </span>
-                          )}
+                          {(() => {
+                            const user = h.changedBy || 'Unknown';
+                            const isUnknown = user === 'Unknown';
+                            const isEmail = user.includes('@');
+                            const displayName = isEmail ? user.split('@')[0] : user;
+                            const initials = isUnknown ? '?' : displayName.slice(0, 2).toUpperCase();
+                            return (
+                              <span style={{
+                                fontSize: 12,
+                                color: isUnknown ? 'var(--text-3)' : 'var(--text-2)',
+                                padding: '3px 8px 3px 4px',
+                                background: isUnknown ? 'var(--bg-surface)' : 'var(--accent-dim)',
+                                borderRadius: 20,
+                                border: `1px solid ${isUnknown ? 'var(--border)' : 'var(--accent)'}44`,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                fontWeight: isUnknown ? 400 : 600,
+                                maxWidth: 220,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }} title={user}>
+                                <span style={{
+                                  width: 18, height: 18, borderRadius: '50%',
+                                  background: isUnknown ? 'var(--border)' : 'var(--accent)',
+                                  color: 'white', fontSize: 9, fontWeight: 700,
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  flexShrink: 0
+                                }}>{initials}</span>
+                                {isEmail ? user : displayName}
+                              </span>
+                            );
+                          })()}
                         </div>
 
                         {!isCreated && !isDeleted && h.field && (
@@ -775,8 +1295,8 @@ function Portal({ children }: { children: React.ReactNode }) {
 
 // ─── FilterDropdown (multi) ───────────────────────────────────────────────────
 
-function FilterDropdown({ label, options, selected, onToggle }: {
-  label: string; options: string[]; selected: string[]; onToggle: (v: string) => void;
+function FilterDropdown({ label, options, selected, onToggle, formatLabel }: {
+  label: string; options: string[]; selected: string[]; onToggle: (v: string) => void; formatLabel?: (v: string) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -830,7 +1350,7 @@ function FilterDropdown({ label, options, selected, onToggle }: {
               {filtered.map(o => (
                 <label key={o} className="filter-option">
                   <input type="checkbox" checked={selected.includes(o)} onChange={() => onToggle(o)} />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatLabel ? formatLabel(o) : o}</span>
                 </label>
               ))}
               {filtered.length === 0 && <div style={{ padding: '12px 8px', color: 'var(--text-3)', fontSize: 12 }}>No results</div>}
@@ -947,6 +1467,7 @@ const COLUMNS = [
   { key: 'resourceGroup',  label: 'Resource Group', defaultW: 100, minWidth: 60 },
   { key: 'subscriptionId', label: 'Subscription ID',  defaultW: 90, minWidth: 60 },
   { key: 'optimization',   label: 'Efficiency',         defaultW: 70, minWidth: 50 },
+  { key: 'createdBy',      label: 'Created By',     defaultW: 100, minWidth: 60 },
   { key: 'cost',           label: 'Cost',          defaultW: 80, minWidth: 60 },
 ];
 
@@ -1079,6 +1600,15 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
               </span>
             )}
           </div>
+        </div>
+        <div style={{ width: widths.createdBy, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
+          {r.createdBy ? (
+            <span title={`Created by: ${r.createdBy}`} style={{ fontSize: 12, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+              {r.createdBy.includes('@') ? r.createdBy.split('@')[0] : r.createdBy}
+            </span>
+          ) : (
+            <span style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>Unknown</span>
+          )}
         </div>
         <div style={{ width: widths.cost, flexShrink: 0, padding: '0 14px', textAlign: 'right' }}>
           <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>
@@ -1342,6 +1872,35 @@ function AIInsightsModal({ resource, onClose, insight, loading, onViewDependenci
                 <span style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 14 }}>{resource.score ?? 100}/100</span>
               </div>
             </div>
+            {resource.createdBy && (
+              <div className="info-cell">
+                <div className="info-cell-label">Created By</div>
+                <div className="info-cell-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                  <span style={{ fontSize: 12, wordBreak: 'break-all' }}>{resource.createdBy}</span>
+                  {resource.createdByType && (
+                    <span style={{ fontSize: 10, color: 'var(--text-2)', padding: '2px 6px', background: 'var(--bg-surface)', borderRadius: 4 }}>
+                      {resource.createdByType}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+            {resource.lastModifiedBy && (
+              <div className="info-cell">
+                <div className="info-cell-label">Last Modified By</div>
+                <div className="info-cell-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>
+                  <span style={{ fontSize: 12, wordBreak: 'break-all' }}>{resource.lastModifiedBy}</span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div>
@@ -2046,14 +2605,15 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTypes, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, showFavoritesOnly, setRegionFilter, setSubFilter, setRgFilter, setTypeFilter, setShowOrphanedOnly, setShowUnattachedDiskOnly, setShowUnassignedPIPOnly, setShowUnattachedNICOnly, setShowFavoritesOnly, setCurrentPage, collapsed, onToggleCollapse, favorites }: {
+function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTypes, uniqueCreators, regionFilter, subFilter, rgFilter, typeFilter, creatorFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, showFavoritesOnly, setRegionFilter, setSubFilter, setRgFilter, setTypeFilter, setCreatorFilter, setShowOrphanedOnly, setShowUnattachedDiskOnly, setShowUnassignedPIPOnly, setShowUnattachedNICOnly, setShowFavoritesOnly, setCurrentPage, collapsed, onToggleCollapse, favorites }: {
   open: boolean; onClose: () => void;
-  uniqueRegions: string[]; uniqueSubs: string[]; uniqueRGs: string[]; uniqueTypes: string[];
-  regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; showOrphanedOnly: boolean; showUnattachedDiskOnly: boolean; showUnassignedPIPOnly: boolean; showUnattachedNICOnly: boolean; showFavoritesOnly: boolean; favorites: Set<string>;
+  uniqueRegions: string[]; uniqueSubs: string[]; uniqueRGs: string[]; uniqueTypes: string[]; uniqueCreators: string[];
+  regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; creatorFilter: string[]; showOrphanedOnly: boolean; showUnattachedDiskOnly: boolean; showUnassignedPIPOnly: boolean; showUnattachedNICOnly: boolean; showFavoritesOnly: boolean; favorites: Set<string>;
   setRegionFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setSubFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setRgFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setTypeFilter: React.Dispatch<React.SetStateAction<string>>;
+  setCreatorFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setShowOrphanedOnly: React.Dispatch<React.SetStateAction<boolean>>;
   setShowUnattachedDiskOnly: React.Dispatch<React.SetStateAction<boolean>>;
   setShowUnassignedPIPOnly: React.Dispatch<React.SetStateAction<boolean>>;
@@ -2068,7 +2628,7 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
     setCurrentPage(1);
   };
 
-  const hasFilters = regionFilter.length || subFilter.length || rgFilter.length || typeFilter || showOrphanedOnly || showUnattachedDiskOnly || showUnassignedPIPOnly || showUnattachedNICOnly || showFavoritesOnly;
+  const hasFilters = regionFilter.length || subFilter.length || rgFilter.length || typeFilter || creatorFilter.length || showOrphanedOnly || showUnattachedDiskOnly || showUnassignedPIPOnly || showUnattachedNICOnly || showFavoritesOnly;
 
   return (
     <>
@@ -2100,7 +2660,7 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
                   <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-2)' }}>Filters</span>
                 </div>
                 {hasFilters ? (
-                  <button onClick={() => { setRegionFilter([]); setSubFilter([]); setRgFilter([]); setTypeFilter(''); setShowOrphanedOnly(false); setShowUnattachedDiskOnly(false); setShowUnassignedPIPOnly(false); setShowUnattachedNICOnly(false); setShowFavoritesOnly(false); setCurrentPage(1); }}
+                  <button onClick={() => { setRegionFilter([]); setSubFilter([]); setRgFilter([]); setTypeFilter(''); setCreatorFilter([]); setShowOrphanedOnly(false); setShowUnattachedDiskOnly(false); setShowUnassignedPIPOnly(false); setShowUnattachedNICOnly(false); setShowFavoritesOnly(false); setCurrentPage(1); }}
                     style={{ fontSize: 10, fontWeight: 700, color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', transition: 'opacity 0.2s' }}
                     onMouseEnter={e => e.currentTarget.style.opacity = '0.7'}
                     onMouseLeave={e => e.currentTarget.style.opacity = '1'}
@@ -2115,6 +2675,8 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
               <FilterDropdown label="Resource Group" options={uniqueRGs} selected={rgFilter} onToggle={toggle(setRgFilter)} />
               <SingleFilterDropdown label="Resource Type" options={uniqueTypes} selected={typeFilter}
                 onSelect={v => { setTypeFilter(v); setCurrentPage(1); }} getLabel={friendlyType} />
+              <FilterDropdown label="Created By" options={uniqueCreators} selected={creatorFilter}
+                onToggle={toggle(setCreatorFilter)} formatLabel={v => v.includes('@') ? v.split('@')[0] : v} />
 
               <div className="sidebar-section" style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
@@ -2254,6 +2816,10 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   const [typeFilter, setTypeFilter] = useState(() => localStorage.getItem('cloudviz-typeFilter') || '');
+  const [creatorFilter, setCreatorFilter] = useState<string[]>(() => {
+    const saved = localStorage.getItem('cloudviz-creatorFilter');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [showOrphanedOnly, setShowOrphanedOnly] = useState(() => localStorage.getItem('cloudviz-orphaned') === 'true');
   const [showUnattachedDiskOnly, setShowUnattachedDiskOnly] = useState(() => localStorage.getItem('cloudviz-unattachedDisk') === 'true');
   const [showUnassignedPIPOnly, setShowUnassignedPIPOnly] = useState(() => localStorage.getItem('cloudviz-unassignedPIP') === 'true');
@@ -2354,8 +2920,8 @@ export default function App() {
   });
   const itemsPerPage = 25;
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'resources' | 'costs' | 'comparisons' | 'history'>(() => {
-    return (localStorage.getItem('cloudviz-tab') as 'dashboard' | 'resources' | 'costs' | 'comparisons' | 'history') || 'dashboard';
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'resources' | 'costs' | 'comparisons' | 'history' | 'waste'>(() => {
+    return (localStorage.getItem('cloudviz-tab') as 'dashboard' | 'resources' | 'costs' | 'comparisons' | 'history' | 'waste') || 'dashboard';
   });
   const [selectedCost, setSelectedCost] = useState<CostPrediction | null>(null);
   const [costSearchQuery, setCostSearchQuery] = useState(() => localStorage.getItem('cloudviz-costSearchQuery') || '');
@@ -2396,6 +2962,9 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-costSearchQuery', costSearchQuery); }, [costSearchQuery]);
   const [history, setHistory] = useState<ResourceChange[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [dailyImpact, setDailyImpact] = useState<Array<{date: string; totalDailyCost: number; addedCost: number; removedCost: number; createdCount: number; deletedCount: number}>>([]);
+  const [costDrivers, setCostDrivers] = useState<any>(null);
+  const [costDriversLoading, setCostDriversLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [alertModal, setAlertModal] = useState<{open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info'} | null>(null);
   const [dragItem, setDragItem] = useState<string | null>(null);
@@ -2410,6 +2979,7 @@ export default function App() {
   const [piiMasking, setPiiMasking] = useState(() => localStorage.getItem('cloudviz-piiMasking') === 'true');
   useEffect(() => { localStorage.setItem('cloudviz-piiMasking', String(piiMasking)); }, [piiMasking]);
   const [wasteData, setWasteData] = useState<any>(null);
+  const [wasteLoading, setWasteLoading] = useState(false);
   const [periodComparison, setPeriodComparison] = useState<any>(null);
   const [forecastData, setForecastData] = useState<{actualCost: number; forecastCost: number; periodDays: number} | null>(null);
   const [anomalyData, setAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; ratio: number; change: number}>; threshold: number; periodStart: string; periodEnd: string} | null>(null);
@@ -2446,8 +3016,8 @@ export default function App() {
   const [comparisonsSearchFocused, setComparisonsSearchFocused] = useState(false);
   const comparisonsSearchInputRef = useRef<HTMLInputElement>(null);
 
-  const [allPossibleFilters, setAllPossibleFilters] = useState<{ subs: string[]; locations: string[]; rgs: string[]; types: string[] }>({
-    subs: [], locations: [], rgs: [], types: [],
+  const [allPossibleFilters, setAllPossibleFilters] = useState<{ subs: string[]; locations: string[]; rgs: string[]; types: string[]; creators: string[] }>({
+    subs: [], locations: [], rgs: [], types: [], creators: [],
   });
   const [totalResources, setTotalResources] = useState(0);
   const [trueTotalResources, setTrueTotalResources] = useState(0);
@@ -2555,6 +3125,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-subFilter', JSON.stringify(subFilter)); }, [subFilter]);
   useEffect(() => { localStorage.setItem('cloudviz-rgFilter', JSON.stringify(rgFilter)); }, [rgFilter]);
   useEffect(() => { localStorage.setItem('cloudviz-typeFilter', typeFilter); }, [typeFilter]);
+  useEffect(() => { localStorage.setItem('cloudviz-creatorFilter', JSON.stringify(creatorFilter)); }, [creatorFilter]);
   useEffect(() => { localStorage.setItem('cloudviz-orphaned', String(showOrphanedOnly)); }, [showOrphanedOnly]);
   useEffect(() => { localStorage.setItem('cloudviz-unattachedDisk', String(showUnattachedDiskOnly)); }, [showUnattachedDiskOnly]);
   useEffect(() => { localStorage.setItem('cloudviz-unassignedPIP', String(showUnassignedPIPOnly)); }, [showUnassignedPIPOnly]);
@@ -4098,11 +4669,11 @@ export default function App() {
                 </div>
                 <div>
                   <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Waste Detection</span>
-                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{wasteData.totalCount} non-production workloads running 24/7</span>
+                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{wasteData.totalCount} waste items detected</span>
                 </div>
               </div>
               <span style={{ padding: '6px 14px', borderRadius: 12, background: 'linear-gradient(135deg, var(--warning) 0%, #d97706 100%)', color: 'white', fontSize: 13, fontWeight: 700, boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
-                ${(wasteData.totalWaste || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo waste
+                ${(wasteData.totalSavings || wasteData.totalWaste || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo savings
               </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -4113,11 +4684,11 @@ export default function App() {
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{w.resourceGroup} · {w.environment}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{w.resourceGroup} · {w.categoryLabel || w.environment || w.category}</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: 700, color: 'var(--warning)', fontSize: 14 }}>${w.monthlyCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>per month</div>
+                    <div style={{ fontWeight: 700, color: 'var(--warning)', fontSize: 14 }}>${(w.potentialSavings || w.monthlyCost || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>savings/mo</div>
                   </div>
                 </div>
               ))}
@@ -4573,6 +5144,7 @@ export default function App() {
     subFilter.forEach(f => params.append('subscriptionId', f));
     rgFilter.forEach(f => params.append('resourceGroup', f));
     if (typeFilter) params.append('type', typeFilter);
+    creatorFilter.forEach(f => params.append('createdBy', f));
     if (debouncedSearch) params.append('search', debouncedSearch);
     if (showOrphanedOnly) params.append('orphaned', 'true');
     if (showUnattachedDiskOnly) params.append('unattachedDiskOnly', 'true');
@@ -4591,7 +5163,7 @@ export default function App() {
       .then(r => r.json())
       .then(data => { setResources(data.data || []); setTotalResources(data.total || 0); setFilteredTotalCost(data.totalCost || 0); setLoading(false); })
       .catch(err => { setError(err.message); setLoading(false); });
-  }, [regionFilter, subFilter, rgFilter, typeFilter, debouncedSearch, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, tagFilter, currentPage, sortConfig, piiMasking]);
+  }, [regionFilter, subFilter, rgFilter, typeFilter, creatorFilter, debouncedSearch, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, tagFilter, currentPage, sortConfig, piiMasking]);
 
   const handleSort = (key: string) => {
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
@@ -4602,6 +5174,7 @@ export default function App() {
   const uniqueSubs = useMemo(() => [...(allPossibleFilters.subs || [])].sort(), [allPossibleFilters.subs]);
   const uniqueRGs = useMemo(() => [...(allPossibleFilters.rgs || [])].sort(), [allPossibleFilters.rgs]);
   const uniqueTypes = useMemo(() => [...(allPossibleFilters.types || [])].sort((a, b) => friendlyType(a).localeCompare(friendlyType(b))), [allPossibleFilters.types]);
+  const uniqueCreators = useMemo(() => [...(allPossibleFilters.creators || [])].sort(), [allPossibleFilters.creators]);
   const [selectedSubs, setSelectedSubs] = useState<Set<string>>(() => new Set());
   const [selectedSubsInitialized, setSelectedSubsInitialized] = useState(false);
 
@@ -4660,12 +5233,17 @@ export default function App() {
   }, [activeSubs, costPeriod]);
 
   // Fetch waste detection data
-  useEffect(() => {
+  const fetchWaste = () => {
+    setWasteLoading(true);
     fetch('http://localhost:8080/api/waste/detect')
       .then(r => r.json())
       .then(data => { if (!data.error) setWasteData(data); })
-      .catch(() => {});
-  }, []);
+      .catch(() => {})
+      .finally(() => setWasteLoading(false));
+  };
+  useEffect(() => {
+    if (activeTab === 'waste' && !wasteData) fetchWaste();
+  }, [activeTab]);
 
   // Fetch period-over-period cost comparison
   useEffect(() => {
@@ -4901,17 +5479,21 @@ export default function App() {
   const fetchHistory = async () => {
     setHistoryLoading(true);
     try {
-      // Get start of day in browser timezone as ISO 8601
       const now = new Date();
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const since = startOfDay.toISOString();
       const res = await fetch(`http://localhost:8080/api/history?since=${encodeURIComponent(since)}`);
       const data = await res.json();
       if (Array.isArray(data)) {
+        // Legacy flat array response
         setHistory(data);
+        setDailyImpact([]);
+      } else if (data?.items) {
+        setHistory(Array.isArray(data.items) ? data.items : []);
+        setDailyImpact(Array.isArray(data.dailyImpact) ? data.dailyImpact : []);
       } else {
-        console.error('History API returned non-array:', data);
         setHistory([]);
+        setDailyImpact([]);
       }
     } catch (err) {
       console.error('Failed to fetch history', err);
@@ -4920,8 +5502,27 @@ export default function App() {
     }
   };
 
+  const fetchCostDrivers = async (date?: string) => {
+    setCostDriversLoading(true);
+    try {
+      const url = date
+        ? `http://localhost:8080/api/history/cost-drivers?date=${date}`
+        : `http://localhost:8080/api/history/cost-drivers`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!data.error) setCostDrivers(data);
+    } catch (err) {
+      console.error('Failed to fetch cost drivers', err);
+    } finally {
+      setCostDriversLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (activeTab === 'history') fetchHistory();
+    if (activeTab === 'history') {
+      fetchHistory();
+      fetchCostDrivers();
+    }
   }, [activeTab]);
 
   const detailResources = useMemo(() => {
@@ -6340,6 +6941,25 @@ export default function App() {
               </span>
             )}
           </button>
+          <button className={`tab ${activeTab === 'waste' ? 'active' : ''}`} onClick={() => setActiveTab('waste')} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 6 }}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+            Waste
+            {wasteData && wasteData.totalCount > 0 && (
+              <span style={{
+                marginLeft: 4,
+                padding: '2px 8px',
+                borderRadius: 12,
+                background: activeTab === 'waste' ? 'var(--danger)' : 'rgba(239,68,68,0.1)',
+                color: activeTab === 'waste' ? 'white' : 'var(--danger)',
+                fontSize: 11,
+                fontWeight: 700,
+                border: `1px solid ${activeTab === 'waste' ? 'var(--danger)' : 'var(--danger)'}`,
+                transition: 'all 0.2s ease'
+              }}>
+                {wasteData.totalCount}
+              </span>
+            )}
+          </button>
         </div>
 
         <div style={{ flex: 1 }} />
@@ -6416,10 +7036,10 @@ export default function App() {
         <Sidebar
           open={sidebarOpen} onClose={() => setSidebarOpen(false)}
           collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(v => !v)}
-          uniqueRegions={uniqueRegions} uniqueSubs={uniqueSubs} uniqueRGs={uniqueRGs} uniqueTypes={uniqueTypes}
-          regionFilter={regionFilter} subFilter={subFilter} rgFilter={rgFilter} typeFilter={typeFilter}
+          uniqueRegions={uniqueRegions} uniqueSubs={uniqueSubs} uniqueRGs={uniqueRGs} uniqueTypes={uniqueTypes} uniqueCreators={uniqueCreators}
+          regionFilter={regionFilter} subFilter={subFilter} rgFilter={rgFilter} typeFilter={typeFilter} creatorFilter={creatorFilter}
           showOrphanedOnly={showOrphanedOnly} showUnattachedDiskOnly={showUnattachedDiskOnly} showUnassignedPIPOnly={showUnassignedPIPOnly} showUnattachedNICOnly={showUnattachedNICOnly} showFavoritesOnly={showFavoritesOnly}
-          setRegionFilter={setRegionFilter} setSubFilter={setSubFilter} setRgFilter={setRgFilter} setTypeFilter={setTypeFilter}
+          setRegionFilter={setRegionFilter} setSubFilter={setSubFilter} setRgFilter={setRgFilter} setTypeFilter={setTypeFilter} setCreatorFilter={setCreatorFilter}
           setShowOrphanedOnly={setShowOrphanedOnly} setShowUnattachedDiskOnly={setShowUnattachedDiskOnly}
           setShowUnassignedPIPOnly={setShowUnassignedPIPOnly} setShowUnattachedNICOnly={setShowUnattachedNICOnly} setShowFavoritesOnly={setShowFavoritesOnly}
           setCurrentPage={setCurrentPage}
@@ -6903,6 +7523,20 @@ export default function App() {
               setSelectedResource={setSelectedResource}
               setCurrentPage={setCurrentPage}
               setAlertModal={setAlertModal}
+              dailyImpact={dailyImpact}
+              costDrivers={costDrivers}
+              costDriversLoading={costDriversLoading}
+              fetchCostDrivers={fetchCostDrivers}
+            />
+          ) : activeTab === 'waste' ? (
+            /* ── Waste Tab ── */
+            <WasteView
+              wasteData={wasteData}
+              wasteLoading={wasteLoading}
+              fetchWaste={fetchWaste}
+              setSearchQuery={setSearchQuery}
+              setActiveTab={setActiveTab}
+              setCurrentPage={setCurrentPage}
             />
           ) : (
             /* ── Cost Tab ── */

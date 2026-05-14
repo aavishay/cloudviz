@@ -447,6 +447,28 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 				score = 30
 			}
 
+			// Extract creator information from tags or properties
+			createdBy := extractCreatorFromTags(tags)
+			createdByType := "user"
+			if strings.Contains(createdBy, "@") {
+				// It's an email, keep as is
+			} else if createdBy != "" {
+				// Check if it looks like a service principal
+				if strings.Contains(strings.ToLower(createdBy), "spn") || strings.Contains(strings.ToLower(createdBy), "service") {
+					createdByType = "service_principal"
+				} else if strings.HasPrefix(createdBy, "mi-") || strings.Contains(strings.ToLower(createdBy), "managedidentity") {
+					createdByType = "managed_identity"
+				}
+			}
+
+			// Try to get creation time from tags or properties
+			createdAt := time.Time{}
+			if tStr := safeStr(m["createdTime"]); tStr != "" {
+				if t, err := time.Parse(time.RFC3339, tStr); err == nil {
+					createdAt = t
+				}
+			}
+
 			allResources = append(allResources, AzureResource{
 				ID:             safeStr(m["id"]),
 				Name:           safeStr(m["name"]),
@@ -459,6 +481,9 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 				Optimization:   opt,
 				Score:          score,
 				IsOrphaned:     isOrphaned,
+				CreatedBy:      createdBy,
+				CreatedByType:  createdByType,
+				CreatedAt:      createdAt,
 			})
 		}
 
@@ -1117,6 +1142,9 @@ func getResourceContext(ctx context.Context, resourceID string) (*AzureResource,
 		}
 	}
 
+	// Extract creator information
+	createdBy := extractCreatorFromTags(tags)
+
 	return &AzureResource{
 		ID:             resourceID,
 		Name:           safeStr(row["name"]),
@@ -1127,6 +1155,7 @@ func getResourceContext(ctx context.Context, resourceID string) (*AzureResource,
 		Status:         safeStr(row["status"]),
 		Tags:           tags,
 		Cost:           cost,
+		CreatedBy:      createdBy,
 	}, nil
 }
 
@@ -1452,6 +1481,41 @@ func normalizeTagValue(v string) string {
 	}
 }
 
+// extractCreatorFromTags extracts the creator/owner email from resource tags
+func extractCreatorFromTags(tags map[string]string) string {
+	// Check common creator/owner tag keys in order of priority
+	creatorKeys := []string{
+		"createdBy",
+		"CreatedBy",
+		"created-by",
+		"owner",
+		"Owner",
+		"managedBy",
+		"ManagedBy",
+		"email",
+		"Email",
+		"creator",
+		"Creator",
+		"author",
+		"Author",
+		"contact",
+		"Contact",
+	}
+
+	for _, key := range creatorKeys {
+		if val, ok := tags[key]; ok && val != "" {
+			// Clean up the value - could be email or username
+			val = strings.TrimSpace(val)
+			// If it looks like an email or UPN, return it
+			if strings.Contains(val, "@") || !strings.Contains(val, " ") {
+				return val
+			}
+		}
+	}
+
+	return ""
+}
+
 // getEnvFromTags extracts the environment value from a resource's tag map
 func getEnvFromTags(tags map[string]string) string {
 	// Check common environment tag keys in order of priority
@@ -1581,26 +1645,27 @@ func findUserForChange(activityLogs map[string][]ActivityLogEvent, resourceID st
 		return "Unknown"
 	}
 
-	// Find the closest event to the change time (within 5 minutes)
+	// Prefer the event closest to changeTime, but accept any write/create/delete event
+	// within the activity log window (no strict 5-minute cutoff for newly detected resources)
 	var bestMatch *ActivityLogEvent
-	bestDiff := time.Hour // max diff
+	bestDiff := time.Duration(1<<63 - 1)
 
 	for i := range events {
-		diff := events[i].EventTimestamp.Sub(changeTime)
+		e := &events[i]
+		if e.Caller == "" || e.Caller == "Unknown" {
+			continue
+		}
+		op := strings.ToLower(e.OperationName)
+		if !strings.Contains(op, "/write") && !strings.Contains(op, "/delete") && !strings.Contains(op, "/create") {
+			continue
+		}
+		diff := e.EventTimestamp.Sub(changeTime)
 		if diff < 0 {
 			diff = -diff
 		}
-
-		// Only consider write operations
-		if !strings.Contains(events[i].OperationName, "/write") &&
-		   !strings.Contains(events[i].OperationName, "/delete") &&
-		   !strings.Contains(events[i].OperationName, "/create") {
-			continue
-		}
-
-		if diff < bestDiff && diff < 5*time.Minute {
+		if diff < bestDiff {
 			bestDiff = diff
-			bestMatch = &events[i]
+			bestMatch = e
 		}
 	}
 
