@@ -7,18 +7,18 @@ class Cloudviz < Formula
   on_macos do
     on_arm do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_darwin_arm64.tar.gz"
-      sha256 "5d661c277bd6b6fda8afb1286264621d3024ef7e8f32f2ea4f4bd8fc2d6b3d18"
+      sha256 "d94e12d7f925ccc56ea494d986b5846aa5a5d63ddd97383c22ec181506c0cffc"
     end
     on_intel do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_darwin_amd64.tar.gz"
-      sha256 "9d827948fc90fa686d075793fc95488be82c86169749ad8473d73253c49f2a38"
+      sha256 "887ddc4174ba22fdc9035e35eb35aa4f83a9f8be3cf673ffa8b672359a34e4be"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/aavishay/cloudviz/releases/download/v#{version}/cloudviz_#{version}_linux_amd64.tar.gz"
-      sha256 "95cbb470eac5a022966deca7385e52bd6b43b5ce53348681a62ba044acb72417"
+      sha256 "4b768f778c2939043b5ecb96b10fa8b2117cddd56e101c088b9e0be5644eec58"
     end
   end
 
