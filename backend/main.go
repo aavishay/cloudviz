@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,7 +61,7 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use:     "cloudviz",
 		Short:   "CloudViz is an Azure resource and cost management tool",
-		Version: "1.19.0",
+		Version: "1.20.0",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cred, err := azidentity.NewDefaultAzureCredential(nil)
 			if err != nil {
@@ -2045,6 +2046,7 @@ func startServer(port string) {
 	r.GET("/api/costs/stream", sseHandler)
 	r.GET("/api/history", historyHandler)
 	r.GET("/api/history/cost-drivers", costDriversHandler)
+	r.GET("/api/history/rg-trends", rgTrendsHandler)
 
 	// Resource Group Comparison endpoint
 	r.GET("/api/resource-groups/comparison", func(c *gin.Context) {
@@ -3279,8 +3281,8 @@ func historyHandler(c *gin.Context) {
 			sinceTime = t
 		}
 	}
-	// Convert to local-timezone bounds so the idx_history_timestamp index is used
-	// (avoids datetime() function wrapper that prevents index use on 1.2M rows).
+	// Use plain "YYYY-MM-DD HH:MM:SS" string (matches stored timestamp format) so
+	// the idx_history_timestamp index works without a datetime() function wrapper.
 	var queryArgs []any
 	baseQuery := `SELECT h.resource_id, COALESCE(h.resource_name, h.resource_id),
 		COALESCE(h.resource_type, ''), h.change_type, h.field_name, h.old_value,
@@ -3288,9 +3290,10 @@ func historyHandler(c *gin.Context) {
 		COALESCE(h.changed_by, 'Unknown')
 		FROM resource_history h`
 	if !sinceTime.IsZero() {
-		local := sinceTime.In(time.Local)
+		// Format as plain date-time (same format as stored timestamps) for correct string comparison
+		sinceStr := sinceTime.In(time.Local).Format("2006-01-02 15:04:05")
 		baseQuery += ` WHERE h.timestamp >= ?`
-		queryArgs = append(queryArgs, local)
+		queryArgs = append(queryArgs, sinceStr)
 	}
 	baseQuery += ` ORDER BY h.timestamp DESC LIMIT 1000`
 
@@ -3341,9 +3344,17 @@ func historyHandler(c *gin.Context) {
 		}
 	}
 
-	var history []ResourceChange
-	for _, r := range rawRows {
+	// Resolve any GUID changedBy values via Microsoft Graph
+	callers := make([]string, len(rawRows))
+	for i, r := range rawRows {
+		callers[i] = r.ChangedBy
+	}
+	callers = resolveChangedByBatch(c.Request.Context(), callers)
+
+	history := make([]ResourceChange, 0, len(rawRows))
+	for i, r := range rawRows {
 		h := r.ResourceChange
+		h.ChangedBy = callers[i]
 		if r.StoredCost > 0 {
 			h.Cost = r.StoredCost
 		} else {
@@ -3390,7 +3401,7 @@ func historyHandler(c *gin.Context) {
 		}
 	}
 
-	var dailyImpact []daySummary
+	dailyImpact := make([]daySummary, 0, len(dayMap))
 	for _, ds := range dayMap {
 		dailyImpact = append(dailyImpact, *ds)
 	}
@@ -3508,8 +3519,15 @@ func costDriversHandler(c *gin.Context) {
 		return rest
 	}
 
+	// Resolve GUID changedBy values via Graph API
+	callersList := make([]string, len(entries))
+	for i, e := range entries {
+		callersList[i] = e.ChangedBy
+	}
+	callersList = resolveChangedByBatch(ctx, callersList)
+
 	var drivers []CostDriver
-	for _, e := range entries {
+	for i, e := range entries {
 		cost := e.StoredCost
 		if cost == 0 {
 			cost = costMap[strings.ToLower(e.ResourceID)]
@@ -3525,7 +3543,7 @@ func costDriversHandler(c *gin.Context) {
 			ChangeType:    e.ChangeType,
 			MonthlyCost:   cost,
 			DailyCost:     cost / 30.0,
-			ChangedBy:     e.ChangedBy,
+			ChangedBy:     callersList[i],
 		})
 	}
 	sort.Slice(drivers, func(i, j int) bool { return drivers[i].MonthlyCost > drivers[j].MonthlyCost })
@@ -3562,6 +3580,104 @@ func costDriversHandler(c *gin.Context) {
 		"addedCount":   addedCount,
 		"removedCount": removedCount,
 		"drivers":      drivers,
+	})
+}
+
+// rgTrendsHandler returns daily net cost change per resource group for the last N days.
+// Each value is the net monthly-cost impact of that day's resource changes, divided by 30 ($/day).
+func rgTrendsHandler(c *gin.Context) {
+	days := 7
+	if d, _ := strconv.Atoi(c.Query("days")); d == 14 || d == 30 {
+		days = d
+	}
+	topN := 8
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	// Build list of all dates in range (newest-first for sorting, we'll reverse later)
+	today := time.Now().In(time.Local)
+	dates := make([]string, days)
+	for i := 0; i < days; i++ {
+		dates[days-1-i] = today.AddDate(0, 0, -i).Format("2006-01-02")
+	}
+
+	// Query: net daily cost change ($/month) per resource group, extracting rg from resource_id
+	const rgExtract = `LOWER(SUBSTR(h.resource_id,
+		INSTR(LOWER(h.resource_id),'/resourcegroups/')+16,
+		CASE WHEN INSTR(SUBSTR(LOWER(h.resource_id),INSTR(LOWER(h.resource_id),'/resourcegroups/')+16),'/')>0
+		     THEN INSTR(SUBSTR(LOWER(h.resource_id),INSTR(LOWER(h.resource_id),'/resourcegroups/')+16),'/')-1
+		     ELSE 100 END))`
+
+	query := `SELECT date(h.timestamp,'localtime') as day,` + rgExtract + ` as rg,
+		SUM(CASE WHEN h.change_type='created' THEN COALESCE(h.resource_cost,0)
+		         WHEN h.change_type='deleted' THEN -COALESCE(h.resource_cost,0)
+		         ELSE 0 END) / 30.0 as net_daily,
+		SUM(COALESCE(h.resource_cost,0)) as abs_total
+		FROM resource_history h
+		WHERE h.timestamp >= date('now',?) AND h.timestamp < date('now','+1 day')
+		  AND h.change_type IN ('created','deleted')
+		  AND h.resource_cost > 0
+		  AND h.resource_id LIKE '%/resourcegroups/%'
+		GROUP BY day, rg
+		HAVING rg != '' AND rg IS NOT NULL
+		ORDER BY day, abs_total DESC`
+
+	rows, err := cache.db.QueryContext(ctx, query, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type dayRGRow struct{ day, rg string; net, abs float64 }
+	// rgAbsTotal accumulates per-rg absolute activity for selecting top N
+	rgAbsTotal := map[string]float64{}
+	// raw data: day → rg → net$/day
+	raw := map[string]map[string]float64{}
+	for rows.Next() {
+		var r dayRGRow
+		if rows.Scan(&r.day, &r.rg, &r.net, &r.abs) != nil {
+			continue
+		}
+		rgAbsTotal[r.rg] += r.abs
+		if raw[r.day] == nil {
+			raw[r.day] = map[string]float64{}
+		}
+		raw[r.day][r.rg] = r.net
+	}
+
+	// Pick top N resource groups by absolute total activity
+	type rgScore struct{ name string; score float64 }
+	ranked := make([]rgScore, 0, len(rgAbsTotal))
+	for rg, s := range rgAbsTotal {
+		ranked = append(ranked, rgScore{rg, s})
+	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+	if len(ranked) > topN {
+		ranked = ranked[:topN]
+	}
+
+	type RGSeries struct {
+		Name       string    `json:"name"`
+		DailyCosts []float64 `json:"dailyCosts"`
+		TotalAbs   float64   `json:"totalAbs"`
+	}
+	series := make([]RGSeries, 0, len(ranked))
+	for _, r := range ranked {
+		costs := make([]float64, len(dates))
+		for i, d := range dates {
+			if v, ok := raw[d][r.name]; ok {
+				costs[i] = math.Round(v*100) / 100
+			}
+		}
+		series = append(series, RGSeries{Name: r.name, DailyCosts: costs, TotalAbs: math.Round(r.score/30*100) / 100})
+	}
+
+	c.JSON(200, gin.H{
+		"dates":  dates,
+		"groups": series,
+		"days":   days,
 	})
 }
 

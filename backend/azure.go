@@ -28,6 +28,126 @@ import (
 // metricsClients caches MetricsClient per subscription to avoid recreating them
 var metricsClients sync.Map // map[string]*armmonitor.MetricsClient
 
+// objectIDCache caches Graph API lookups: objectID -> display name
+var objectIDCache sync.Map
+
+// isUUID returns true if s looks like a UUID (8-4-4-4-12 hex digits).
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+		} else if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveObjectIDToName looks up an Azure AD / Entra object ID via Microsoft Graph
+// and returns a human-readable display name. Falls back to the raw ID on any error.
+func resolveObjectIDToName(ctx context.Context, objectID string) string {
+	if v, ok := objectIDCache.Load(objectID); ok {
+		return v.(string)
+	}
+
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return objectID
+	}
+	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{
+		Scopes: []string{"https://graph.microsoft.com/.default"},
+	})
+	if err != nil {
+		objectIDCache.Store(objectID, objectID)
+		return objectID
+	}
+
+	reqURL := "https://graph.microsoft.com/v1.0/directoryObjects/" + objectID
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return objectID
+	}
+	req.Header.Set("Authorization", "Bearer "+token.Token)
+
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return objectID
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		objectIDCache.Store(objectID, objectID)
+		return objectID
+	}
+
+	var obj struct {
+		DisplayName       string `json:"displayName"`
+		UserPrincipalName string `json:"userPrincipalName"`
+		AppDisplayName    string `json:"appDisplayName"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
+		return objectID
+	}
+
+	name := obj.DisplayName
+	if obj.UserPrincipalName != "" {
+		name = obj.UserPrincipalName
+	} else if obj.AppDisplayName != "" {
+		name = obj.AppDisplayName
+	}
+	if name == "" {
+		name = objectID
+	}
+
+	objectIDCache.Store(objectID, name)
+	return name
+}
+
+// resolveChangedByBatch resolves any GUID-style changedBy values to display names.
+// It collects unique GUIDs, resolves them concurrently, then patches the slice.
+func resolveChangedByBatch(ctx context.Context, items []string) []string {
+	// Collect unique GUIDs
+	unique := map[string]struct{}{}
+	for _, v := range items {
+		if isUUID(v) {
+			unique[v] = struct{}{}
+		}
+	}
+	if len(unique) == 0 {
+		return items
+	}
+
+	// Resolve concurrently (Graph API caches after first hit)
+	resolved := sync.Map{}
+	var wg sync.WaitGroup
+	for id := range unique {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			resolved.Store(id, resolveObjectIDToName(ctx, id))
+		}(id)
+	}
+	wg.Wait()
+
+	out := make([]string, len(items))
+	for i, v := range items {
+		if isUUID(v) {
+			if name, ok := resolved.Load(v); ok {
+				out[i] = name.(string)
+				continue
+			}
+		}
+		out[i] = v
+	}
+	return out
+}
+
 // subCostLimiters ensures only one cost API request per subscription is in flight at a time
 var subCostLimiters sync.Map // map[string]*rate.Limiter
 

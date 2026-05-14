@@ -508,6 +508,245 @@ function WasteView({ wasteData, wasteLoading, fetchWaste, setSearchQuery, setAct
   );
 }
 
+// ─── RG Trends Chart ────────────────────────────────────────────────────────────
+
+const RG_COLORS = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#a855f7','#f97316','#84cc16'];
+
+function RGTrendsChart({ data, period, onPeriodChange }: {
+  data: any;
+  period: 7 | 14 | 30;
+  onPeriodChange: (p: 7 | 14 | 30) => void;
+}) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  const dates: string[] = data?.dates ?? [];
+  const groups: Array<{ name: string; dailyCosts: number[]; totalAbs: number }> = data?.groups ?? [];
+
+  const W = 800, H = 240;
+  const padL = 58, padR = 16, padT = 20, padB = 32;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const visible = groups.filter(g => !hidden.has(g.name));
+  const allVals = visible.flatMap(g => g.dailyCosts);
+  const rawMax = Math.max(...allVals.map(Math.abs), 1);
+  const rawMin = Math.min(...allVals, 0);
+  const yMax = rawMax * 1.1;
+  const yMin = Math.min(rawMin * 1.1, 0);
+  const yRange = yMax - yMin;
+  const zeroY = padT + plotH * (yMax / yRange);
+
+  const xOf = (i: number) => dates.length < 2 ? padL : padL + (i / (dates.length - 1)) * plotW;
+  const yOf = (v: number) => padT + plotH * (1 - (v - yMin) / yRange);
+
+  const smoothPath = (costs: number[]) => {
+    if (costs.length === 0) return '';
+    const pts = costs.map((v, i) => [xOf(i), yOf(v)] as [number, number]);
+    let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+    for (let i = 1; i < pts.length; i++) {
+      const cpx = (pts[i-1][0] + pts[i][0]) / 2;
+      d += ` C${cpx.toFixed(1)},${pts[i-1][1].toFixed(1)} ${cpx.toFixed(1)},${pts[i][1].toFixed(1)} ${pts[i][0].toFixed(1)},${pts[i][1].toFixed(1)}`;
+    }
+    return d;
+  };
+
+  const fmtCost = (v: number) => {
+    const abs = Math.abs(v);
+    const s = abs >= 1000 ? `$${(abs/1000).toFixed(1)}k` : `$${abs.toFixed(0)}`;
+    return v < 0 ? `−${s}` : `+${s}`;
+  };
+  const fmtDate = (d: string) => {
+    const dt = new Date(d + 'T12:00:00');
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  const handleSVGMouseMove = (e: React.MouseEvent<SVGRectElement>) => {
+    if (!svgRef.current || dates.length < 2) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const x = (e.clientX - rect.left) * scaleX;
+    const idx = Math.round(((x - padL) / plotW) * (dates.length - 1));
+    setHoverIdx(Math.max(0, Math.min(dates.length - 1, idx)));
+  };
+
+  const yTicks = (() => {
+    const count = 5;
+    const step = yRange / (count - 1);
+    return Array.from({ length: count }, (_, i) => yMin + step * i);
+  })();
+
+  const shortName = (n: string) => n.length > 22 ? n.slice(0, 21) + '…' : n;
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 9, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(99,102,241,0.25)' }}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)', lineHeight: 1.2 }}>Resource Group Cost Trends</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>Net daily spend change by resource group ($/day)</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {([7, 14, 30] as const).map(p => (
+            <button key={p} onClick={() => onPeriodChange(p)} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', background: period === p ? 'var(--accent)' : 'var(--bg-card)', color: period === p ? 'white' : 'var(--text-2)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              {p}d
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Chart */}
+      <div style={{ padding: '16px 18px 8px', position: 'relative' }}>
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', overflow: 'visible' }}>
+          <defs>
+            {groups.map((_g, gi) => (
+              <linearGradient key={gi} id={`rg-grad-${gi}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={RG_COLORS[gi % RG_COLORS.length]} stopOpacity="0.15"/>
+                <stop offset="100%" stopColor={RG_COLORS[gi % RG_COLORS.length]} stopOpacity="0"/>
+              </linearGradient>
+            ))}
+          </defs>
+
+          {/* Y-axis grid + labels */}
+          {yTicks.map((v, i) => {
+            const y = yOf(v);
+            const isZero = Math.abs(v) < yRange * 0.01;
+            return (
+              <g key={i}>
+                <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={isZero ? 'var(--text-3)' : 'var(--border)'} strokeWidth={isZero ? 1 : 0.5} strokeDasharray={isZero ? '0' : '3,3'} opacity={isZero ? 0.6 : 1} />
+                <text x={padL - 6} y={y + 4} textAnchor="end" fontSize={10} fill="var(--text-3)">
+                  {v >= 0 ? `+$${Math.abs(v) >= 1000 ? (Math.abs(v)/1000).toFixed(0)+'k' : Math.abs(v).toFixed(0)}` : `-$${Math.abs(v) >= 1000 ? (Math.abs(v)/1000).toFixed(0)+'k' : Math.abs(v).toFixed(0)}`}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Zero baseline */}
+          {yMin < 0 && yMax > 0 && (
+            <line x1={padL} y1={zeroY} x2={W - padR} y2={zeroY} stroke="var(--text-3)" strokeWidth={1} opacity={0.4} />
+          )}
+
+          {/* X-axis labels */}
+          {dates.map((d, i) => {
+            const showEvery = dates.length > 14 ? Math.ceil(dates.length / 8) : 1;
+            if (i % showEvery !== 0 && i !== dates.length - 1) return null;
+            return (
+              <text key={i} x={xOf(i)} y={H - 8} textAnchor="middle" fontSize={10} fill="var(--text-3)">{fmtDate(d)}</text>
+            );
+          })}
+
+          {/* Area fills */}
+          {groups.map((g, gi) => {
+            if (hidden.has(g.name) || g.dailyCosts.every(v => v === 0)) return null;
+            const pts = g.dailyCosts.map((v, i) => [xOf(i), yOf(v)] as [number, number]);
+            const firstX = pts[0][0], lastX = pts[pts.length - 1][0];
+            let area = `M${firstX.toFixed(1)},${zeroY.toFixed(1)} L${firstX.toFixed(1)},${pts[0][1].toFixed(1)}`;
+            for (let i = 1; i < pts.length; i++) {
+              const cpx = (pts[i-1][0] + pts[i][0]) / 2;
+              area += ` C${cpx.toFixed(1)},${pts[i-1][1].toFixed(1)} ${cpx.toFixed(1)},${pts[i][1].toFixed(1)} ${pts[i][0].toFixed(1)},${pts[i][1].toFixed(1)}`;
+            }
+            area += ` L${lastX.toFixed(1)},${zeroY.toFixed(1)} Z`;
+            return <path key={gi} d={area} fill={`url(#rg-grad-${gi})`} />;
+          })}
+
+          {/* Lines */}
+          {groups.map((g, gi) => {
+            if (hidden.has(g.name) || g.dailyCosts.every(v => v === 0)) return null;
+            return (
+              <path key={gi} d={smoothPath(g.dailyCosts)} fill="none"
+                stroke={RG_COLORS[gi % RG_COLORS.length]} strokeWidth={2}
+                opacity={hoverIdx !== null ? 0.35 : 1}
+                style={{ transition: 'opacity 0.15s' }} />
+            );
+          })}
+
+          {/* Hover elements */}
+          {hoverIdx !== null && (
+            <>
+              <line x1={xOf(hoverIdx)} y1={padT} x2={xOf(hoverIdx)} y2={padT + plotH} stroke="var(--text-3)" strokeWidth={1} strokeDasharray="4,3" opacity={0.5} />
+              {groups.map((g, gi) => {
+                if (hidden.has(g.name)) return null;
+                const v = g.dailyCosts[hoverIdx] ?? 0;
+                if (v === 0) return null;
+                const color = RG_COLORS[gi % RG_COLORS.length];
+                return (
+                  <g key={gi}>
+                    <path d={smoothPath(g.dailyCosts)} fill="none" stroke={color} strokeWidth={2.5} />
+                    <circle cx={xOf(hoverIdx)} cy={yOf(v)} r={4} fill={color} stroke="var(--bg-card)" strokeWidth={2} />
+                  </g>
+                );
+              })}
+            </>
+          )}
+
+          {/* Invisible mouse-capture rect */}
+          <rect x={padL} y={padT} width={plotW} height={plotH} fill="transparent"
+            onMouseMove={handleSVGMouseMove}
+            onMouseLeave={() => setHoverIdx(null)} />
+        </svg>
+
+        {/* Hover tooltip */}
+        {hoverIdx !== null && (() => {
+          const activeGroups = groups.filter(g => !hidden.has(g.name) && (g.dailyCosts[hoverIdx] ?? 0) !== 0);
+          if (activeGroups.length === 0) return null;
+          const svgEl = svgRef.current;
+          if (!svgEl) return null;
+          const svgRect = svgEl.getBoundingClientRect();
+          const scaleX = svgRect.width / W;
+          const tipX = xOf(hoverIdx) * scaleX;
+          const tipLeft = tipX + 12;
+          return (
+            <div style={{
+              position: 'absolute', top: 28, left: Math.min(tipLeft, svgRect.width - 160),
+              background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
+              padding: '8px 12px', pointerEvents: 'none', zIndex: 10,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.2)', minWidth: 140
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)', marginBottom: 6 }}>{fmtDate(dates[hoverIdx])}</div>
+              {activeGroups.map((g, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: RG_COLORS[groups.indexOf(g) % RG_COLORS.length], flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, color: 'var(--text-3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shortName(g.name)}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: (g.dailyCosts[hoverIdx] ?? 0) >= 0 ? 'var(--danger)' : 'var(--accent)', flexShrink: 0 }}>{fmtCost(g.dailyCosts[hoverIdx] ?? 0)}/day</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 18px 14px' }}>
+        {groups.map((g, gi) => {
+          const isHidden = hidden.has(g.name);
+          const color = RG_COLORS[gi % RG_COLORS.length];
+          return (
+            <button key={gi} onClick={() => setHidden(prev => {
+              const next = new Set(prev);
+              next.has(g.name) ? next.delete(g.name) : next.add(g.name);
+              return next;
+            })} style={{
+              display: 'flex', alignItems: 'center', gap: 5, padding: '3px 9px',
+              borderRadius: 20, border: `1px solid ${isHidden ? 'var(--border)' : color + '55'}`,
+              background: isHidden ? 'transparent' : color + '15',
+              cursor: 'pointer', opacity: isHidden ? 0.45 : 1, transition: 'all 0.15s'
+            }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: isHidden ? 'var(--text-3)' : color }} />
+              <span style={{ fontSize: 11, fontWeight: 600, color: isHidden ? 'var(--text-3)' : 'var(--text-2)', whiteSpace: 'nowrap' }}>{shortName(g.name)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── HistoryView Component ──────────────────────────────────────────────────────
 
 interface DayImpact {
@@ -528,12 +767,12 @@ interface HistoryViewProps {
   setCurrentPage: (p: number) => void;
   setAlertModal: (modal: { open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info' }) => void;
   dailyImpact: DayImpact[];
-  costDrivers: any;
-  costDriversLoading: boolean;
-  fetchCostDrivers: (date?: string) => void;
+  rgTrends: any;
+  rgTrendsPeriod: 7 | 14 | 30;
+  onRGTrendsPeriodChange: (p: 7 | 14 | 30) => void;
 }
 
-function HistoryView({ history, historyLoading, fetchHistory, resources, setSelectedResource, setCurrentPage, setAlertModal, dailyImpact, costDrivers, costDriversLoading }: HistoryViewProps) {
+function HistoryView({ history, historyLoading, fetchHistory, resources, setSelectedResource, setCurrentPage, setAlertModal, dailyImpact, rgTrends, rgTrendsPeriod, onRGTrendsPeriodChange }: HistoryViewProps) {
   const [filterType, setFilterType] = useState<'all' | 'created' | 'deleted' | 'modified'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [groupByDate, setGroupByDate] = useState(true);
@@ -738,105 +977,8 @@ function HistoryView({ history, historyLoading, fetchHistory, resources, setSele
         </div>
       )}
 
-      {/* Yesterday's Cost Drivers */}
-      {(costDrivers || costDriversLoading) && (
-        <div className="card" style={{ padding: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg,var(--warning),#d97706)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-              </div>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-                  Top Cost Drivers — {costDrivers ? new Date(costDrivers.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) : 'Yesterday'}
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Resource changes with the biggest spend impact</div>
-              </div>
-            </div>
-            {costDrivers && (
-              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-                {costDrivers.prevTotal > 0 && (
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Day-over-day</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: costDrivers.delta > 0 ? 'var(--danger)' : 'var(--accent)' }}>
-                      {costDrivers.delta > 0 ? '+' : ''} ${Math.abs(costDrivers.delta).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                    </div>
-                  </div>
-                )}
-                {costDrivers.dailyTotal > 0 && (
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Total spend</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-1)' }}>${costDrivers.dailyTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {costDriversLoading ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 0', justifyContent: 'center' }}>
-              <div className="spinner" style={{ width: 18, height: 18 }} />
-              <span style={{ color: 'var(--text-3)', fontSize: 13 }}>Analyzing cost changes…</span>
-            </div>
-          ) : costDrivers?.drivers?.length > 0 ? (
-            <>
-              {/* Summary pills */}
-              <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-                {costDrivers.addedCount > 0 && (
-                  <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 20, background: 'var(--accent-dim)', color: 'var(--accent)', fontWeight: 600, border: '1px solid var(--accent)33' }}>
-                    +${(costDrivers.addedCost).toLocaleString('en-US', { maximumFractionDigits: 2 })}/day from {costDrivers.addedCount} new
-                  </span>
-                )}
-                {costDrivers.removedCount > 0 && (
-                  <span style={{ fontSize: 12, padding: '4px 10px', borderRadius: 20, background: 'var(--danger-dim)', color: 'var(--danger)', fontWeight: 600, border: '1px solid var(--danger)33' }}>
-                    −${(costDrivers.removedCost).toLocaleString('en-US', { maximumFractionDigits: 2 })}/day from {costDrivers.removedCount} deleted
-                  </span>
-                )}
-              </div>
-
-              {/* Driver rows */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {costDrivers.drivers.map((d: any, i: number) => {
-                  const isCreated = d.changeType === 'created';
-                  const color = isCreated ? 'var(--accent)' : 'var(--danger)';
-                  const bg = isCreated ? 'var(--accent-dim)' : 'var(--danger-dim)';
-                  const maxCost = costDrivers.drivers[0]?.dailyCost || 1;
-                  const barPct = Math.round((d.dailyCost / maxCost) * 100);
-                  return (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer' }}
-                      onClick={() => { setCurrentPage(1); }}>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: isCreated ? 'var(--accent)' : 'var(--danger)', minWidth: 16, textAlign: 'center' }}>{isCreated ? '+' : '−'}</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }} title={d.resourceName}>{d.resourceName}</span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                            {d.changedBy && d.changedBy !== 'Unknown' && (
-                              <span style={{ fontSize: 10, color: 'var(--text-3)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.changedBy}>{d.changedBy.split('@')[0]}</span>
-                            )}
-                            <span style={{ fontSize: 12, fontWeight: 800, color, background: bg, padding: '2px 8px', borderRadius: 10 }}>
-                              {isCreated ? '+' : '−'}${d.dailyCost.toLocaleString('en-US', { maximumFractionDigits: 2 })}/day
-                            </span>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <div style={{ flex: 1, height: 3, background: 'var(--border)', borderRadius: 2 }}>
-                            <div style={{ height: '100%', width: `${barPct}%`, background: color, borderRadius: 2 }} />
-                          </div>
-                          <span style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>{d.resourceType?.split('/').slice(-1)[0]} · {d.resourceGroup}</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            <div style={{ padding: '16px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
-              No cost-impacting changes found for yesterday
-            </div>
-          )}
-        </div>
-      )}
+      {/* Resource Group Cost Trends */}
+      <RGTrendsChart data={rgTrends} period={rgTrendsPeriod} onPeriodChange={onRGTrendsPeriodChange} />
 
       {/* Daily Cost Impact */}
       {dailyImpact.length > 0 && (
@@ -2963,8 +3105,8 @@ export default function App() {
   const [history, setHistory] = useState<ResourceChange[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [dailyImpact, setDailyImpact] = useState<Array<{date: string; totalDailyCost: number; addedCost: number; removedCost: number; createdCount: number; deletedCount: number}>>([]);
-  const [costDrivers, setCostDrivers] = useState<any>(null);
-  const [costDriversLoading, setCostDriversLoading] = useState(false);
+  const [rgTrends, setRGTrends] = useState<any>(null);
+  const [rgTrendsPeriod, setRGTrendsPeriod] = useState<7 | 14 | 30>(7);
   const [showSettings, setShowSettings] = useState(false);
   const [alertModal, setAlertModal] = useState<{open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info'} | null>(null);
   const [dragItem, setDragItem] = useState<string | null>(null);
@@ -5502,26 +5644,20 @@ export default function App() {
     }
   };
 
-  const fetchCostDrivers = async (date?: string) => {
-    setCostDriversLoading(true);
+  const fetchRGTrends = async (days: 7 | 14 | 30 = 7) => {
     try {
-      const url = date
-        ? `http://localhost:8080/api/history/cost-drivers?date=${date}`
-        : `http://localhost:8080/api/history/cost-drivers`;
-      const res = await fetch(url);
+      const res = await fetch(`http://localhost:8080/api/history/rg-trends?days=${days}`);
       const data = await res.json();
-      if (!data.error) setCostDrivers(data);
+      if (data.groups) setRGTrends(data);
     } catch (err) {
-      console.error('Failed to fetch cost drivers', err);
-    } finally {
-      setCostDriversLoading(false);
+      console.error('Failed to fetch RG trends', err);
     }
   };
 
   useEffect(() => {
     if (activeTab === 'history') {
       fetchHistory();
-      fetchCostDrivers();
+      fetchRGTrends(rgTrendsPeriod);
     }
   }, [activeTab]);
 
@@ -7524,9 +7660,9 @@ export default function App() {
               setCurrentPage={setCurrentPage}
               setAlertModal={setAlertModal}
               dailyImpact={dailyImpact}
-              costDrivers={costDrivers}
-              costDriversLoading={costDriversLoading}
-              fetchCostDrivers={fetchCostDrivers}
+              rgTrends={rgTrends}
+              rgTrendsPeriod={rgTrendsPeriod}
+              onRGTrendsPeriodChange={(p) => { setRGTrendsPeriod(p); fetchRGTrends(p); }}
             />
           ) : activeTab === 'waste' ? (
             /* ── Waste Tab ── */
