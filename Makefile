@@ -9,24 +9,21 @@ DARWIN_AMD64_DIR=$(DIST_DIR)/darwin_amd64
 LINUX_AMD64_DIR=$(DIST_DIR)/linux_amd64
 
 build-darwin-arm64:
-	mkdir -p $(DARWIN_ARM64_DIR)/cloudviz
-	cd $(BACKEND_DIR) && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$(VERSION)" -o ../$(DARWIN_ARM64_DIR)/cloudviz/$(BINARY_NAME) main.go azure.go db.go types.go dependencies.go webhooks.go
+	cd $(BACKEND_DIR) && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$(VERSION)" -o ../$(DARWIN_ARM64_DIR)/$(BINARY_NAME) main.go azure.go db.go types.go dependencies.go webhooks.go
 	cp -r $(BACKEND_DIR)/dist $(DARWIN_ARM64_DIR)/
-	cd $(DARWIN_ARM64_DIR) && tar -czf $(BINARY_NAME)_$(VERSION)_darwin_arm64.tar.gz cloudviz dist
+	cd $(DARWIN_ARM64_DIR) && tar -czf $(BINARY_NAME)_$(VERSION)_darwin_arm64.tar.gz $(BINARY_NAME) dist
 	@echo "SHA256: $$(shasum -a 256 $(DARWIN_ARM64_DIR)/$(BINARY_NAME)_$(VERSION)_darwin_arm64.tar.gz)"
 
 build-darwin-amd64:
-	mkdir -p $(DARWIN_AMD64_DIR)/cloudviz
-	cd $(BACKEND_DIR) && GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$(VERSION)" -o ../$(DARWIN_AMD64_DIR)/cloudviz/$(BINARY_NAME) main.go azure.go db.go types.go dependencies.go webhooks.go
+	cd $(BACKEND_DIR) && GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$(VERSION)" -o ../$(DARWIN_AMD64_DIR)/$(BINARY_NAME) main.go azure.go db.go types.go dependencies.go webhooks.go
 	cp -r $(BACKEND_DIR)/dist $(DARWIN_AMD64_DIR)/
-	cd $(DARWIN_AMD64_DIR) && tar -czf $(BINARY_NAME)_$(VERSION)_darwin_amd64.tar.gz cloudviz dist
+	cd $(DARWIN_AMD64_DIR) && tar -czf $(BINARY_NAME)_$(VERSION)_darwin_amd64.tar.gz $(BINARY_NAME) dist
 	@echo "SHA256: $$(shasum -a 256 $(DARWIN_AMD64_DIR)/$(BINARY_NAME)_$(VERSION)_darwin_amd64.tar.gz)"
 
 build-linux:
-	mkdir -p $(LINUX_AMD64_DIR)/cloudviz
-	cd $(BACKEND_DIR) && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$(VERSION)" -o ../$(LINUX_AMD64_DIR)/cloudviz/$(BINARY_NAME) main.go azure.go db.go types.go dependencies.go webhooks.go
+	cd $(BACKEND_DIR) && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=$(VERSION)" -o ../$(LINUX_AMD64_DIR)/$(BINARY_NAME) main.go azure.go db.go types.go dependencies.go webhooks.go
 	cp -r $(BACKEND_DIR)/dist $(LINUX_AMD64_DIR)/
-	cd $(LINUX_AMD64_DIR) && tar -czf $(BINARY_NAME)_$(VERSION)_linux_amd64.tar.gz cloudviz dist
+	cd $(LINUX_AMD64_DIR) && tar -czf $(BINARY_NAME)_$(VERSION)_linux_amd64.tar.gz $(BINARY_NAME) dist
 	@echo "SHA256: $$(shasum -a 256 $(LINUX_AMD64_DIR)/$(BINARY_NAME)_$(VERSION)_linux_amd64.tar.gz)"
 
 build: build-darwin-arm64 build-darwin-amd64 build-linux
