@@ -18,6 +18,7 @@ cloudviz
 # Release binaries
 releases/
 backend/cloudviz_*
+*.tar.gz
 
 # Frontend runtime DB
 frontend/cloudviz.db
