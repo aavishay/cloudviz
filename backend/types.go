@@ -261,6 +261,52 @@ type TagValueCost struct {
 	Count       int     `json:"count"`
 }
 
+// TagComplianceReport provides comprehensive tag compliance analysis
+type TagComplianceReport struct {
+	GeneratedAt          time.Time                 `json:"generatedAt"`
+	TotalResources       int                       `json:"totalResources"`
+	RequiredTags         []string                  `json:"requiredTags"`
+	OverallCompliance    float64                   `json:"overallCompliance"` // 0-100%
+	TagBreakdown         []TagComplianceDetail     `json:"tagBreakdown"`
+	NonCompliantResources []NonCompliantResource   `json:"nonCompliantResources"`
+	CompliantResources   int                       `json:"compliantResources"`
+	ComplianceByRG       []RGTagCompliance         `json:"complianceByRG"`
+	ComplianceByType     []TypeTagCompliance       `json:"complianceByType"`
+}
+
+type TagComplianceDetail struct {
+	TagName           string  `json:"tagName"`
+	CompliantCount    int     `json:"compliantCount"`
+	NonCompliantCount int     `json:"nonCompliantCount"`
+	ComplianceRate    float64 `json:"complianceRate"` // 0-100%
+	PercentageOfTotal float64 `json:"percentageOfTotal"`
+}
+
+type NonCompliantResource struct {
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Type           string            `json:"type"`
+	ResourceGroup  string            `json:"resourceGroup"`
+	SubscriptionID string            `json:"subscriptionId"`
+	MissingTags    []string          `json:"missingTags"`
+	PresentTags    map[string]string `json:"presentTags"`
+	Cost           float64           `json:"cost"`
+}
+
+type RGTagCompliance struct {
+	ResourceGroup     string  `json:"resourceGroup"`
+	TotalResources    int     `json:"totalResources"`
+	CompliantCount    int     `json:"compliantCount"`
+	ComplianceRate    float64 `json:"complianceRate"`
+}
+
+type TypeTagCompliance struct {
+	ResourceType      string  `json:"resourceType"`
+	TotalResources    int     `json:"totalResources"`
+	CompliantCount    int     `json:"compliantCount"`
+	ComplianceRate    float64 `json:"complianceRate"`
+}
+
 // BenchmarkComparison compares costs against benchmarks
 type BenchmarkComparison struct {
 	Category          string  `json:"category"`

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, AreaChart, Area, Brush, ReferenceArea } from 'recharts';
 import { jsPDF } from 'jspdf';
 import { FixedSizeList, type ListChildComponentProps } from 'react-window';
+import { TagCompliancePanel } from './components/TagCompliancePanel';
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 
@@ -2996,7 +2997,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
   const [dashboardOrder, setDashboardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-dashOrder');
-    return saved ? JSON.parse(saved) : ['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
+    return saved ? JSON.parse(saved) : ['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'tagCompliance', 'riRecommendations', 'costAnomalies'];
   });
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -3128,6 +3129,18 @@ export default function App() {
   const [enhancedAnomalyData, setEnhancedAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; severity: string; score: number; methods: string[]; zscore?: number; madScore?: number; isolationScore?: number; seasonalScore?: number; trend?: string; dayOfWeek?: string}>; summary: {total: number; bySeverity: Record<string, number>; byMethod: Record<string, number>}; config: {zScoreThreshold: number; madThreshold: number; isolationThreshold: number; seasonalThreshold: number; methodsUsed: string[]}; periodStart: string; periodEnd: string} | null>(null);
   const [enhancedAnomalyLoading, setEnhancedAnomalyLoading] = useState(false);
   const [slaData, setSlaData] = useState<{periodDays: number; threshold: number; totalVMs: number; data: Array<{resourceId: string; name: string; resourceGroup: string; subscriptionId: string; location: string; uptimePercentage: number; downtimeHours: number; totalHours: number; status: string; hasMetrics: boolean}>} | null>(null);
+
+const [tagComplianceData, setTagComplianceData] = useState<{
+  generatedAt: string;
+  totalResources: number;
+  requiredTags: string[];
+  overallCompliance: number;
+  compliantResources: number;
+  tagBreakdown: Array<{tagName: string; compliantCount: number; nonCompliantCount: number; complianceRate: number; percentageOfTotal: number}>;
+  nonCompliantResources: Array<{id: string; name: string; type: string; resourceGroup: string; subscriptionId: string; missingTags: string[]; presentTags: Record<string, string>; cost: number}>;
+  complianceByRG: Array<{resourceGroup: string; totalResources: number; compliantCount: number; complianceRate: number}>;
+  complianceByType: Array<{resourceType: string; totalResources: number; compliantCount: number; complianceRate: number}>;
+} | null>(null);
 
   // Resource group comparison state
   const [rgComparison, setRgComparison] = useState<{
@@ -5084,6 +5097,12 @@ export default function App() {
         })()}
       </>
     ) },
+    { id: 'tagCompliance', render: () => (
+      <TagCompliancePanel
+        data={tagComplianceData}
+        onViewNonCompliant={() => setActiveTab('resources')}
+      />
+    ) },
     { id: 'riRecommendations', render: () => (
       <>
         {riRecommendations.length > 0 && (
@@ -5447,6 +5466,15 @@ export default function App() {
       .then(data => { if (data.data) setSlaData(data); })
       .catch(() => {});
   }, [activeSubs]);
+
+  // Fetch Tag Compliance data
+  useEffect(() => {
+    if (activeSubs.length === 0) return;
+    fetch('/api/tags/compliance')
+      .then(r => r.json())
+      .then(data => { if (data.totalResources) setTagComplianceData(data); })
+      .catch(() => {});
+  }, [resources, activeSubs]);
 
   const fetchAIInsights = async (resource: AzureResource) => {
     setAiLoading(true);
@@ -7227,7 +7255,7 @@ export default function App() {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
                     Save Filters
                   </button>
-                  <button className="btn" onClick={() => { setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies']); }} title="Reset panels to default layout">
+                  <button className="btn" onClick={() => { setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'tagCompliance', 'riRecommendations', 'costAnomalies']); }} title="Reset panels to default layout">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12" /><path d="M3 3v9h9" /></svg>
                     Reset Layout
                   </button>
@@ -8108,7 +8136,7 @@ export default function App() {
                     Dashboard Layout
                   </label>
                   <button
-                    onClick={() => setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'])}
+                    onClick={() => setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'tagCompliance', 'riRecommendations', 'costAnomalies'])}
                     style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-3)', cursor: 'pointer' }}
                   >
                     Reset
@@ -8131,6 +8159,7 @@ export default function App() {
                     { id: 'commitment', label: 'Commitment Savings' },
                     { id: 'topology', label: 'Resource Topology' },
                     { id: 'tagAnalysis', label: 'Tag Analysis' },
+                    { id: 'tagCompliance', label: 'Tag Compliance' },
                     { id: 'riRecommendations', label: 'RI Recommendations' },
                     { id: 'costAnomalies', label: 'Cost Anomalies' },
                   ].map(item => (

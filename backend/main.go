@@ -57,7 +57,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.22.0"
+var Version = "1.23.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -3242,6 +3242,163 @@ func startServer(port string) {
 				AvgCostPerResource:     avgCostPerResource,
 			},
 		}
+
+		c.JSON(200, report)
+	})
+
+	// Tag Compliance endpoint — track Environment, Owner, Project tag coverage
+	r.GET("/api/tags/compliance", func(c *gin.Context) {
+		// Configurable required tags via environment variable (comma-separated)
+		// Default: Environment, Owner, Project
+		requiredTagsStr := os.Getenv("REQUIRED_TAGS")
+		if requiredTagsStr == "" {
+			requiredTagsStr = "Environment,Owner,Project"
+		}
+		requiredTags := strings.Split(requiredTagsStr, ",")
+		for i := range requiredTags {
+			requiredTags[i] = strings.TrimSpace(requiredTags[i])
+		}
+
+		// Create a timeout context for the request
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		defer cancel()
+
+		// Get all resources
+		res, _, err := FetchResourcesWithCosts(ctx, nil, nil, nil, nil, "", false, false, false, false, "", "")
+		if err != nil {
+			log.Printf("[TagCompliance] Failed to fetch resources: %v", err)
+			c.JSON(500, gin.H{"error": "Failed to fetch resource data"})
+			return
+		}
+
+		report := TagComplianceReport{
+			GeneratedAt:           time.Now(),
+			TotalResources:        len(res),
+			RequiredTags:          requiredTags,
+			TagBreakdown:          make([]TagComplianceDetail, len(requiredTags)),
+			NonCompliantResources: []NonCompliantResource{},
+			ComplianceByRG:        []RGTagCompliance{},
+			ComplianceByType:      []TypeTagCompliance{},
+		}
+
+		// Initialize tag breakdown
+		for i, tag := range requiredTags {
+			report.TagBreakdown[i] = TagComplianceDetail{
+				TagName: tag,
+			}
+		}
+
+		// Track compliance by resource group and type
+		rgStats := make(map[string]struct{ total, compliant int })
+		typeStats := make(map[string]struct{ total, compliant int })
+
+		for _, r := range res {
+			// Count tags present
+			missingTags := []string{}
+			presentTags := make(map[string]string)
+			compliant := true
+
+			for _, tag := range requiredTags {
+				if val, ok := r.Tags[tag]; ok && val != "" {
+					presentTags[tag] = val
+				} else {
+					missingTags = append(missingTags, tag)
+					compliant = false
+				}
+			}
+
+			// Update per-tag stats
+			for i, tag := range requiredTags {
+				if _, ok := r.Tags[tag]; ok && r.Tags[tag] != "" {
+					report.TagBreakdown[i].CompliantCount++
+				} else {
+					report.TagBreakdown[i].NonCompliantCount++
+				}
+			}
+
+			// Track RG stats
+			rgStat := rgStats[r.ResourceGroup]
+			rgStat.total++
+			if compliant {
+				rgStat.compliant++
+			}
+			rgStats[r.ResourceGroup] = rgStat
+
+			// Track type stats
+			typeStat := typeStats[r.Type]
+			typeStat.total++
+			if compliant {
+				typeStat.compliant++
+			}
+			typeStats[r.Type] = typeStat
+
+			// Add to non-compliant list if missing any required tags
+			if !compliant {
+				report.NonCompliantResources = append(report.NonCompliantResources, NonCompliantResource{
+					ID:             r.ID,
+					Name:           r.Name,
+					Type:           r.Type,
+					ResourceGroup:  r.ResourceGroup,
+					SubscriptionID: r.SubscriptionID,
+					MissingTags:    missingTags,
+					PresentTags:    presentTags,
+					Cost:           r.Cost,
+				})
+			} else {
+				report.CompliantResources++
+			}
+		}
+
+		// Calculate compliance rates
+		totalResources := len(res)
+		if totalResources > 0 {
+			report.OverallCompliance = float64(report.CompliantResources) / float64(totalResources) * 100
+		}
+
+		for i := range report.TagBreakdown {
+			if totalResources > 0 {
+				report.TagBreakdown[i].ComplianceRate = float64(report.TagBreakdown[i].CompliantCount) / float64(totalResources) * 100
+				report.TagBreakdown[i].PercentageOfTotal = float64(report.TagBreakdown[i].CompliantCount) / float64(totalResources) * 100
+			}
+		}
+
+		// Convert RG stats to slice
+		for rg, stat := range rgStats {
+			complianceRate := 0.0
+			if stat.total > 0 {
+				complianceRate = float64(stat.compliant) / float64(stat.total) * 100
+			}
+			report.ComplianceByRG = append(report.ComplianceByRG, RGTagCompliance{
+				ResourceGroup:  rg,
+				TotalResources:   stat.total,
+				CompliantCount: stat.compliant,
+				ComplianceRate: complianceRate,
+			})
+		}
+
+		// Sort RG compliance by compliance rate (ascending)
+		sort.Slice(report.ComplianceByRG, func(i, j int) bool {
+			return report.ComplianceByRG[i].ComplianceRate < report.ComplianceByRG[j].ComplianceRate
+		})
+
+		// Convert type stats to slice
+		for typ, stat := range typeStats {
+			complianceRate := 0.0
+			if stat.total > 0 {
+				complianceRate = float64(stat.compliant) / float64(stat.total) * 100
+			}
+			report.ComplianceByType = append(report.ComplianceByType, TypeTagCompliance{
+				ResourceType:   typ,
+				TotalResources:   stat.total,
+				CompliantCount: stat.compliant,
+				ComplianceRate: complianceRate,
+			})
+		}
+
+		// Sort type compliance by compliance rate (ascending)
+		sort.Slice(report.ComplianceByType, func(i, j int) bool {
+			return report.ComplianceByType[i].ComplianceRate < report.ComplianceByType[j].ComplianceRate
+		})
 
 		c.JSON(200, report)
 	})
