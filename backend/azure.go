@@ -31,6 +31,9 @@ var metricsClients sync.Map // map[string]*armmonitor.MetricsClient
 // objectIDCache caches Graph API lookups: objectID -> display name
 var objectIDCache sync.Map
 
+// subscriptionNameCache caches subscription ID -> subscription name
+var subscriptionNameCache sync.Map
+
 // isUUID returns true if s looks like a UUID (8-4-4-4-12 hex digits).
 func isUUID(s string) bool {
 	if len(s) != 36 {
@@ -674,6 +677,20 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 					}
 				}
 				totalCost += r.Cost
+			}
+		}
+	}
+
+	// Fetch subscription names and populate them in resources
+	if len(allResources) > 0 {
+		subList := make([]string, 0, len(uniqueSubs))
+		for s := range uniqueSubs {
+			subList = append(subList, s)
+		}
+		subNames := fetchSubscriptionNames(ctx, subList)
+		for i := range allResources {
+			if name, ok := subNames[allResources[i].SubscriptionID]; ok {
+				allResources[i].SubscriptionName = name
 			}
 		}
 	}
@@ -1793,4 +1810,82 @@ func findUserForChange(activityLogs map[string][]ActivityLogEvent, resourceID st
 		return bestMatch.Caller
 	}
 	return "Unknown"
+}
+
+// fetchSubscriptionNames fetches subscription names from Azure Resource Graph
+func fetchSubscriptionNames(ctx context.Context, subIDs []string) map[string]string {
+	result := make(map[string]string)
+	if len(subIDs) == 0 {
+		return result
+	}
+
+	// Check cache first
+	var missing []string
+	for _, id := range subIDs {
+		if name, ok := subscriptionNameCache.Load(id); ok {
+			result[id] = name.(string)
+		} else {
+			missing = append(missing, id)
+		}
+	}
+
+	if len(missing) == 0 {
+		return result
+	}
+
+	// Query Azure Resource Graph for subscription names
+	// For resourcecontainers: name=subscription display name, subscriptionId=subscription GUID (as a property)
+	query := "resourcecontainers | where type == 'microsoft.resources/subscriptions' | extend subId = subscriptionId, subName = name | project subscriptionId=subId, subscriptionName=subName"
+
+	request := armresourcegraph.QueryRequest{
+		Query: to.Ptr(query),
+		Options: &armresourcegraph.QueryRequestOptions{
+			ResultFormat: to.Ptr(armresourcegraph.ResultFormatObjectArray),
+		},
+	}
+
+	res, err := argClient.Resources(ctx, request, nil)
+	if err != nil {
+		log.Printf("fetchSubscriptionNames: ARG query failed: %v", err)
+		// Fall back to using shortened IDs for missing subscriptions
+		for _, id := range missing {
+			result[id] = id[:8] + "..."
+		}
+		return result
+	}
+
+	rows, _ := res.Data.([]interface{})
+	log.Printf("fetchSubscriptionNames: ARG query returned %d rows", len(rows))
+
+	for _, row := range rows {
+		m, _ := row.(map[string]interface{})
+		// Try different field combinations that Azure ARG might return
+		subID := fmt.Sprint(m["subscriptionId"])
+		subName := fmt.Sprint(m["subscriptionName"])
+
+		// If subscriptionId contains a name (not a GUID), swap them
+		if !isUUID(subID) && isUUID(subName) {
+			subID, subName = subName, subID
+		}
+
+		// If name is still empty or nil, try the 'name' field directly
+		if subName == "" || subName == "<nil>" {
+			subName = fmt.Sprint(m["name"])
+		}
+
+		log.Printf("fetchSubscriptionNames: row - subID=%s, subName=%s", subID, subName)
+		if subID != "" && subName != "" && subName != "<nil>" && isUUID(subID) {
+			subscriptionNameCache.Store(subID, subName)
+			result[subID] = subName
+		}
+	}
+
+	// For any missing subscriptions, use shortened ID
+	for _, id := range missing {
+		if _, ok := result[id]; !ok {
+			result[id] = id[:8] + "..."
+		}
+	}
+
+	return result
 }

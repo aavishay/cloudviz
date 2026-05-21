@@ -94,6 +94,7 @@ interface AzureResource {
   type: string;
   location: string;
   subscriptionId: string;
+  subscriptionName?: string;
   resourceGroup: string;
   cost?: number;
   tags?: Record<string, string>;
@@ -1608,7 +1609,7 @@ const COLUMNS = [
   { key: 'type',           label: 'Type',          defaultW: 100, minWidth: 60 },
   { key: 'location',       label: 'Location',       defaultW: 80, minWidth: 50 },
   { key: 'resourceGroup',  label: 'Resource Group', defaultW: 100, minWidth: 60 },
-  { key: 'subscriptionId', label: 'Subscription ID',  defaultW: 90, minWidth: 60 },
+  { key: 'subscriptionId', label: 'Subscription',  defaultW: 120, minWidth: 80 },
   { key: 'optimization',   label: 'Efficiency',         defaultW: 70, minWidth: 50 },
   { key: 'createdBy',      label: 'Created By',     defaultW: 100, minWidth: 60 },
   { key: 'cost',           label: 'Cost',          defaultW: 80, minWidth: 60 },
@@ -1730,8 +1731,8 @@ function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgCli
           </button>
         </div>
         <div style={{ width: widths.subscriptionId, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
-          <button onClick={() => onSubClick(r.subscriptionId)} title={r.subscriptionId} className="cell-truncate" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-2)', width: '100%', textAlign: 'left' }}>
-            {r.subscriptionId}
+          <button onClick={() => onSubClick(r.subscriptionId)} title={`${r.subscriptionName || r.subscriptionId}\n(ID: ${r.subscriptionId})`} className="cell-truncate" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, color: 'var(--text-2)', width: '100%', textAlign: 'left' }}>
+            {r.subscriptionName || r.subscriptionId}
           </button>
         </div>
         <div style={{ width: widths.optimization, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
@@ -2748,10 +2749,11 @@ function DependencyGraphModal({ resource, onClose, onResourceClick, allResources
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTypes, uniqueCreators, regionFilter, subFilter, rgFilter, typeFilter, creatorFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, showFavoritesOnly, setRegionFilter, setSubFilter, setRgFilter, setTypeFilter, setCreatorFilter, setShowOrphanedOnly, setShowUnattachedDiskOnly, setShowUnassignedPIPOnly, setShowUnattachedNICOnly, setShowFavoritesOnly, setCurrentPage, collapsed, onToggleCollapse, favorites }: {
+function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTypes, uniqueCreators, regionFilter, subFilter, rgFilter, typeFilter, creatorFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, showFavoritesOnly, setRegionFilter, setSubFilter, setRgFilter, setTypeFilter, setCreatorFilter, setShowOrphanedOnly, setShowUnattachedDiskOnly, setShowUnassignedPIPOnly, setShowUnattachedNICOnly, setShowFavoritesOnly, setCurrentPage, collapsed, onToggleCollapse, favorites, subNameMap }: {
   open: boolean; onClose: () => void;
   uniqueRegions: string[]; uniqueSubs: string[]; uniqueRGs: string[]; uniqueTypes: string[]; uniqueCreators: string[];
   regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; creatorFilter: string[]; showOrphanedOnly: boolean; showUnattachedDiskOnly: boolean; showUnassignedPIPOnly: boolean; showUnattachedNICOnly: boolean; showFavoritesOnly: boolean; favorites: Set<string>;
+  subNameMap: Map<string, string>;
   setRegionFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setSubFilter: React.Dispatch<React.SetStateAction<string[]>>;
   setRgFilter: React.Dispatch<React.SetStateAction<string[]>>;
@@ -2814,7 +2816,7 @@ function Sidebar({ open, onClose, uniqueRegions, uniqueSubs, uniqueRGs, uniqueTy
               </div>
 
               <FilterDropdown label="Region" options={uniqueRegions} selected={regionFilter} onToggle={toggle(setRegionFilter)} />
-              <FilterDropdown label="Subscription" options={uniqueSubs} selected={subFilter} onToggle={toggle(setSubFilter)} />
+              <FilterDropdown label="Subscription" options={uniqueSubs} selected={subFilter} onToggle={toggle(setSubFilter)} formatLabel={id => subNameMap.get(id) || id} />
               <FilterDropdown label="Resource Group" options={uniqueRGs} selected={rgFilter} onToggle={toggle(setRgFilter)} />
               <SingleFilterDropdown label="Resource Type" options={uniqueTypes} selected={typeFilter}
                 onSelect={v => { setTypeFilter(v); setCurrentPage(1); }} getLabel={friendlyType} />
@@ -3171,7 +3173,7 @@ const [tagComplianceData, setTagComplianceData] = useState<{
   const [comparisonsSearchFocused, setComparisonsSearchFocused] = useState(false);
   const comparisonsSearchInputRef = useRef<HTMLInputElement>(null);
 
-  const [allPossibleFilters, setAllPossibleFilters] = useState<{ subs: string[]; locations: string[]; rgs: string[]; types: string[]; creators: string[] }>({
+  const [allPossibleFilters, setAllPossibleFilters] = useState<{ subs: Array<{id: string; name: string}> | string[]; locations: string[]; rgs: string[]; types: string[]; creators: string[] }>({
     subs: [], locations: [], rgs: [], types: [], creators: [],
   });
   const [totalResources, setTotalResources] = useState(0);
@@ -4125,11 +4127,11 @@ const [tagComplianceData, setTagComplianceData] = useState<{
                   <select
                     value={sub1Selection || ''}
                     onChange={(e) => setSub1Selection(e.target.value || null)}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 13, fontFamily: 'monospace' }}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 13 }}
                   >
                     <option value="">Select subscription...</option>
-                    {allPossibleFilters.subs.map(sub => (
-                      <option key={sub} value={sub}>{sub}</option>
+                    {(allPossibleFilters.subs || []).map((sub: any) => (
+                      <option key={sub.id || sub} value={sub.id || sub}>{sub.name || sub}</option>
                     ))}
                   </select>
                 </div>
@@ -4140,11 +4142,11 @@ const [tagComplianceData, setTagComplianceData] = useState<{
                   <select
                     value={sub2Selection || ''}
                     onChange={(e) => setSub2Selection(e.target.value || null)}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 13, fontFamily: 'monospace' }}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-1)', fontSize: 13 }}
                   >
                     <option value="">Select subscription...</option>
-                    {allPossibleFilters.subs.map(sub => (
-                      <option key={sub} value={sub}>{sub}</option>
+                    {(allPossibleFilters.subs || []).map((sub: any) => (
+                      <option key={sub.id || sub} value={sub.id || sub}>{sub.name || sub}</option>
                     ))}
                   </select>
                 </div>
@@ -5332,7 +5334,23 @@ const [tagComplianceData, setTagComplianceData] = useState<{
   };
 
   const uniqueRegions = useMemo(() => [...(allPossibleFilters.locations || [])].sort(), [allPossibleFilters.locations]);
-  const uniqueSubs = useMemo(() => [...(allPossibleFilters.subs || [])].sort(), [allPossibleFilters.subs]);
+  // Handle both old format (string[]) and new format (Array<{id, name}>)
+  const uniqueSubs = useMemo(() => {
+    const subs = allPossibleFilters.subs || [];
+    if (subs.length > 0 && typeof subs[0] === 'object') {
+      return (subs as Array<{id: string; name: string}>).map(s => s.id);
+    }
+    return subs as string[];
+  }, [allPossibleFilters.subs]);
+  // Build subscription ID to name mapping
+  const subNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const subs = allPossibleFilters.subs || [];
+    if (subs.length > 0 && typeof subs[0] === 'object') {
+      (subs as Array<{id: string; name: string}>).forEach(s => map.set(s.id, s.name));
+    }
+    return map;
+  }, [allPossibleFilters.subs]);
   const uniqueRGs = useMemo(() => [...(allPossibleFilters.rgs || [])].sort(), [allPossibleFilters.rgs]);
   const uniqueTypes = useMemo(() => [...(allPossibleFilters.types || [])].sort((a, b) => friendlyType(a).localeCompare(friendlyType(b))), [allPossibleFilters.types]);
   const uniqueCreators = useMemo(() => [...(allPossibleFilters.creators || [])].sort(), [allPossibleFilters.creators]);
@@ -6798,12 +6816,19 @@ const [tagComplianceData, setTagComplianceData] = useState<{
 
   const costsBySubscription = useMemo(() => {
     const map = new Map<string, number>();
+    const nameMap = new Map<string, string>();
+    // Build a map of subscriptionId -> subscriptionName from resources
+    resources.forEach(r => {
+      if (r.subscriptionId && r.subscriptionName) {
+        nameMap.set(r.subscriptionId, r.subscriptionName);
+      }
+    });
     costs.forEach(c => {
-      const shortId = c.subscriptionId.split('-')[0];
-      map.set(shortId, (map.get(shortId) || 0) + c.cost);
+      const subName = nameMap.get(c.subscriptionId) || c.subscriptionId.split('-')[0];
+      map.set(subName, (map.get(subName) || 0) + c.cost);
     });
     return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [costs]);
+  }, [costs, resources]);
 
   const topSpenders = useMemo(() => {
     return [...costs].sort((a, b) => b.cost - a.cost).slice(0, 5);
@@ -7208,6 +7233,7 @@ const [tagComplianceData, setTagComplianceData] = useState<{
           setShowUnassignedPIPOnly={setShowUnassignedPIPOnly} setShowUnattachedNICOnly={setShowUnattachedNICOnly} setShowFavoritesOnly={setShowFavoritesOnly}
           setCurrentPage={setCurrentPage}
           favorites={favorites}
+          subNameMap={subNameMap}
         />
 
         {/* ── Main ── */}

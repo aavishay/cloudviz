@@ -57,7 +57,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.23.0"
+var Version = "1.24.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -318,9 +318,16 @@ func startServer(port string) {
 			return
 		}
 
-		subs, rgs, types, locs, creators := make(map[string]bool), make(map[string]bool), make(map[string]bool), make(map[string]bool), make(map[string]bool)
+		subs, rgs, types, locs, creators := make(map[string]string), make(map[string]bool), make(map[string]bool), make(map[string]bool), make(map[string]bool)
 		for _, r := range res {
-			subs[r.SubscriptionID] = true
+			// Map subscription ID to name (use name if available, otherwise ID)
+			if _, ok := subs[r.SubscriptionID]; !ok {
+				if r.SubscriptionName != "" {
+					subs[r.SubscriptionID] = r.SubscriptionName
+				} else {
+					subs[r.SubscriptionID] = r.SubscriptionID
+				}
+			}
 			rgs[r.ResourceGroup] = true
 			types[r.Type] = true
 			locs[r.Location] = true
@@ -340,8 +347,18 @@ func startServer(port string) {
 			return ks
 		}
 
+		// Build subscription entries with id and name
+		subEntries := make([]map[string]string, 0, len(subs))
+		for id, name := range subs {
+			subEntries = append(subEntries, map[string]string{"id": id, "name": name})
+		}
+		// Sort by name
+		sort.Slice(subEntries, func(i, j int) bool {
+			return subEntries[i]["name"] < subEntries[j]["name"]
+		})
+
 		c.JSON(200, gin.H{
-			"subs":      keys(subs),
+			"subs":      subEntries,
 			"rgs":       keys(rgs),
 			"types":     keys(types),
 			"locations": keys(locs),
