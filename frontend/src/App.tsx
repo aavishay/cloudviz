@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, AreaChart, Area, Brush, ReferenceArea } from 'recharts';
 import { jsPDF } from 'jspdf';
 import { FixedSizeList, type ListChildComponentProps } from 'react-window';
-import { TagCompliancePanel } from './components/TagCompliancePanel';
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 
@@ -3132,17 +3131,6 @@ export default function App() {
   const [enhancedAnomalyLoading, setEnhancedAnomalyLoading] = useState(false);
   const [slaData, setSlaData] = useState<{periodDays: number; threshold: number; totalVMs: number; data: Array<{resourceId: string; name: string; resourceGroup: string; subscriptionId: string; location: string; uptimePercentage: number; downtimeHours: number; totalHours: number; status: string; hasMetrics: boolean}>} | null>(null);
 
-const [tagComplianceData, setTagComplianceData] = useState<{
-  generatedAt: string;
-  totalResources: number;
-  requiredTags: string[];
-  overallCompliance: number;
-  compliantResources: number;
-  tagBreakdown: Array<{tagName: string; compliantCount: number; nonCompliantCount: number; complianceRate: number; percentageOfTotal: number}>;
-  nonCompliantResources: Array<{id: string; name: string; type: string; resourceGroup: string; subscriptionId: string; missingTags: string[]; presentTags: Record<string, string>; cost: number}>;
-  complianceByRG: Array<{resourceGroup: string; totalResources: number; compliantCount: number; complianceRate: number}>;
-  complianceByType: Array<{resourceType: string; totalResources: number; compliantCount: number; complianceRate: number}>;
-} | null>(null);
 
   // Resource group comparison state
   const [rgComparison, setRgComparison] = useState<{
@@ -5099,12 +5087,6 @@ const [tagComplianceData, setTagComplianceData] = useState<{
         })()}
       </>
     ) },
-    { id: 'tagCompliance', render: () => (
-      <TagCompliancePanel
-        data={tagComplianceData}
-        onViewNonCompliant={() => setActiveTab('resources')}
-      />
-    ) },
     { id: 'riRecommendations', render: () => (
       <>
         {riRecommendations.length > 0 && (
@@ -5485,14 +5467,6 @@ const [tagComplianceData, setTagComplianceData] = useState<{
       .catch(() => {});
   }, [activeSubs]);
 
-  // Fetch Tag Compliance data
-  useEffect(() => {
-    if (activeSubs.length === 0) return;
-    fetch('/api/tags/compliance')
-      .then(r => r.json())
-      .then(data => { if (data.totalResources) setTagComplianceData(data); })
-      .catch(() => {});
-  }, [resources, activeSubs]);
 
   const fetchAIInsights = async (resource: AzureResource) => {
     setAiLoading(true);
@@ -8185,7 +8159,6 @@ const [tagComplianceData, setTagComplianceData] = useState<{
                     { id: 'commitment', label: 'Commitment Savings' },
                     { id: 'topology', label: 'Resource Topology' },
                     { id: 'tagAnalysis', label: 'Tag Analysis' },
-                    { id: 'tagCompliance', label: 'Tag Compliance' },
                     { id: 'riRecommendations', label: 'RI Recommendations' },
                     { id: 'costAnomalies', label: 'Cost Anomalies' },
                   ].map(item => (
