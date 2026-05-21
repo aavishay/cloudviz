@@ -682,17 +682,25 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 	}
 
 	// Fetch subscription names and populate them in resources
+	// Filter out resources from subscriptions that couldn't be resolved
 	if len(allResources) > 0 {
 		subList := make([]string, 0, len(uniqueSubs))
 		for s := range uniqueSubs {
 			subList = append(subList, s)
 		}
 		subNames := fetchSubscriptionNames(ctx, subList)
-		for i := range allResources {
-			if name, ok := subNames[allResources[i].SubscriptionID]; ok {
-				allResources[i].SubscriptionName = name
+
+		// Filter resources to only include those with valid subscription names
+		validResources := make([]AzureResource, 0, len(allResources))
+		for _, r := range allResources {
+			if name, ok := subNames[r.SubscriptionID]; ok {
+				r.SubscriptionName = name
+				validResources = append(validResources, r)
+			} else {
+				log.Printf("Filtering out resource %s from unknown subscription %s", r.Name, r.SubscriptionID)
 			}
 		}
+		allResources = validResources
 	}
 
 	return allResources, totalCost, nil
@@ -1847,10 +1855,7 @@ func fetchSubscriptionNames(ctx context.Context, subIDs []string) map[string]str
 	res, err := argClient.Resources(ctx, request, nil)
 	if err != nil {
 		log.Printf("fetchSubscriptionNames: ARG query failed: %v", err)
-		// Fall back to using shortened IDs for missing subscriptions
-		for _, id := range missing {
-			result[id] = id[:8] + "..."
-		}
+		// Return only cached results, don't add fallbacks
 		return result
 	}
 
@@ -1880,12 +1885,8 @@ func fetchSubscriptionNames(ctx context.Context, subIDs []string) map[string]str
 		}
 	}
 
-	// For any missing subscriptions, use shortened ID
-	for _, id := range missing {
-		if _, ok := result[id]; !ok {
-			result[id] = id[:8] + "..."
-		}
-	}
+	// Don't add fallbacks - only return actual subscription names found in ARG
+	// Subscriptions not found will not be in the result map
 
 	return result
 }
