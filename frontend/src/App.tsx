@@ -2998,7 +2998,15 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
   const [dashboardOrder, setDashboardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-dashOrder');
-    return saved ? JSON.parse(saved) : ['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'tagCompliance', 'riRecommendations', 'costAnomalies'];
+    const defaultOrder = ['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Filter out removed panels and add any new default panels
+      const filtered = parsed.filter((id: string) => defaultOrder.includes(id));
+      const added = defaultOrder.filter((id: string) => !parsed.includes(id));
+      return [...filtered, ...added];
+    }
+    return defaultOrder;
   });
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -5160,7 +5168,7 @@ export default function App() {
                         {a.ratio >= 3 ? '!!' : '!'}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.subscriptionId.slice(0, 18)}...</div>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subNameMap.get(a.subscriptionId) || a.subscriptionId}</div>
                         <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date}</div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
@@ -5238,7 +5246,7 @@ export default function App() {
                     {a.severity?.slice(0, 3)}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.subscriptionId?.slice(0, 18)}...</div>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subNameMap.get(a.subscriptionId) || a.subscriptionId}</div>
                     <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date} · {a.dayOfWeek}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
@@ -5435,7 +5443,12 @@ export default function App() {
     activeSubs.forEach(s => params.append('subscriptionId', s));
     fetch(`http://localhost:8080/api/costs/anomalies?${params}`)
       .then(r => r.json())
-      .then(data => { if (data.anomalies) setAnomalyData(data); })
+      .then(data => {
+        if (data.anomalies === null) {
+          data.anomalies = [];
+        }
+        setAnomalyData(data);
+      })
       .catch(() => {});
   }, [activeSubs]);
 
@@ -5448,9 +5461,11 @@ export default function App() {
     fetch(`http://localhost:8080/api/costs/anomalies/enhanced?${params}`)
       .then(r => r.json())
       .then(data => {
-        if (data.anomalies) {
-          setEnhancedAnomalyData(data);
+        // Normalize null anomalies to empty array so panel check works
+        if (data.anomalies === null) {
+          data.anomalies = [];
         }
+        setEnhancedAnomalyData(data);
         setEnhancedAnomalyLoading(false);
       })
       .catch(() => { setEnhancedAnomalyLoading(false); });
@@ -7255,7 +7270,7 @@ export default function App() {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
                     Save Filters
                   </button>
-                  <button className="btn" onClick={() => { setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'tagCompliance', 'riRecommendations', 'costAnomalies']); }} title="Reset panels to default layout">
+                  <button className="btn" onClick={() => { setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies']); }} title="Reset panels to default layout">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12" /><path d="M3 3v9h9" /></svg>
                     Reset Layout
                   </button>
@@ -8136,7 +8151,7 @@ export default function App() {
                     Dashboard Layout
                   </label>
                   <button
-                    onClick={() => setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'tagCompliance', 'riRecommendations', 'costAnomalies'])}
+                    onClick={() => setDashboardOrder(['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'])}
                     style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-3)', cursor: 'pointer' }}
                   >
                     Reset
@@ -8221,7 +8236,7 @@ export default function App() {
                   {uniqueSubs.map(sub => (
                     <div key={sub} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 8, background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
-                      <span style={{ fontSize: 12, color: 'var(--text-1)', fontFamily: 'monospace' }}>{sub.slice(0, 8)}...</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-1)' }}>{subNameMap.get(sub) || sub}</span>
                     </div>
                   ))}
                   <div style={{ fontSize: 11, color: 'var(--text-3)', padding: '4px 0' }}>
@@ -8421,3 +8436,4 @@ export default function App() {
     </>
   );
 }
+// Build timestamp: שבת מאי 23 2026 14:34:27 IDT
