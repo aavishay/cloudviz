@@ -57,7 +57,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.27.0"
+var Version = "1.28.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -2649,6 +2649,11 @@ func startServer(port string) {
 		} else if strings.HasSuffix(path, ".ico") {
 			contentType = "image/x-icon"
 		}
+
+		// Add cache control headers to prevent aggressive caching
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		c.Header("Pragma", "no-cache")
+		c.Header("Expires", "0")
 
 		c.Data(200, contentType, data)
 	})

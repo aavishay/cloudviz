@@ -1454,7 +1454,12 @@ function FilterDropdown({ label, options, selected, onToggle, formatLabel }: {
     return () => document.removeEventListener('mousedown', fn);
   }, []);
 
-  const filtered = options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
+  const filtered = options.filter(o => {
+    // If formatLabel is provided, search by the formatted/display value (e.g., subscription name)
+    // Otherwise search by the raw value (e.g., resource group name which is already displayable)
+    const searchTarget = formatLabel ? formatLabel(o) : o;
+    return searchTarget.toLowerCase().includes(search.toLowerCase());
+  });
   const hasValue = selected.length > 0;
 
   // Compute dropdown position based on current ref position
@@ -5359,6 +5364,16 @@ export default function App() {
     if (selectedSubs.size === 0) return uniqueSubs;
     return uniqueSubs.filter(s => selectedSubs.has(s));
   }, [uniqueSubs, selectedSubs]);
+
+  // Sync subFilter with available uniqueSubs to remove invalid/stale subscription IDs
+  useEffect(() => {
+    if (uniqueSubs.length > 0) {
+      setSubFilter(prev => {
+        const valid = prev.filter(id => uniqueSubs.includes(id));
+        return valid;
+      });
+    }
+  }, [uniqueSubs]);
 
 
   // Fetch daily costs for dashboard trends - aggregate across all active subscriptions
