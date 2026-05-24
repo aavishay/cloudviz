@@ -5145,131 +5145,151 @@ export default function App() {
     ) },
     { id: 'costAnomalies', render: () => (
       <>
-        {(costAnomalies.length > 0 || (anomalyData && anomalyData.anomalies.length > 0)) && (
-          <div className="card" style={{ padding: 24, borderLeft: '4px solid var(--danger)', background: 'linear-gradient(135deg, var(--bg-card) 0%, rgba(244 63 94 / 0.03) 100%)' }}>
+        {!costsLoading && dataSubIds.size === uniqueSubs.length && uniqueSubs.length > 0 && (
+          <div className="card" style={{ padding: 24, borderLeft: `4px solid ${((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'var(--danger)' : 'var(--text-3)'}`, background: ((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'linear-gradient(135deg, var(--bg-card) 0%, rgba(244 63 94 / 0.03) 100%)' : 'var(--bg-card)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--danger-dim)', border: '1px solid rgba(244 63 94 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
+              <div style={{ width: 28, height: 28, borderRadius: 6, background: ((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'var(--danger-dim)' : 'var(--bg-surface)', border: `1px solid ${((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'rgba(244 63 94 / 0.2)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'var(--danger)' : 'var(--text-3)'} strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
               </div>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost Anomalies Detected</span>
-              <span style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 12, background: 'var(--danger-dim)', color: 'var(--danger)', fontSize: 11, fontWeight: 700 }}>
-                {(anomalyData?.anomalies.length || costAnomalies.length)} spike{(anomalyData?.anomalies.length || costAnomalies.length) > 1 ? 's' : ''}
-              </span>
+              {((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) && (
+                <span style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 12, background: 'var(--danger-dim)', color: 'var(--danger)', fontSize: 11, fontWeight: 700 }}>
+                  {((anomalyData?.anomalies?.length ?? 0) || costAnomalies.length)} spike{((anomalyData?.anomalies?.length ?? 0) || costAnomalies.length) > 1 ? 's' : ''}
+                </span>
+              )}
             </div>
-            {anomalyData && anomalyData.anomalies.length > 0 ? (
+            {((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? (
               <>
-                <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
-                  Daily cost increases exceeding {anomalyData.threshold}x previous period · {anomalyData.periodStart} to {anomalyData.periodEnd}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {anomalyData.anomalies.slice(0, 8).map((a, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.subscriptionId); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                      <div style={{
-                        width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                        background: a.ratio >= 3 ? 'var(--danger-dim)' : 'var(--warning-dim)',
-                        color: a.ratio >= 3 ? 'var(--danger)' : 'var(--warning)',
-                        fontSize: 12, fontWeight: 700
-                      }}>
-                        {a.ratio >= 3 ? '!!' : '!'}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subNameMap.get(a.subscriptionId) || a.subscriptionId}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date}</div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.change.toFixed(0)}%</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-                          ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
-                        </div>
-                      </div>
+                {anomalyData && (anomalyData.anomalies?.length ?? 0) > 0 ? (
+                  <>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+                      Daily cost increases exceeding {anomalyData.threshold}x previous period · {anomalyData.periodStart} to {anomalyData.periodEnd}
                     </div>
-                  ))}
-                </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {anomalyData.anomalies.slice(0, 8).map((a, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.subscriptionId); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                          <div style={{
+                            width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                            background: a.ratio >= 3 ? 'var(--danger-dim)' : 'var(--warning-dim)',
+                            color: a.ratio >= 3 ? 'var(--danger)' : 'var(--warning)',
+                            fontSize: 12, fontWeight: 700
+                          }}>
+                            {a.ratio >= 3 ? '!!' : '!'}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subNameMap.get(a.subscriptionId) || a.subscriptionId}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date}</div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.change.toFixed(0)}%</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                              ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+                      Resources with significant cost increases (&gt;50%) compared to previous period
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {costAnomalies.map((a, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.resourceGroup); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                          <div style={{
+                            width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                            background: a.severity === 'high' ? 'var(--danger-dim)' : 'var(--warning-dim)',
+                            color: a.severity === 'high' ? 'var(--danger)' : 'var(--warning)',
+                            fontSize: 12, fontWeight: 700
+                          }}>
+                            {a.severity === 'high' ? '!!' : '!'}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.resourceGroup}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{friendlyType(a.resourceType)} · {a.location}</div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.spike.toFixed(0)}%</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                              ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </>
             ) : (
-              <>
-                <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
-                  Resources with significant cost increases (&gt;50%) compared to previous period
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {costAnomalies.map((a, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setSearchQuery(a.resourceGroup); setCurrentPage(1); }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--danger)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                      <div style={{
-                        width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                        background: a.severity === 'high' ? 'var(--danger-dim)' : 'var(--warning-dim)',
-                        color: a.severity === 'high' ? 'var(--danger)' : 'var(--warning)',
-                        fontSize: 12, fontWeight: 700
-                      }}>
-                        {a.severity === 'high' ? '!!' : '!'}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.resourceGroup}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{friendlyType(a.resourceType)} · {a.location}</div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)' }}>+{a.spike.toFixed(0)}%</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-                          ${a.previousCost.toFixed(0)} → ${a.currentCost.toFixed(0)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
+                ✓ No cost anomalies detected across {activeSubs.length} subscription{activeSubs.length !== 1 ? 's' : ''}
+              </div>
             )}
           </div>
         )}
 
         {/* Enhanced ML-based Anomalies */}
-        {enhancedAnomalyData && enhancedAnomalyData.anomalies.length > 0 && (
-          <div className="card" style={{ padding: 24, marginTop: 16, borderLeft: '4px solid var(--accent)', background: 'linear-gradient(135deg, var(--bg-card) 0%, rgba(16 185 129 / 0.03) 100%)' }}>
+        {!costsLoading && dataSubIds.size === uniqueSubs.length && uniqueSubs.length > 0 && (
+          <div className="card" style={{ padding: 24, marginTop: 16, borderLeft: `4px solid ${(enhancedAnomalyData && (enhancedAnomalyData.anomalies?.length ?? 0) > 0) ? 'var(--accent)' : 'var(--text-3)'}`, background: (enhancedAnomalyData && (enhancedAnomalyData.anomalies?.length ?? 0) > 0) ? 'linear-gradient(135deg, var(--bg-card) 0%, rgba(16 185 129 / 0.03) 100%)' : 'var(--bg-card)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--accent-dim)', border: '1px solid rgba(16 185 129 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.5"><path d="M9 19v-6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2zm0 0V9a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v10m-6 0a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2m0 0V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v14a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2z" /></svg>
               </div>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>ML-Based Anomaly Detection</span>
-              <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                {Object.entries(enhancedAnomalyData.summary.bySeverity).map(([severity, count]) => (
-                  <span key={severity} style={{ padding: '4px 12px', borderRadius: 12, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', background: severity === 'critical' ? 'var(--danger-dim)' : severity === 'high' ? 'rgba(245 158 11 / 0.1)' : 'var(--accent-dim)', color: severity === 'critical' ? 'var(--danger)' : severity === 'high' ? 'var(--warning)' : 'var(--accent)' }}>
-                    {severity}: {count}
-                  </span>
-                ))}
-              </span>
+              {enhancedAnomalyData && (
+                <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                  {Object.entries(enhancedAnomalyData.summary.bySeverity || {}).map(([severity, count]) => (
+                    <span key={severity} style={{ padding: '4px 12px', borderRadius: 12, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', background: severity === 'critical' ? 'var(--danger-dim)' : severity === 'high' ? 'rgba(245 158 11 / 0.1)' : 'var(--accent-dim)', color: severity === 'critical' ? 'var(--danger)' : severity === 'high' ? 'var(--warning)' : 'var(--accent)' }}>
+                      {severity}: {count}
+                    </span>
+                  ))}
+                </span>
+              )}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
-              Using {enhancedAnomalyData.config.methodsUsed.join(', ')} · Thresholds: z-score {enhancedAnomalyData.config.zScoreThreshold}, MAD {enhancedAnomalyData.config.madThreshold}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {enhancedAnomalyData.anomalies.slice(0, 6).map((a, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease' }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
-                  <div style={{
-                    width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    background: a.severity === 'critical' ? 'var(--danger-dim)' : a.severity === 'high' ? 'rgba(245 158 11 / 0.1)' : 'var(--accent-dim)',
-                    color: a.severity === 'critical' ? 'var(--danger)' : a.severity === 'high' ? 'var(--warning)' : 'var(--accent)',
-                    fontSize: 10, fontWeight: 700, textTransform: 'uppercase'
-                  }}>
-                    {a.severity?.slice(0, 3)}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subNameMap.get(a.subscriptionId) || a.subscriptionId}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date} · {a.dayOfWeek}</div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {a.methods?.map((method, mi) => (
-                      <span key={mi} style={{ padding: '2px 8px', borderRadius: 4, fontSize: 9, fontWeight: 600, background: 'var(--bg-hover)', color: 'var(--text-2)', textTransform: 'uppercase' }}>
-                        {method.replace('_', ' ')}
-                      </span>
-                    ))}
-                  </div>
-                  <div style={{ textAlign: 'right', minWidth: 100 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: a.severity === 'critical' ? 'var(--danger)' : a.severity === 'high' ? 'var(--warning)' : 'var(--accent)' }}>Score: {a.score?.toFixed(1)}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-                      {a.trend === 'spiking' ? '↗️' : a.trend === 'dropping' ? '↘️' : '→'} ${a.currentCost?.toFixed(0)}
+            {enhancedAnomalyData && (
+              <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+                Using {enhancedAnomalyData.config?.methodsUsed?.join(', ') || 'zscore, mad, isolation_forest, seasonal'} · Thresholds: z-score {enhancedAnomalyData.config?.zScoreThreshold || 2.0}, MAD {enhancedAnomalyData.config?.madThreshold || 2.0}
+              </div>
+            )}
+            {enhancedAnomalyData && (enhancedAnomalyData.anomalies?.length ?? 0) > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {enhancedAnomalyData?.anomalies?.slice(0, 6).map((a, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', transition: 'all 0.2s ease' }} onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.transform='translateX(4px)'; }} onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='translateX(0)'; }}>
+                    <div style={{
+                      width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                      background: a.severity === 'critical' ? 'var(--danger-dim)' : a.severity === 'high' ? 'rgba(245 158 11 / 0.1)' : 'var(--accent-dim)',
+                      color: a.severity === 'critical' ? 'var(--danger)' : a.severity === 'high' ? 'var(--warning)' : 'var(--accent)',
+                      fontSize: 10, fontWeight: 700, textTransform: 'uppercase'
+                    }}>
+                      {a.severity?.slice(0, 3)}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subNameMap.get(a.subscriptionId) || a.subscriptionId}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{a.date} · {a.dayOfWeek}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {a.methods?.map((method, mi) => (
+                        <span key={mi} style={{ padding: '2px 8px', borderRadius: 4, fontSize: 9, fontWeight: 600, background: 'var(--bg-hover)', color: 'var(--text-2)', textTransform: 'uppercase' }}>
+                          {method.replace('_', ' ')}
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ textAlign: 'right', minWidth: 100 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: a.severity === 'critical' ? 'var(--danger)' : a.severity === 'high' ? 'var(--warning)' : 'var(--accent)' }}>Score: {a.score?.toFixed(1)}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
+                        {a.trend === 'spiking' ? '↗️' : a.trend === 'dropping' ? '↘️' : '→'} ${a.currentCost?.toFixed(0)}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
+                ✓ No cost anomalies detected across {activeSubs.length} subscription{activeSubs.length !== 1 ? 's' : ''}
+              </div>
+            )}
             {enhancedAnomalyLoading && (
               <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-3)', fontSize: 12 }}>
                 Analyzing with ML algorithms...
@@ -5280,6 +5300,17 @@ export default function App() {
       </>
     ) },
   ];
+
+  // ── Fetch subscriptions first for immediate dropdown availability
+  useEffect(() => {
+    fetch('http://localhost:8080/api/subscriptions')
+      .then(r => r.json())
+      .then(data => {
+        const subs = (data.subscriptions || []).map((s: any) => ({ id: s.id, name: s.name }));
+        setAllPossibleFilters(prev => ({ ...prev, subs }));
+      })
+      .catch(err => console.error('Failed to fetch subscriptions:', err));
+  }, []);
 
   // ── Fetch filter options and true total resource count
   useEffect(() => {

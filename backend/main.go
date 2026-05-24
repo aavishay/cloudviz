@@ -57,7 +57,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.28.0"
+var Version = "1.29.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -318,16 +318,8 @@ func startServer(port string) {
 			return
 		}
 
-		subs, rgs, types, locs, creators := make(map[string]string), make(map[string]bool), make(map[string]bool), make(map[string]bool), make(map[string]bool)
+		rgs, types, locs, creators := make(map[string]bool), make(map[string]bool), make(map[string]bool), make(map[string]bool)
 		for _, r := range res {
-			// Map subscription ID to name (use name if available, otherwise ID)
-			if _, ok := subs[r.SubscriptionID]; !ok {
-				if r.SubscriptionName != "" {
-					subs[r.SubscriptionID] = r.SubscriptionName
-				} else {
-					subs[r.SubscriptionID] = r.SubscriptionID
-				}
-			}
 			rgs[r.ResourceGroup] = true
 			types[r.Type] = true
 			locs[r.Location] = true
@@ -347,15 +339,18 @@ func startServer(port string) {
 			return ks
 		}
 
-		// Build subscription entries with id and name
-		subEntries := make([]map[string]string, 0, len(subs))
-		for id, name := range subs {
-			subEntries = append(subEntries, map[string]string{"id": id, "name": name})
+		// Get subscriptions from dedicated discovery endpoint for full list
+		subscriptions, err := DiscoverSubscriptions(c.Request.Context())
+		if err != nil {
+			// Fallback to empty if discovery fails
+			subscriptions = []Subscription{}
 		}
-		// Sort by name
-		sort.Slice(subEntries, func(i, j int) bool {
-			return subEntries[i]["name"] < subEntries[j]["name"]
-		})
+
+		// Build subscription entries with id and name
+		subEntries := make([]map[string]string, 0, len(subscriptions))
+		for _, sub := range subscriptions {
+			subEntries = append(subEntries, map[string]string{"id": sub.ID, "name": sub.Name})
+		}
 
 		c.JSON(200, gin.H{
 			"subs":      subEntries,
@@ -364,6 +359,16 @@ func startServer(port string) {
 			"locations": keys(locs),
 			"creators":  keys(creators),
 		})
+	})
+
+	// DiscoverSubscriptions returns all Azure subscriptions the user has access to
+	r.GET("/api/subscriptions", func(c *gin.Context) {
+		subs, err := DiscoverSubscriptions(c.Request.Context())
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"subscriptions": subs})
 	})
 
 	r.GET("/api/costs/daily", func(c *gin.Context) {
@@ -477,7 +482,8 @@ func startServer(port string) {
 		previousStart := now.AddDate(0, 0, -60)
 		previousEnd := now.AddDate(0, 0, -30)
 
-		var anomalies []map[string]any
+		// Initialize to empty slice to avoid null in JSON
+		anomalies := make([]map[string]any, 0)
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, 2)
@@ -492,32 +498,60 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				current, err1 := fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
-				time.Sleep(200 * time.Millisecond) // Small delay between consecutive calls to same sub
-				previous, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
+				// Try cached data first, fall back to API
+				var current, previous []map[string]any
+				var err1, err2 error
 
-				if err1 != nil || err2 != nil {
+				current, ok1 := cache.getDailyCosts(subID, currentStart, now)
+				if !ok1 {
+					current, err1 = fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
+					if err1 == nil && len(current) > 0 {
+						cache.setDailyCosts(subID, current)
+					}
+				}
+
+				time.Sleep(200 * time.Millisecond) // Small delay between consecutive calls to same sub
+
+				previous, ok2 := cache.getDailyCosts(subID, previousStart, previousEnd)
+				if !ok2 {
+					previous, err2 = fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
+					if err2 == nil && len(previous) > 0 {
+						cache.setDailyCosts(subID, previous)
+					}
+				}
+
+				if (err1 != nil && !ok1) || (err2 != nil && !ok2) {
 					return
 				}
 
-				// Build daily maps
-				currentMap := make(map[string]float64)
+				// Build daily slices sorted by date
+				type dailyCost struct {
+					date string
+					cost float64
+				}
+				var currentSlice, previousSlice []dailyCost
 				for _, d := range current {
 					if date, ok := d["date"].(string); ok {
-						currentMap[date] = d["cost"].(float64)
+						if cost, ok := d["cost"].(float64); ok {
+							currentSlice = append(currentSlice, dailyCost{date, cost})
+						}
 					}
 				}
-				previousMap := make(map[string]float64)
 				for _, d := range previous {
 					if date, ok := d["date"].(string); ok {
-						previousMap[date] = d["cost"].(float64)
+						if cost, ok := d["cost"].(float64); ok {
+							previousSlice = append(previousSlice, dailyCost{date, cost})
+						}
 					}
 				}
+				// Sort by date
+				sort.Slice(currentSlice, func(i, j int) bool { return currentSlice[i].date < currentSlice[j].date })
+				sort.Slice(previousSlice, func(i, j int) bool { return previousSlice[i].date < previousSlice[j].date })
 
 				// Compute current period mean and stddev for z-score
 				var currentVals []float64
-				for _, v := range currentMap {
-					currentVals = append(currentVals, v)
+				for _, d := range currentSlice {
+					currentVals = append(currentVals, d.cost)
 				}
 				var currMean, currStdDev float64
 				if len(currentVals) > 1 {
@@ -534,10 +568,33 @@ func startServer(port string) {
 					currStdDev = math.Sqrt(variance / float64(len(currentVals)))
 				}
 
-				// Compare each day in current period vs same day last period (ratio-based)
-				for date, currCost := range currentMap {
-					prevCost, exists := previousMap[date]
-					if !exists || prevCost == 0 {
+				// Compare by day offset (day i of current vs day i of previous)
+				for i, curr := range currentSlice {
+					if i >= len(previousSlice) {
+						break
+					}
+					prev := previousSlice[i]
+					currCost := curr.cost
+					prevCost := prev.cost
+					date := curr.date
+
+					// New spend detection: previous was 0 but current is significant (>$1)
+					if prevCost == 0 && currCost > 1.0 {
+						mu.Lock()
+						anomalies = append(anomalies, map[string]any{
+							"subscriptionId": subID,
+							"date":           date,
+							"currentCost":    currCost,
+							"previousCost":   0,
+							"ratio":          currCost,
+							"change":         100,
+							"type":           "new_spend",
+						})
+						mu.Unlock()
+						continue
+					}
+
+					if prevCost == 0 {
 						continue
 					}
 					ratio := currCost / prevCost
@@ -3269,6 +3326,41 @@ func startServer(port string) {
 	})
 
 	fmt.Printf("CloudViz server starting at :%s\n", port)
+
+	// Pre-fetch daily costs for all subscriptions on startup
+	go func() {
+		log.Println("Startup: pre-fetching daily costs for all subscriptions...")
+		ctx := context.Background()
+		subs, err := DiscoverSubscriptions(ctx)
+		if err != nil {
+			log.Printf("Startup: failed to discover subscriptions: %v", err)
+			return
+		}
+
+		now := time.Now()
+		start := now.AddDate(0, 0, -30)
+
+		for i, sub := range subs {
+			// Check if already cached
+			if _, ok := cache.getDailyCosts(sub.ID, start, now); ok {
+				continue
+			}
+
+			log.Printf("Startup: fetching daily costs for %s (%d/%d)", sub.Name, i+1, len(subs))
+			daily, err := fetchDailyCosts(costClient, sub.ID, start, now, ctx)
+			if err != nil {
+				log.Printf("Startup: failed to fetch daily costs for %s: %v", sub.Name, err)
+				continue
+			}
+			cache.setDailyCosts(sub.ID, daily)
+			log.Printf("Startup: cached %d daily cost entries for %s", len(daily), sub.Name)
+
+			// Sleep to avoid rate limits
+			time.Sleep(2 * time.Second)
+		}
+		log.Println("Startup: daily cost pre-fetch complete")
+	}()
+
 	// Background sync disabled - fetch costs on-demand via SSE only
 	// go backgroundSync(costClient)
 	go openBrowser(fmt.Sprintf("http://localhost:%s", port))

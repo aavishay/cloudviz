@@ -462,6 +462,75 @@ func placeholders(n int) string {
 	return strings.Join(ps, ",")
 }
 
+// DiscoverSubscriptions queries Azure Resource Graph for all subscriptions the user has access to.
+// Returns subscriptions that are Enabled, Warned, or PastDue (excludes Disabled and Deleted).
+func DiscoverSubscriptions(ctx context.Context) ([]Subscription, error) {
+	query := `resourcecontainers
+		| where type == "microsoft.resources/subscriptions"
+		| where properties.state in ("Enabled", "Warned", "PastDue")
+		| project id, name, state=properties.state, tenantId=tenantId, tags`
+
+	request := armresourcegraph.QueryRequest{
+		Query: to.Ptr(query),
+		Options: &armresourcegraph.QueryRequestOptions{
+			ResultFormat: to.Ptr(armresourcegraph.ResultFormatObjectArray),
+			Top:          to.Ptr(int32(1000)),
+		},
+	}
+
+	results, err := argClient.Resources(ctx, request, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query subscriptions: %w", err)
+	}
+
+	var subscriptions []Subscription
+	rows, _ := results.Data.([]interface{})
+
+	for _, row := range rows {
+		m, ok := row.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Extract ID and remove leading "/subscriptions/" if present
+		id := safeStr(m["id"])
+		if idx := strings.LastIndex(id, "/"); idx >= 0 {
+			id = id[idx+1:]
+		}
+
+		// Parse tags
+		tags := make(map[string]string)
+		if t, ok := m["tags"].(map[string]interface{}); ok {
+			for k, v := range t {
+				tags[k] = safeStr(v)
+			}
+		}
+
+		subscriptions = append(subscriptions, Subscription{
+			ID:       id,
+			Name:     safeStr(m["name"]),
+			State:    safeStr(m["state"]),
+			TenantID: safeStr(m["tenantId"]),
+			Tags:     tags,
+		})
+	}
+
+	// Sort by name for consistent ordering
+	sort.Slice(subscriptions, func(i, j int) bool {
+		return subscriptions[i].Name < subscriptions[j].Name
+	})
+
+	return subscriptions, nil
+}
+
+// safeStr safely extracts a string value from an interface{}
+func safeStr(v any) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
+}
+
 // FetchResourcesWithCosts encapsulates the logic to get resources from ARG and match them with costs from SQLite
 func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []string, search string, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly bool, tagKey, tagValue string) ([]AzureResource, float64, error) {
 	var clauses []string

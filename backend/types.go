@@ -2,6 +2,15 @@ package main
 
 import "time"
 
+// Subscription represents an Azure subscription with its metadata
+type Subscription struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	TenantID    string `json:"tenantId,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
+}
+
 type AzureResource struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name"`
