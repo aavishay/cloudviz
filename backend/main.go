@@ -1536,7 +1536,7 @@ func startServer(port string) {
 
 		// Fetch all resources
 		rows, err := cache.db.Query(
-			"SELECT id, name, type, location, subscription_id, resource_group, COALESCE(tags, '{}'), COALESCE(managed_by, '') FROM resources")
+			"SELECT id, name, type, location, subscription_id, resource_group, COALESCE(tags, '{}'), COALESCE(managed_by, ''), COALESCE(status, '') FROM resources")
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -1552,6 +1552,7 @@ func startServer(port string) {
 			ResourceGroup  string
 			Tags           string
 			ManagedBy      string
+			Status         string
 			Cost           float64
 		}
 
@@ -1559,7 +1560,7 @@ func startServer(port string) {
 		for rows.Next() {
 			var it wasteItem
 			if err := rows.Scan(&it.ResourceID, &it.Name, &it.Type, &it.Location,
-				&it.SubscriptionID, &it.ResourceGroup, &it.Tags, &it.ManagedBy); err != nil {
+				&it.SubscriptionID, &it.ResourceGroup, &it.Tags, &it.ManagedBy, &it.Status); err != nil {
 				continue
 			}
 			it.Cost = costMap[strings.ToLower(it.ResourceID)]
@@ -1625,6 +1626,13 @@ func startServer(port string) {
 			byCategory[category].Savings += savings
 		}
 
+		// Helper: check if VM is stopped/deallocated
+		isStopped := func(status string) bool {
+			statusLow := strings.ToLower(status)
+			return statusLow == "stopped" || statusLow == "stopped (deallocated)" ||
+				statusLow == "deallocated" || statusLow == "stopping"
+		}
+
 		for _, it := range items {
 			typeLow := strings.ToLower(it.Type)
 			nameLow := strings.ToLower(it.Name)
@@ -1677,6 +1685,10 @@ func startServer(port string) {
 
 			// ── Category 4: dev_vm_247 ─────────────────────────────────────────
 			if strings.Contains(typeLow, "compute/virtualmachines") && !strings.Contains(typeLow, "scalesets") {
+				// Skip if VM is already stopped - it's already saving money
+				if isStopped(it.Status) {
+					continue
+				}
 				isDevEnv := strings.Contains(nameLow, "dev") || strings.Contains(nameLow, "test") ||
 					strings.Contains(nameLow, "staging") || strings.Contains(nameLow, "stag") ||
 					strings.Contains(nameLow, "qa") || strings.Contains(nameLow, "sandbox") ||
@@ -1697,6 +1709,10 @@ func startServer(port string) {
 				// Infer score heuristically (mirrors scoreResource in azure.go)
 				score := 70 // default reasonable score
 				if strings.Contains(typeLow, "compute/virtualmachines") {
+					// Skip if VM is already stopped - it's already saving money
+					if isStopped(it.Status) {
+						continue
+					}
 					if strings.Contains(nameLow, "dev") || strings.Contains(nameLow, "test") ||
 						strings.Contains(rgLow, "dev") || strings.Contains(rgLow, "test") {
 						score = 45
