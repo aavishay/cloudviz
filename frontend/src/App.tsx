@@ -3178,7 +3178,10 @@ export default function App() {
   const [wasteLoading, setWasteLoading] = useState(false);
   const [periodComparison, setPeriodComparison] = useState<any>(null);
   const [forecastData, setForecastData] = useState<{actualCost: number; forecastCost: number; periodDays: number} | null>(null);
-  const [anomalyData, setAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; ratio: number; change: number}>; threshold: number; periodStart: string; periodEnd: string} | null>(null);
+  const [anomalyData, setAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; ratio: number; change: number}>; threshold: number; minAmount: number; minNewSpend: number; periodStart: string; periodEnd: string} | null>(null);
+  const [anomalyThreshold, setAnomalyThreshold] = useState(2.0);
+  const [anomalyMinAmount, setAnomalyMinAmount] = useState(0.0);
+  const [anomalyMinNewSpend, setAnomalyMinNewSpend] = useState(1.0);
   const [enhancedAnomalyData, setEnhancedAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; severity: string; score: number; methods: string[]; zscore?: number; madScore?: number; isolationScore?: number; seasonalScore?: number; trend?: string; dayOfWeek?: string}>; summary: {total: number; bySeverity: Record<string, number>; byMethod: Record<string, number>}; config: {zScoreThreshold: number; madThreshold: number; isolationThreshold: number; seasonalThreshold: number; methodsUsed: string[]}; periodStart: string; periodEnd: string} | null>(null);
   const [enhancedAnomalyLoading, setEnhancedAnomalyLoading] = useState(false);
   const [slaData, setSlaData] = useState<{periodDays: number; threshold: number; totalVMs: number; data: Array<{resourceId: string; name: string; resourceGroup: string; subscriptionId: string; location: string; uptimePercentage: number; downtimeHours: number; totalHours: number; status: string; hasMetrics: boolean}>} | null>(null);
@@ -5204,8 +5207,23 @@ export default function App() {
               <>
                 {anomalyData && (anomalyData.anomalies?.length ?? 0) > 0 ? (
                   <>
-                    <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8 }}>
                       Daily cost increases exceeding {anomalyData.threshold}x previous period · {anomalyData.periodStart} to {anomalyData.periodEnd}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center', padding: '8px 10px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <label style={{ fontSize: 11, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        Threshold:
+                        <input type="number" min="1" step="0.1" value={anomalyThreshold} onChange={e => setAnomalyThreshold(parseFloat(e.target.value) || 2)} style={{ width: 50, padding: '2px 6px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-input)', color: 'var(--text-1)' }} />
+                        <span style={{ color: 'var(--text-3)' }}>x</span>
+                      </label>
+                      <label style={{ fontSize: 11, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        Min Amount:
+                        <input type="number" min="0" step="1" value={anomalyMinAmount} onChange={e => setAnomalyMinAmount(parseFloat(e.target.value) || 0)} style={{ width: 55, padding: '2px 6px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-input)', color: 'var(--text-1)' }} />
+                      </label>
+                      <label style={{ fontSize: 11, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        Min New Spend:
+                        <input type="number" min="0" step="0.5" value={anomalyMinNewSpend} onChange={e => setAnomalyMinNewSpend(parseFloat(e.target.value) || 0)} style={{ width: 55, padding: '2px 6px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-input)', color: 'var(--text-1)' }} />
+                      </label>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {anomalyData.anomalies.slice(0, 8).map((a, i) => (
@@ -5530,6 +5548,9 @@ export default function App() {
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
+    params.append('threshold', anomalyThreshold.toString());
+    params.append('minAmount', anomalyMinAmount.toString());
+    params.append('minNewSpend', anomalyMinNewSpend.toString());
     fetch(`http://localhost:8080/api/costs/anomalies?${params}`)
       .then(r => r.json())
       .then(data => {
@@ -5539,7 +5560,7 @@ export default function App() {
         setAnomalyData(data);
       })
       .catch(() => {});
-  }, [activeSubs]);
+  }, [activeSubs, anomalyThreshold, anomalyMinAmount, anomalyMinNewSpend]);
 
   // Fetch enhanced ML-based anomalies
   useEffect(() => {

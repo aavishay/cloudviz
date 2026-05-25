@@ -468,13 +468,21 @@ func startServer(port string) {
 	// Cost anomaly detection endpoint
 	r.GET("/api/costs/anomalies", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
-		threshold := 2.0 // ratio threshold: flag if cost is threshold-x or more of previous period
-		zThreshold := 2.0 // z-score threshold: flag if cost is zThreshold std deviations above mean
+		threshold := 2.0    // ratio threshold: flag if cost is threshold-x or more of previous period
+		zThreshold := 2.0   // z-score threshold: flag if cost is zThreshold std deviations above mean
+		minAmount := 0.0    // minimum current cost to consider (filters out small anomalies)
+		minNewSpend := 1.0  // minimum cost for new spend detection (was hardcoded at $1)
 		if t := c.Query("threshold"); t != "" {
 			fmt.Sscanf(t, "%f", &threshold)
 		}
 		if z := c.Query("zscore"); z != "" {
 			fmt.Sscanf(z, "%f", &zThreshold)
+		}
+		if m := c.Query("minAmount"); m != "" {
+			fmt.Sscanf(m, "%f", &minAmount)
+		}
+		if m := c.Query("minNewSpend"); m != "" {
+			fmt.Sscanf(m, "%f", &minNewSpend)
 		}
 
 		now := time.Now()
@@ -578,8 +586,13 @@ func startServer(port string) {
 					prevCost := prev.cost
 					date := curr.date
 
-					// New spend detection: previous was 0 but current is significant (>$1)
-					if prevCost == 0 && currCost > 1.0 {
+					// Skip if current cost is below minimum threshold
+					if currCost < minAmount {
+						continue
+					}
+
+					// New spend detection: previous was 0 but current is significant
+					if prevCost == 0 && currCost > minNewSpend {
 						mu.Lock()
 						anomalies = append(anomalies, map[string]any{
 							"subscriptionId": subID,
@@ -640,11 +653,13 @@ func startServer(port string) {
 		wg.Wait()
 
 		c.JSON(200, map[string]any{
-			"anomalies":   anomalies,
-			"threshold":   threshold,
-			"zThreshold":  zThreshold,
-			"periodStart": currentStart.Format("2006-01-02"),
-			"periodEnd":   now.Format("2006-01-02"),
+			"anomalies":    anomalies,
+			"threshold":    threshold,
+			"zThreshold":   zThreshold,
+			"minAmount":    minAmount,
+			"minNewSpend":  minNewSpend,
+			"periodStart":  currentStart.Format("2006-01-02"),
+			"periodEnd":    now.Format("2006-01-02"),
 		})
 	})
 
