@@ -2,7 +2,7 @@ class Cloudviz < Formula
   desc "Azure cloud infrastructure visualization and cost management dashboard"
   homepage "https://github.com/aavishay/cloudviz"
   license "MIT"
-  version "1.28.0"
+  version "1.29.0"
 
   on_macos do
     on_arm do

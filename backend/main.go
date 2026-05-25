@@ -1536,7 +1536,7 @@ func startServer(port string) {
 
 		// Fetch all resources
 		rows, err := cache.db.Query(
-			"SELECT id, name, type, location, subscription_id, resource_group, COALESCE(tags, '{}') FROM resources")
+			"SELECT id, name, type, location, subscription_id, resource_group, COALESCE(tags, '{}'), COALESCE(managed_by, '') FROM resources")
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -1551,6 +1551,7 @@ func startServer(port string) {
 			SubscriptionID string
 			ResourceGroup  string
 			Tags           string
+			ManagedBy      string
 			Cost           float64
 		}
 
@@ -1558,7 +1559,7 @@ func startServer(port string) {
 		for rows.Next() {
 			var it wasteItem
 			if err := rows.Scan(&it.ResourceID, &it.Name, &it.Type, &it.Location,
-				&it.SubscriptionID, &it.ResourceGroup, &it.Tags); err != nil {
+				&it.SubscriptionID, &it.ResourceGroup, &it.Tags, &it.ManagedBy); err != nil {
 				continue
 			}
 			it.Cost = costMap[strings.ToLower(it.ResourceID)]
@@ -1632,9 +1633,8 @@ func startServer(port string) {
 
 			// ── Category 1: orphaned_disk ──────────────────────────────────────
 			if strings.Contains(typeLow, "compute/disks") {
-				diskState, hasDiskState := tags["diskstate"]
-				if !hasDiskState || diskState == "unattached" || diskState == "" {
-					// Disk is unattached or has no diskState tag — treat as orphaned
+				// Use ManagedBy field from Azure API - if empty, disk is unattached
+				if it.ManagedBy == "" {
 					sev := "high"
 					if it.Cost == 0 {
 						sev = "medium"
@@ -3819,9 +3819,14 @@ func sseHandler(c *gin.Context) {
 		// First, send cached data and identify uncached subs
 		for _, sid := range subs {
 			curr, ok1 := cache.get(sid, "current")
+			prev, ok2 := cache.get(sid, "previous")
 			if ok1 {
 				cachedCount++
-				msgChan <- streamMsg{Type: "data", SubID: sid, Data: gin.H{"current": normalizeResults(curr)}}
+				data := gin.H{"current": normalizeResults(curr)}
+				if ok2 {
+					data["previous"] = normalizeResults(prev)
+				}
+				msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}
 				msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
 			} else {
 				uncached = append(uncached, sid)
@@ -3847,16 +3852,40 @@ func sseHandler(c *gin.Context) {
 						log.Printf("SSE: fetching sub %d/%d: %s", batchStart+1, len(uncached), sid)
 						now := time.Now()
 						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-						_, err := fetchSubCostsSync(costClient, sid, "current", now.AddDate(0, 0, -30), ctx)
+
+						// Fetch current and previous periods concurrently
+						var currErr, prevErr error
+						var fetchWg sync.WaitGroup
+						fetchWg.Add(2)
+						go func() {
+							defer fetchWg.Done()
+							_, currErr = fetchSubCostsSync(costClient, sid, "current", now.AddDate(0, 0, -30), ctx)
+						}()
+						go func() {
+							defer fetchWg.Done()
+							_, prevErr = fetchSubCostsSync(costClient, sid, "previous", now.AddDate(0, 0, -60), ctx)
+						}()
+						fetchWg.Wait()
 						cancel()
-						if err != nil {
-							log.Printf("SSE: error fetching %s: %v", sid, err)
-							msgChan <- streamMsg{Type: "status", SubID: sid, Message: "error: " + err.Error()}
+
+						// Log any errors but don't fail if current succeeds
+						if currErr != nil {
+							log.Printf("SSE: error fetching current %s: %v", sid, currErr)
+							msgChan <- streamMsg{Type: "status", SubID: sid, Message: "error: " + currErr.Error()}
 							return
 						}
-						if res, ok := cache.get(sid, "current"); ok {
-							msgChan <- streamMsg{Type: "data", SubID: sid, Data: gin.H{"current": normalizeResults(res)}}
+						if prevErr != nil {
+							log.Printf("SSE: error fetching previous %s: %v", sid, prevErr)
 						}
+
+						data := gin.H{}
+						if res, ok := cache.get(sid, "current"); ok {
+							data["current"] = normalizeResults(res)
+						}
+						if res, ok := cache.get(sid, "previous"); ok {
+							data["previous"] = normalizeResults(res)
+						}
+						msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}
 						msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
 					}(subID)
 				}

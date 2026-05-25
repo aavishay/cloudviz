@@ -519,39 +519,58 @@ function RGTrendsChart({ data, period, onPeriodChange }: {
   onPeriodChange: (p: 7 | 14 | 30) => void;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [hoverGroup, setHoverGroup] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const svgRef = useRef<SVGSVGElement>(null);
 
   const dates: string[] = data?.dates ?? [];
   const groups: Array<{ name: string; dailyCosts: number[]; totalAbs: number }> = data?.groups ?? [];
 
-  const W = 800, H = 240;
-  const padL = 58, padR = 16, padT = 20, padB = 32;
+  const W = 800, H = 260;
+  const padL = 58, padR = 16, padT = 20, padB = 36;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
   const visible = groups.filter(g => !hidden.has(g.name));
-  const allVals = visible.flatMap(g => g.dailyCosts);
-  const rawMax = Math.max(...allVals.map(Math.abs), 1);
-  const rawMin = Math.min(...allVals, 0);
+
+  // Calculate stacked values for each day
+  // Positive values stack upward from 0, negative stack downward from 0
+  const stackedData = useMemo(() => {
+    return dates.map((_, dayIdx) => {
+      const dayValues = visible.map(g => ({ name: g.name, value: g.dailyCosts[dayIdx] ?? 0 }));
+      const positive = dayValues.filter(v => v.value > 0).sort((a, b) => b.value - a.value);
+      const negative = dayValues.filter(v => v.value < 0).sort((a, b) => a.value - b.value); // more negative first
+
+      let posY = 0;
+      const posStack = positive.map(v => {
+        const bottom = posY;
+        const top = posY + v.value;
+        posY = top;
+        return { ...v, bottom, top };
+      });
+
+      let negY = 0;
+      const negStack = negative.map(v => {
+        const top = negY;
+        const bottom = negY + v.value; // v.value is negative
+        negY = bottom;
+        return { ...v, bottom, top };
+      });
+
+      return { dayIdx, posStack, negStack, posTotal: posY, negTotal: negY };
+    });
+  }, [dates, visible]);
+
+  const allTotals = stackedData.flatMap(d => [d.posTotal, Math.abs(d.negTotal)]);
+  const rawMax = Math.max(...allTotals, 1);
   const yMax = rawMax * 1.1;
-  const yMin = Math.min(rawMin * 1.1, 0);
+  const yMin = -yMax;
   const yRange = yMax - yMin;
   const zeroY = padT + plotH * (yMax / yRange);
 
-  const xOf = (i: number) => dates.length < 2 ? padL : padL + (i / (dates.length - 1)) * plotW;
+  const barWidth = dates.length > 14 ? plotW / dates.length * 0.7 : plotW / dates.length * 0.6;
+  const xOf = (i: number) => dates.length < 2 ? padL + plotW / 2 : padL + (i + 0.5) * (plotW / dates.length);
   const yOf = (v: number) => padT + plotH * (1 - (v - yMin) / yRange);
-
-  const smoothPath = (costs: number[]) => {
-    if (costs.length === 0) return '';
-    const pts = costs.map((v, i) => [xOf(i), yOf(v)] as [number, number]);
-    let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
-    for (let i = 1; i < pts.length; i++) {
-      const cpx = (pts[i-1][0] + pts[i][0]) / 2;
-      d += ` C${cpx.toFixed(1)},${pts[i-1][1].toFixed(1)} ${cpx.toFixed(1)},${pts[i][1].toFixed(1)} ${pts[i][0].toFixed(1)},${pts[i][1].toFixed(1)}`;
-    }
-    return d;
-  };
 
   const fmtCost = (v: number) => {
     const abs = Math.abs(v);
@@ -568,7 +587,7 @@ function RGTrendsChart({ data, period, onPeriodChange }: {
     const rect = svgRef.current.getBoundingClientRect();
     const scaleX = W / rect.width;
     const x = (e.clientX - rect.left) * scaleX;
-    const idx = Math.round(((x - padL) / plotW) * (dates.length - 1));
+    const idx = Math.floor(((x - padL) / plotW) * dates.length);
     setHoverIdx(Math.max(0, Math.min(dates.length - 1, idx)));
   };
 
@@ -579,6 +598,21 @@ function RGTrendsChart({ data, period, onPeriodChange }: {
   })();
 
   const shortName = (n: string) => n.length > 22 ? n.slice(0, 21) + '…' : n;
+
+  const getGroupColor = (name: string) => {
+    const idx = groups.findIndex(g => g.name === name);
+    return RG_COLORS[idx % RG_COLORS.length];
+  };
+
+  // Calculate hover info
+  const hoverInfo = useMemo(() => {
+    if (hoverIdx === null) return null;
+    const dayData = stackedData[hoverIdx];
+    if (!dayData) return null;
+    const allSegments = [...dayData.posStack, ...dayData.negStack];
+    const total = dayData.posTotal + dayData.negTotal; // negTotal is negative
+    return { ...dayData, allSegments, total, date: dates[hoverIdx] };
+  }, [hoverIdx, stackedData, dates]);
 
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -605,23 +639,14 @@ function RGTrendsChart({ data, period, onPeriodChange }: {
       {/* Chart */}
       <div style={{ padding: '16px 18px 8px', position: 'relative' }}>
         <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', overflow: 'visible' }}>
-          <defs>
-            {groups.map((_g, gi) => (
-              <linearGradient key={gi} id={`rg-grad-${gi}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={RG_COLORS[gi % RG_COLORS.length]} stopOpacity="0.15"/>
-                <stop offset="100%" stopColor={RG_COLORS[gi % RG_COLORS.length]} stopOpacity="0"/>
-              </linearGradient>
-            ))}
-          </defs>
-
           {/* Y-axis grid + labels */}
           {yTicks.map((v, i) => {
             const y = yOf(v);
             const isZero = Math.abs(v) < yRange * 0.01;
             return (
               <g key={i}>
-                <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={isZero ? 'var(--text-3)' : 'var(--border)'} strokeWidth={isZero ? 1 : 0.5} strokeDasharray={isZero ? '0' : '3,3'} opacity={isZero ? 0.6 : 1} />
-                <text x={padL - 6} y={y + 4} textAnchor="end" fontSize={10} fill="var(--text-3)">
+                <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={isZero ? 'var(--text-3)' : 'var(--border)'} strokeWidth={isZero ? 1.5 : 0.5} strokeDasharray={isZero ? '0' : '3,3'} opacity={isZero ? 0.8 : 0.5} />
+                <text x={padL - 8} y={y + 4} textAnchor="end" fontSize={10} fill="var(--text-3)">
                   {v >= 0 ? `+$${Math.abs(v) >= 1000 ? (Math.abs(v)/1000).toFixed(0)+'k' : Math.abs(v).toFixed(0)}` : `-$${Math.abs(v) >= 1000 ? (Math.abs(v)/1000).toFixed(0)+'k' : Math.abs(v).toFixed(0)}`}
                 </text>
               </g>
@@ -629,94 +654,101 @@ function RGTrendsChart({ data, period, onPeriodChange }: {
           })}
 
           {/* Zero baseline */}
-          {yMin < 0 && yMax > 0 && (
-            <line x1={padL} y1={zeroY} x2={W - padR} y2={zeroY} stroke="var(--text-3)" strokeWidth={1} opacity={0.4} />
-          )}
+          <line x1={padL} y1={zeroY} x2={W - padR} y2={zeroY} stroke="var(--text-2)" strokeWidth={1.5} opacity={0.6} />
 
           {/* X-axis labels */}
           {dates.map((d, i) => {
-            const showEvery = dates.length > 14 ? Math.ceil(dates.length / 8) : 1;
+            const showEvery = dates.length > 14 ? Math.ceil(dates.length / 7) : 1;
             if (i % showEvery !== 0 && i !== dates.length - 1) return null;
             return (
-              <text key={i} x={xOf(i)} y={H - 8} textAnchor="middle" fontSize={10} fill="var(--text-3)">{fmtDate(d)}</text>
+              <text key={i} x={xOf(i)} y={H - 10} textAnchor="middle" fontSize={10} fill="var(--text-3)">{fmtDate(d)}</text>
             );
           })}
 
-          {/* Area fills */}
-          {groups.map((g, gi) => {
-            if (hidden.has(g.name) || g.dailyCosts.every(v => v === 0)) return null;
-            const pts = g.dailyCosts.map((v, i) => [xOf(i), yOf(v)] as [number, number]);
-            const firstX = pts[0][0], lastX = pts[pts.length - 1][0];
-            let area = `M${firstX.toFixed(1)},${zeroY.toFixed(1)} L${firstX.toFixed(1)},${pts[0][1].toFixed(1)}`;
-            for (let i = 1; i < pts.length; i++) {
-              const cpx = (pts[i-1][0] + pts[i][0]) / 2;
-              area += ` C${cpx.toFixed(1)},${pts[i-1][1].toFixed(1)} ${cpx.toFixed(1)},${pts[i][1].toFixed(1)} ${pts[i][0].toFixed(1)},${pts[i][1].toFixed(1)}`;
-            }
-            area += ` L${lastX.toFixed(1)},${zeroY.toFixed(1)} Z`;
-            return <path key={gi} d={area} fill={`url(#rg-grad-${gi})`} />;
+          {/* Stacked Bars */}
+          {stackedData.map((day) => {
+            const x = xOf(day.dayIdx);
+            const allSegments = [...day.posStack, ...day.negStack];
+            return allSegments.map((seg) => {
+              const color = getGroupColor(seg.name);
+              const yBottom = yOf(seg.bottom);
+              const yTop = yOf(seg.top);
+              const height = Math.abs(yBottom - yTop);
+              const isHovered = hoverGroup === seg.name;
+              const isDimmed = hoverGroup && hoverGroup !== seg.name;
+
+              return (
+                <rect
+                  key={`${day.dayIdx}-${seg.name}`}
+                  x={x - barWidth / 2}
+                  y={Math.min(yTop, yBottom)}
+                  width={barWidth}
+                  height={Math.max(height, 1)}
+                  fill={color}
+                  opacity={isDimmed ? 0.3 : isHovered ? 1 : 0.85}
+                  style={{ transition: 'opacity 0.15s', cursor: 'pointer' }}
+                  onMouseEnter={() => setHoverGroup(seg.name)}
+                  onMouseLeave={() => setHoverGroup(null)}
+                />
+              );
+            });
           })}
 
-          {/* Lines */}
-          {groups.map((g, gi) => {
-            if (hidden.has(g.name) || g.dailyCosts.every(v => v === 0)) return null;
-            return (
-              <path key={gi} d={smoothPath(g.dailyCosts)} fill="none"
-                stroke={RG_COLORS[gi % RG_COLORS.length]} strokeWidth={2}
-                opacity={hoverIdx !== null ? 0.35 : 1}
-                style={{ transition: 'opacity 0.15s' }} />
-            );
-          })}
-
-          {/* Hover elements */}
+          {/* Hover highlight line */}
           {hoverIdx !== null && (
-            <>
-              <line x1={xOf(hoverIdx)} y1={padT} x2={xOf(hoverIdx)} y2={padT + plotH} stroke="var(--text-3)" strokeWidth={1} strokeDasharray="4,3" opacity={0.5} />
-              {groups.map((g, gi) => {
-                if (hidden.has(g.name)) return null;
-                const v = g.dailyCosts[hoverIdx] ?? 0;
-                if (v === 0) return null;
-                const color = RG_COLORS[gi % RG_COLORS.length];
-                return (
-                  <g key={gi}>
-                    <path d={smoothPath(g.dailyCosts)} fill="none" stroke={color} strokeWidth={2.5} />
-                    <circle cx={xOf(hoverIdx)} cy={yOf(v)} r={4} fill={color} stroke="var(--bg-card)" strokeWidth={2} />
-                  </g>
-                );
-              })}
-            </>
+            <line
+              x1={xOf(hoverIdx) - barWidth/2 - 4}
+              y1={padT}
+              x2={xOf(hoverIdx) - barWidth/2 - 4}
+              y2={padT + plotH}
+              stroke="var(--text-3)"
+              strokeWidth={1}
+              strokeDasharray="3,2"
+              opacity={0.4}
+            />
           )}
 
           {/* Invisible mouse-capture rect */}
           <rect x={padL} y={padT} width={plotW} height={plotH} fill="transparent"
             onMouseMove={handleSVGMouseMove}
-            onMouseLeave={() => setHoverIdx(null)} />
+            onMouseLeave={() => { setHoverIdx(null); setHoverGroup(null); }} />
         </svg>
 
         {/* Hover tooltip */}
-        {hoverIdx !== null && (() => {
-          const activeGroups = groups.filter(g => !hidden.has(g.name) && (g.dailyCosts[hoverIdx] ?? 0) !== 0);
-          if (activeGroups.length === 0) return null;
+        {hoverInfo && (() => {
           const svgEl = svgRef.current;
           if (!svgEl) return null;
           const svgRect = svgEl.getBoundingClientRect();
           const scaleX = svgRect.width / W;
-          const tipX = xOf(hoverIdx) * scaleX;
-          const tipLeft = tipX + 12;
+          const tipX = xOf(hoverIdx!) * scaleX;
+          const tipLeft = tipX + 16;
+          const maxLeft = svgRect.width - 180;
+
           return (
             <div style={{
-              position: 'absolute', top: 28, left: Math.min(tipLeft, svgRect.width - 160),
+              position: 'absolute', top: 24, left: Math.min(tipLeft, maxLeft),
               background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
-              padding: '8px 12px', pointerEvents: 'none', zIndex: 10,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.2)', minWidth: 140
+              padding: '10px 14px', pointerEvents: 'none', zIndex: 10,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.25)', minWidth: 160
             }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)', marginBottom: 6 }}>{fmtDate(dates[hoverIdx])}</div>
-              {activeGroups.map((g, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: RG_COLORS[groups.indexOf(g) % RG_COLORS.length], flexShrink: 0 }} />
-                  <span style={{ fontSize: 11, color: 'var(--text-3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shortName(g.name)}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: (g.dailyCosts[hoverIdx] ?? 0) >= 0 ? 'var(--danger)' : 'var(--accent)', flexShrink: 0 }}>{fmtCost(g.dailyCosts[hoverIdx] ?? 0)}/day</span>
-                </div>
-              ))}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)', marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
+                {fmtDate(hoverInfo.date)}
+                <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 500, marginLeft: 8 }}>
+                  Net: <span style={{ color: hoverInfo.total >= 0 ? 'var(--danger)' : 'var(--accent)', fontWeight: 700 }}>{fmtCost(hoverInfo.total)}</span>
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {hoverInfo.allSegments.length === 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', fontStyle: 'italic' }}>No changes</div>
+                )}
+                {hoverInfo.allSegments.map((seg, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: 2, background: getGroupColor(seg.name), flexShrink: 0 }} />
+                    <span style={{ fontSize: 11, color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shortName(seg.name)}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: seg.value >= 0 ? 'var(--danger)' : 'var(--accent)', flexShrink: 0 }}>{fmtCost(seg.value)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           );
         })()}
@@ -727,18 +759,21 @@ function RGTrendsChart({ data, period, onPeriodChange }: {
         {groups.map((g, gi) => {
           const isHidden = hidden.has(g.name);
           const color = RG_COLORS[gi % RG_COLORS.length];
+          const isHovered = hoverGroup === g.name;
           return (
             <button key={gi} onClick={() => setHidden(prev => {
               const next = new Set(prev);
               next.has(g.name) ? next.delete(g.name) : next.add(g.name);
               return next;
             })} style={{
-              display: 'flex', alignItems: 'center', gap: 5, padding: '3px 9px',
-              borderRadius: 20, border: `1px solid ${isHidden ? 'var(--border)' : color + '55'}`,
-              background: isHidden ? 'transparent' : color + '15',
+              display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px',
+              borderRadius: 6, border: `1px solid ${isHidden ? 'var(--border)' : isHovered ? color : color + '55'}`,
+              background: isHidden ? 'transparent' : isHovered ? color + '30' : color + '15',
               cursor: 'pointer', opacity: isHidden ? 0.45 : 1, transition: 'all 0.15s'
-            }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: isHidden ? 'var(--text-3)' : color }} />
+            }}
+            onMouseEnter={() => setHoverGroup(g.name)}
+            onMouseLeave={() => setHoverGroup(null)}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: isHidden ? 'var(--text-3)' : color }} />
               <span style={{ fontSize: 11, fontWeight: 600, color: isHidden ? 'var(--text-3)' : 'var(--text-2)', whiteSpace: 'nowrap' }}>{shortName(g.name)}</span>
             </button>
           );
@@ -2950,6 +2985,10 @@ export default function App() {
   const dataSubIdsRef = useRef(dataSubIds);
   useEffect(() => { dataSubIdsRef.current = dataSubIds; }, [dataSubIds]);
 
+  // Azure authentication error state
+  const [azureAuthError, setAzureAuthError] = useState<string | null>(null);
+  const [dismissedAuthError, setDismissedAuthError] = useState(false);
+
 
   const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('cloudviz-search') || '');
   const [regionFilter, setRegionFilter] = useState<string[]>(() => {
@@ -5143,18 +5182,21 @@ export default function App() {
         )}
       </>
     ) },
-    { id: 'costAnomalies', render: () => (
+    { id: 'costAnomalies', render: () => {
+      const hasAnomalies = ((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0);
+      const anomalyCount = (anomalyData?.anomalies?.length ?? 0) + costAnomalies.length;
+      return (
       <>
-        {!costsLoading && dataSubIds.size === uniqueSubs.length && uniqueSubs.length > 0 && (
-          <div className="card" style={{ padding: 24, borderLeft: `4px solid ${((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'var(--danger)' : 'var(--text-3)'}`, background: ((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'linear-gradient(135deg, var(--bg-card) 0%, rgba(244 63 94 / 0.03) 100%)' : 'var(--bg-card)' }}>
+        {uniqueSubs.length > 0 && (
+          <div className="card" style={{ padding: 24, borderLeft: `4px solid ${hasAnomalies ? 'var(--danger)' : 'var(--text-3)'}`, background: hasAnomalies ? 'linear-gradient(135deg, var(--bg-card) 0%, rgba(244 63 94 / 0.03) 100%)' : 'var(--bg-card)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <div style={{ width: 28, height: 28, borderRadius: 6, background: ((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'var(--danger-dim)' : 'var(--bg-surface)', border: `1px solid ${((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'rgba(244 63 94 / 0.2)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) ? 'var(--danger)' : 'var(--text-3)'} strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
+              <div style={{ width: 28, height: 28, borderRadius: 6, background: hasAnomalies ? 'var(--danger-dim)' : 'var(--bg-surface)', border: `1px solid ${hasAnomalies ? 'rgba(244 63 94 / 0.2)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={hasAnomalies ? 'var(--danger)' : 'var(--text-3)'} strokeWidth="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
               </div>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Cost Anomalies Detected</span>
-              {((anomalyData?.anomalies?.length ?? 0) > 0 || costAnomalies.length > 0) && (
+              {hasAnomalies && (
                 <span style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 12, background: 'var(--danger-dim)', color: 'var(--danger)', fontSize: 11, fontWeight: 700 }}>
-                  {((anomalyData?.anomalies?.length ?? 0) || costAnomalies.length)} spike{((anomalyData?.anomalies?.length ?? 0) || costAnomalies.length) > 1 ? 's' : ''}
+                  {anomalyCount} spike{anomalyCount > 1 ? 's' : ''}
                 </span>
               )}
             </div>
@@ -5231,7 +5273,7 @@ export default function App() {
         )}
 
         {/* Enhanced ML-based Anomalies */}
-        {!costsLoading && dataSubIds.size === uniqueSubs.length && uniqueSubs.length > 0 && (
+        {uniqueSubs.length > 0 && (
           <div className="card" style={{ padding: 24, marginTop: 16, borderLeft: `4px solid ${(enhancedAnomalyData && (enhancedAnomalyData.anomalies?.length ?? 0) > 0) ? 'var(--accent)' : 'var(--text-3)'}`, background: (enhancedAnomalyData && (enhancedAnomalyData.anomalies?.length ?? 0) > 0) ? 'linear-gradient(135deg, var(--bg-card) 0%, rgba(16 185 129 / 0.03) 100%)' : 'var(--bg-card)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--accent-dim)', border: '1px solid rgba(16 185 129 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -5298,7 +5340,8 @@ export default function App() {
           </div>
         )}
       </>
-    ) },
+    );
+  } },
   ];
 
   // ── Fetch subscriptions first for immediate dropdown availability
@@ -5626,6 +5669,15 @@ export default function App() {
             }
             return next;
           });
+        } else if (msg.type === 'status') {
+          if (msg.message?.includes('error')) {
+            console.error('SSE status error for', msg.subId, ':', msg.message);
+            // Detect Azure authentication errors
+            const errorMsg = msg.message.toLowerCase();
+            if (errorMsg.includes('subscriptionnotfound') || errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('authentication') || errorMsg.includes('unauthorized')) {
+              setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
+            }
+          }
         } else if (msg.type === 'done') {
           clearTimeout(safetyTimeout);
           es.close();
@@ -7276,6 +7328,86 @@ export default function App() {
           {activeTab === 'dashboard' ? (
             /* ── Dashboard Tab ── */
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              {/* Azure Auth Error Banner */}
+              {azureAuthError && !dismissedAuthError && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 16,
+                  padding: '14px 18px',
+                  background: 'var(--danger-dim)',
+                  border: '1px solid rgba(244 63 94 / 0.3)',
+                  borderRadius: 12,
+                  borderLeft: '4px solid var(--danger)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 8,
+                      background: 'var(--danger)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                        <line x1="12" y1="9" x2="12" y2="13" />
+                        <line x1="12" y1="17" x2="12.01" y2="17" />
+                      </svg>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)', marginBottom: 2 }}>
+                        Azure Authentication Error
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                        {azureAuthError}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                    <button
+                      onClick={() => window.location.reload()}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: 'var(--danger)',
+                        color: 'white',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                      </svg>
+                      Refresh
+                    </button>
+                    <button
+                      onClick={() => setDismissedAuthError(true)}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        background: 'transparent',
+                        color: 'var(--text-2)',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Dashboard Header Actions */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', gap: 8 }}>

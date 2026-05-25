@@ -53,6 +53,7 @@ func newDBCache(dbPath string) (*dbCache, error) {
 		resource_group TEXT,
 		tags TEXT,
 		status TEXT,
+		managed_by TEXT,
 		fetched_at DATETIME
 	)`)
 	if err != nil {
@@ -144,6 +145,27 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if !hasResourceCost {
 		if _, err := db.Exec(`ALTER TABLE resource_history ADD COLUMN resource_cost REAL DEFAULT 0`); err != nil {
 			log.Printf("Warning: failed to add resource_cost column: %v", err)
+		}
+	}
+
+	// Add managed_by column to resources if missing
+	var hasManagedBy bool
+	if rows, err := db.Query("PRAGMA table_info(resources)"); err == nil {
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notNull, dfltValue, pk int
+			rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk)
+			if name == "managed_by" {
+				hasManagedBy = true
+				break
+			}
+		}
+		rows.Close()
+	}
+	if !hasManagedBy {
+		if _, err := db.Exec(`ALTER TABLE resources ADD COLUMN managed_by TEXT`); err != nil {
+			log.Printf("Warning: failed to add managed_by column: %v", err)
 		}
 	}
 
@@ -541,7 +563,7 @@ func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
 
 func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	now := time.Now()
-	rows, err := db.Query("SELECT id, name, type, location, subscription_id, resource_group, tags, status FROM resources")
+	rows, err := db.Query("SELECT id, name, type, location, subscription_id, resource_group, tags, status, managed_by FROM resources")
 	if err != nil {
 		log.Printf("Warning: failed to query resources: %v", err)
 		return
@@ -552,7 +574,7 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	for rows.Next() {
 		var r AzureResource
 		var tagsJSON string
-		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.Location, &r.SubscriptionID, &r.ResourceGroup, &tagsJSON, &r.Status); err == nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.Location, &r.SubscriptionID, &r.ResourceGroup, &tagsJSON, &r.Status, &r.ManagedBy); err == nil {
 			if tagsJSON != "" {
 				_ = json.Unmarshal([]byte(tagsJSON), &r.Tags)
 			}
@@ -677,7 +699,7 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 		log.Printf("Warning: failed to delete old resources: %v", err)
 	}
 
-	resourceStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, name, type, location, subscription_id, resource_group, tags, status, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+	resourceStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, name, type, location, subscription_id, resource_group, tags, status, managed_by, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		log.Printf("Error: failed to prepare resource statement: %v", err)
 		return
@@ -690,7 +712,7 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 			log.Printf("Warning: failed to marshal tags: %v", err)
 			tagsJSON = []byte("{}")
 		}
-		if _, err := resourceStmt.Exec(r.ID, r.Name, r.Type, r.Location, r.SubscriptionID, r.ResourceGroup, string(tagsJSON), r.Status, now); err != nil {
+		if _, err := resourceStmt.Exec(r.ID, r.Name, r.Type, r.Location, r.SubscriptionID, r.ResourceGroup, string(tagsJSON), r.Status, r.ManagedBy, now); err != nil {
 			log.Printf("Warning: failed to insert resource: %v", err)
 		}
 	}

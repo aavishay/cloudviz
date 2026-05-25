@@ -676,6 +676,7 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 				CreatedBy:      createdBy,
 				CreatedByType:  createdByType,
 				CreatedAt:      createdAt,
+				ManagedBy:      safeStr(m["managedBy"]),
 			})
 		}
 

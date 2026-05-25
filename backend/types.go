@@ -30,6 +30,7 @@ type AzureResource struct {
 	CreatedAt      time.Time         `json:"createdAt,omitempty"`      // Creation timestamp
 	LastModifiedBy string            `json:"lastModifiedBy,omitempty"` // Last modifier email/username
 	LastModifiedAt time.Time         `json:"lastModifiedAt,omitempty"`
+	ManagedBy      string            `json:"managedBy,omitempty"`      // Azure managedBy field (e.g., for disks attached to VMs)
 }
 
 type ResourceChange struct {
