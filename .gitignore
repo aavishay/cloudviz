@@ -40,4 +40,6 @@ Thumbs.db
 
 # Logs
 *.log
-logs/
+logs/*.db-shm
+*.db-wal
+cloudviz.db*
