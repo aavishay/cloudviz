@@ -57,7 +57,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.30.0"
+var Version = "1.31.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -463,6 +463,295 @@ func startServer(port string) {
 
 		c.JSON(200, results)
 		return
+	})
+
+	// Marketplace purchases endpoint - shows marketplace charges with dates
+	r.GET("/api/costs/marketplace", func(c *gin.Context) {
+		subs := c.QueryArray("subscriptionId")
+		period := c.Query("period")
+		if period == "" {
+			period = "30"
+		}
+		days := 30
+		fmt.Sscanf(period, "%d", &days)
+		if days <= 0 {
+			days = 30
+		}
+
+		now := time.Now()
+		start := now.AddDate(0, 0, -days)
+
+		type MarketplacePurchase struct {
+			Date           string  `json:"date"`
+			Cost           float64 `json:"cost"`
+			ResourceID     string  `json:"resourceId"`
+			ResourceName   string  `json:"resourceName"`
+			ResourceGroup  string  `json:"resourceGroup"`
+			Publisher      string  `json:"publisher"`
+			Product        string  `json:"product"`
+			SubscriptionID string  `json:"subscriptionId"`
+		}
+
+		var allPurchases []MarketplacePurchase
+		var mu sync.Mutex
+
+		// Add overall timeout for the request
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+		defer cancel()
+
+		// Fetch concurrently with worker pool to avoid rate limiting
+		const maxWorkers = 5
+		semaphore := make(chan struct{}, maxWorkers)
+		var wg sync.WaitGroup
+
+		for _, sid := range subs {
+			wg.Add(1)
+			semaphore <- struct{}{} // Acquire
+			go func(subscriptionID string) {
+				defer wg.Done()
+				defer func() { <-semaphore }() // Release
+
+				purchases, err := fetchMarketplacePurchases(costClient, subscriptionID, start, now, ctx)
+				if err != nil {
+					log.Printf("Error fetching marketplace purchases for %s: %v", subscriptionID, err)
+					return
+				}
+				mu.Lock()
+				for _, p := range purchases {
+					purchase := MarketplacePurchase{
+						SubscriptionID: subscriptionID,
+						Date:           safeStr(p["date"]),
+						Cost:           parseFloatVal(p["cost"]),
+						ResourceID:     safeStr(p["resourceId"]),
+						ResourceName:   safeStr(p["resourceName"]),
+						ResourceGroup:  safeStr(p["resourceGroup"]),
+						Publisher:      safeStr(p["publisher"]),
+						Product:        safeStr(p["product"]),
+					}
+					allPurchases = append(allPurchases, purchase)
+				}
+				mu.Unlock()
+			}(sid)
+		}
+		wg.Wait()
+
+		// Sort by date descending (newest first), then by cost descending
+		sort.Slice(allPurchases, func(i, j int) bool {
+			if allPurchases[i].Date != allPurchases[j].Date {
+				return allPurchases[i].Date > allPurchases[j].Date
+			}
+			return allPurchases[i].Cost > allPurchases[j].Cost
+		})
+
+		// Calculate summary statistics
+		totalCost := 0.0
+		purchaseCount := len(allPurchases)
+		byDate := make(map[string]float64)
+		byPublisher := make(map[string]float64)
+
+		for _, p := range allPurchases {
+			totalCost += p.Cost
+			byDate[p.Date] += p.Cost
+			if p.Publisher != "" {
+				byPublisher[p.Publisher] += p.Cost
+			}
+		}
+
+		// Find spike days (days with significantly higher costs)
+		var spikeDays []map[string]any
+		if len(byDate) > 0 {
+			// Calculate average daily cost
+			avgDaily := totalCost / float64(len(byDate))
+			for date, cost := range byDate {
+				if cost > avgDaily*2 && cost > 10 { // Spike if >2x average and >$10
+					spikeDays = append(spikeDays, map[string]any{
+						"date": date,
+						"cost": cost,
+						"ratio": cost / avgDaily,
+					})
+				}
+			}
+			// Sort spike days by date descending
+			sort.Slice(spikeDays, func(i, j int) bool {
+				return spikeDays[i]["date"].(string) > spikeDays[j]["date"].(string)
+			})
+		}
+
+		// Build summary by publisher
+		type PublisherSummary struct {
+			Name  string  `json:"name"`
+			Cost  float64 `json:"cost"`
+			Count int     `json:"count"`
+		}
+		publisherCounts := make(map[string]int)
+		for _, p := range allPurchases {
+			if p.Publisher != "" {
+				publisherCounts[p.Publisher]++
+			}
+		}
+		var publisherSummaries []PublisherSummary
+		publisherSummaries = make([]PublisherSummary, 0, len(byPublisher))
+		for pub, cost := range byPublisher {
+			publisherSummaries = append(publisherSummaries, PublisherSummary{
+				Name:  pub,
+				Cost:  cost,
+				Count: publisherCounts[pub],
+			})
+		}
+		sort.Slice(publisherSummaries, func(i, j int) bool {
+			return publisherSummaries[i].Cost > publisherSummaries[j].Cost
+		})
+
+		averageCost := 0.0
+		if purchaseCount > 0 {
+			averageCost = totalCost / float64(purchaseCount)
+		}
+		c.JSON(200, gin.H{
+			"purchases":        allPurchases,
+			"summary": gin.H{
+				"totalCost":      totalCost,
+				"count":          purchaseCount,
+				"averageCost":    averageCost,
+				"spikeDays":      spikeDays,
+				"byPublisher":    publisherSummaries,
+				"periodDays":     days,
+				"startDate":      start.Format("2006-01-02"),
+				"endDate":        now.Format("2006-01-02"),
+			},
+		})
+	})
+
+	// Commitment purchases endpoint - shows RI and Savings Plan purchases
+	r.GET("/api/costs/commitments", func(c *gin.Context) {
+		subs := c.QueryArray("subscriptionId")
+		period := c.Query("period")
+		if period == "" {
+			period = "90"
+		}
+		days := 90
+		fmt.Sscanf(period, "%d", &days)
+		if days <= 0 || days > 365 {
+			days = 90
+		}
+
+		now := time.Now()
+		start := now.AddDate(0, 0, -days)
+
+		type CommitmentPurchase struct {
+			Date           string  `json:"date"`
+			Cost           float64 `json:"cost"`
+			CommitmentType string  `json:"commitmentType"`
+			ResourceID     string  `json:"resourceId"`
+			ResourceName   string  `json:"resourceName"`
+			ResourceGroup  string  `json:"resourceGroup"`
+			Product        string  `json:"product"`
+			Category       string  `json:"category"`
+			SubCategory    string  `json:"subCategory"`
+			ChargeType     string  `json:"chargeType"`
+			SubscriptionID string  `json:"subscriptionId"`
+		}
+
+		var allPurchases []CommitmentPurchase
+		var mu sync.Mutex
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+		defer cancel()
+
+		const maxWorkers = 5
+		semaphore := make(chan struct{}, maxWorkers)
+		var wg sync.WaitGroup
+
+		for _, sid := range subs {
+			wg.Add(1)
+			semaphore <- struct{}{}
+			go func(subscriptionID string) {
+				defer wg.Done()
+				defer func() { <-semaphore }()
+
+				purchases, err := fetchCommitmentPurchases(costClient, subscriptionID, start, now, ctx)
+				if err != nil {
+					log.Printf("Error fetching commitment purchases for %s: %v", subscriptionID, err)
+					return
+				}
+				mu.Lock()
+				for _, p := range purchases {
+					purchase := CommitmentPurchase{
+						SubscriptionID: subscriptionID,
+						Date:           safeStr(p["date"]),
+						Cost:           parseFloatVal(p["cost"]),
+						CommitmentType: safeStr(p["commitmentType"]),
+						ResourceID:     safeStr(p["resourceId"]),
+						ResourceName:   safeStr(p["resourceName"]),
+						ResourceGroup:  safeStr(p["resourceGroup"]),
+						Product:        safeStr(p["product"]),
+						Category:       safeStr(p["category"]),
+						SubCategory:    safeStr(p["subCategory"]),
+						ChargeType:     safeStr(p["chargeType"]),
+					}
+					allPurchases = append(allPurchases, purchase)
+				}
+				mu.Unlock()
+			}(sid)
+		}
+		wg.Wait()
+
+		sort.Slice(allPurchases, func(i, j int) bool {
+			if allPurchases[i].Date != allPurchases[j].Date {
+				return allPurchases[i].Date > allPurchases[j].Date
+			}
+			return allPurchases[i].Cost > allPurchases[j].Cost
+		})
+
+		totalCost := 0.0
+		purchaseCount := len(allPurchases)
+		byType := make(map[string]float64)
+		for _, p := range allPurchases {
+			totalCost += p.Cost
+			if p.CommitmentType != "" {
+				byType[p.CommitmentType] += p.Cost
+			}
+		}
+
+		type TypeSummary struct {
+			Name  string  `json:"name"`
+			Cost  float64 `json:"cost"`
+			Count int     `json:"count"`
+		}
+		typeCounts := make(map[string]int)
+		for _, p := range allPurchases {
+			if p.CommitmentType != "" {
+				typeCounts[p.CommitmentType]++
+			}
+		}
+		var typeSummaries []TypeSummary
+		typeSummaries = make([]TypeSummary, 0, len(byType))
+		for t, cost := range byType {
+			typeSummaries = append(typeSummaries, TypeSummary{
+				Name:  t,
+				Cost:  cost,
+				Count: typeCounts[t],
+			})
+		}
+		sort.Slice(typeSummaries, func(i, j int) bool {
+			return typeSummaries[i].Cost > typeSummaries[j].Cost
+		})
+
+		averageCost := 0.0
+		if purchaseCount > 0 {
+			averageCost = totalCost / float64(purchaseCount)
+		}
+		c.JSON(200, gin.H{
+			"purchases":        allPurchases,
+			"summary": gin.H{
+				"totalCost":   totalCost,
+				"count":       purchaseCount,
+				"averageCost": averageCost,
+				"byType":      typeSummaries,
+				"periodDays":  days,
+				"startDate":   start.Format("2006-01-02"),
+				"endDate":     now.Format("2006-01-02"),
+			},
+		})
 	})
 
 	// Cost anomaly detection endpoint

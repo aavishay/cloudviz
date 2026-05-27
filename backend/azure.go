@@ -1890,7 +1890,356 @@ func findUserForChange(activityLogs map[string][]ActivityLogEvent, resourceID st
 	return "Unknown"
 }
 
-// fetchSubscriptionNames fetches subscription names from Azure Resource Graph
+// fetchMarketplacePurchases queries Azure Cost Management for marketplace purchases with dates
+func fetchMarketplacePurchases(client *armcostmanagement.QueryClient, sid string, start, end time.Time, ctx context.Context) ([]map[string]any, error) {
+	scope := "subscriptions/" + sid
+	props := armcostmanagement.QueryDefinition{
+		Type: to.Ptr(armcostmanagement.ExportTypeActualCost),
+		Dataset: &armcostmanagement.QueryDataset{
+			Aggregation: map[string]*armcostmanagement.QueryAggregation{
+				"totalCost": {Name: to.Ptr("PreTaxCost"), Function: to.Ptr(armcostmanagement.FunctionTypeSum)},
+			},
+			Grouping: []*armcostmanagement.QueryGrouping{
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ResourceId")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ResourceGroup")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("PublisherType")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("PublisherName")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("Product")},
+			},
+			Granularity: to.Ptr(armcostmanagement.GranularityTypeDaily),
+			Filter: &armcostmanagement.QueryFilter{
+				Dimensions: &armcostmanagement.QueryComparisonExpression{
+					Name:     to.Ptr("PublisherType"),
+					Operator: to.Ptr(armcostmanagement.QueryOperatorTypeIn),
+					Values:   []*string{to.Ptr("Marketplace")},
+				},
+			},
+		},
+		Timeframe:  to.Ptr(armcostmanagement.TimeframeTypeCustom),
+		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
+	}
+
+	return retryAfter429(ctx, sid, func() ([]map[string]any, error) {
+		res, err := client.Usage(ctx, scope, props, nil)
+		if err != nil {
+			return nil, err
+		}
+		return parseMarketplaceResults(res.QueryResult), nil
+	})
+}
+
+// fetchCommitmentPurchases queries Azure Cost Management for RI and Savings Plan purchases
+func fetchCommitmentPurchases(client *armcostmanagement.QueryClient, sid string, start, end time.Time, ctx context.Context) ([]map[string]any, error) {
+	scope := "subscriptions/" + sid
+	props := armcostmanagement.QueryDefinition{
+		Type: to.Ptr(armcostmanagement.ExportTypeActualCost),
+		Dataset: &armcostmanagement.QueryDataset{
+			Aggregation: map[string]*armcostmanagement.QueryAggregation{
+				"totalCost": {Name: to.Ptr("PreTaxCost"), Function: to.Ptr(armcostmanagement.FunctionTypeSum)},
+			},
+			Grouping: []*armcostmanagement.QueryGrouping{
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ResourceId")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("MeterCategory")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("MeterSubcategory")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ChargeType")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ReservationName")},
+				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("BenefitName")},
+			},
+			Granularity: to.Ptr(armcostmanagement.GranularityTypeDaily),
+			// No filter - we'll identify commitments by MeterCategory/Subcategory in parsing
+		},
+		Timeframe:  to.Ptr(armcostmanagement.TimeframeTypeCustom),
+		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
+	}
+
+	return retryAfter429(ctx, sid, func() ([]map[string]any, error) {
+		res, err := client.Usage(ctx, scope, props, nil)
+		if err != nil {
+			return nil, err
+		}
+		return parseCommitmentResults(res.QueryResult), nil
+	})
+}
+
+func parseCommitmentResults(res armcostmanagement.QueryResult) []map[string]any {
+	if res.Properties == nil || res.Properties.Rows == nil {
+		return nil
+	}
+
+	rows := res.Properties.Rows
+	results := make([]map[string]any, 0, len(rows))
+	colCost, colDate, colResourceID, colCategory, colSubCategory, colChargeType, colResName, colBenName := -1, -1, -1, -1, -1, -1, -1, -1
+
+	if res.Properties.Columns != nil {
+		for i, col := range res.Properties.Columns {
+			if col.Name == nil {
+				continue
+			}
+			name := strings.ToLower(*col.Name)
+			if strings.Contains(name, "date") || strings.Contains(name, "usage") {
+				colDate = i
+			}
+			if strings.Contains(name, "cost") || strings.Contains(name, "pretax") {
+				colCost = i
+			}
+			if strings.Contains(name, "resourceid") || strings.Contains(name, "resource_id") {
+				colResourceID = i
+			}
+			if strings.Contains(name, "metercategory") || strings.Contains(name, "category") {
+				colCategory = i
+			}
+			if strings.Contains(name, "metersubcategory") || strings.Contains(name, "subcategory") {
+				colSubCategory = i
+			}
+			if strings.Contains(name, "chargetype") || strings.Contains(name, "charge_type") {
+				colChargeType = i
+			}
+			if strings.Contains(name, "reservationname") {
+				colResName = i
+			}
+			if strings.Contains(name, "benefitname") {
+				colBenName = i
+			}
+		}
+	}
+
+	// Validate column indices
+	if colCost < 0 || colDate < 0 {
+		log.Printf("Warning: Could not detect cost/date columns (cost=%d, date=%d)", colCost, colDate)
+		return nil
+	}
+
+	for _, row := range rows {
+		if len(row) <= colCost || len(row) <= colDate {
+			continue
+		}
+
+		dateVal := fmt.Sprintf("%v", row[colDate])
+		costVal := row[colCost]
+		cost := parseFloatVal(costVal)
+
+		// Only include non-zero costs
+		if cost <= 0 {
+			continue
+		}
+
+		// Check if this is a commitment-related charge
+		isCommitment := false
+		commitmentType := ""
+		product := ""
+
+		// Check MeterCategory for RI/SP indicators
+		if colCategory >= 0 && colCategory < len(row) {
+			category := strings.ToLower(fmt.Sprintf("%v", row[colCategory]))
+			if strings.Contains(category, "reservation") || strings.Contains(category, "reserved") {
+				isCommitment = true
+				commitmentType = "Reserved Instance"
+				product = category
+			} else if strings.Contains(category, "savings plan") || strings.Contains(category, "savingsplan") {
+				isCommitment = true
+				commitmentType = "Savings Plan"
+				product = category
+			}
+		}
+
+		// Check MeterSubcategory
+		if !isCommitment && colSubCategory >= 0 && colSubCategory < len(row) {
+			subCategory := strings.ToLower(fmt.Sprintf("%v", row[colSubCategory]))
+			if strings.Contains(subCategory, "reservation") || strings.Contains(subCategory, "reserved") {
+				isCommitment = true
+				commitmentType = "Reserved Instance"
+				product = subCategory
+			} else if strings.Contains(subCategory, "savings plan") || strings.Contains(subCategory, "savingsplan") {
+				isCommitment = true
+				commitmentType = "Savings Plan"
+				product = subCategory
+			}
+		}
+
+		// Check ReservationName
+		if !isCommitment && colResName >= 0 && colResName < len(row) {
+			resName := fmt.Sprintf("%v", row[colResName])
+			if resName != "" && resName != "<nil>" {
+				isCommitment = true
+				commitmentType = "Reserved Instance"
+				product = resName
+			}
+		}
+
+		// Check BenefitName (for Savings Plans)
+		if !isCommitment && colBenName >= 0 && colBenName < len(row) {
+			benName := fmt.Sprintf("%v", row[colBenName])
+			if benName != "" && benName != "<nil>" {
+				isCommitment = true
+				commitmentType = "Savings Plan"
+				product = benName
+			}
+		}
+
+		// For Purchase charges, also include significant costs (> $100) as potential commitments
+		// if they haven't been filtered yet - this catches edge cases
+		if !isCommitment && cost > 100 {
+			if colCategory >= 0 && colCategory < len(row) {
+				category := strings.ToLower(fmt.Sprintf("%v", row[colCategory]))
+				// Broad category matching for commitment-related purchases
+				if strings.Contains(category, "reserved") || strings.Contains(category, "savings") ||
+				   strings.Contains(category, "commitment") || strings.Contains(category, "prepay") {
+					isCommitment = true
+					commitmentType = "Commitment"
+					product = category
+				}
+			}
+		}
+
+		// For commitment purchases, we want ChargeType = "Purchase"
+		// Skip if it's not a purchase (e.g., recurring usage charges)
+		if colChargeType >= 0 && colChargeType < len(row) {
+			chargeType := strings.ToLower(fmt.Sprintf("%v", row[colChargeType]))
+			if chargeType != "purchase" {
+				isCommitment = false
+			}
+		}
+
+		if !isCommitment {
+			continue
+		}
+
+		// Parse date
+		dateStr := parseAzureDate(dateVal)
+
+		purchase := map[string]any{
+			"date":           dateStr,
+			"cost":           cost,
+			"commitmentType": commitmentType,
+			"product":        product,
+		}
+
+		if colResourceID >= 0 && colResourceID < len(row) {
+			resourceID := fmt.Sprintf("%v", row[colResourceID])
+			purchase["resourceId"] = resourceID
+			if idx := strings.LastIndex(resourceID, "/"); idx >= 0 {
+				purchase["resourceName"] = resourceID[idx+1:]
+			}
+			// Extract resource group from resource ID
+			if parts := strings.Split(resourceID, "/"); len(parts) >= 5 {
+				for i, p := range parts {
+					if strings.EqualFold(p, "resourceGroups") && i+1 < len(parts) {
+						purchase["resourceGroup"] = parts[i+1]
+						break
+					}
+				}
+			}
+		}
+
+		if colCategory >= 0 && colCategory < len(row) {
+			purchase["category"] = fmt.Sprintf("%v", row[colCategory])
+		}
+
+		if colSubCategory >= 0 && colSubCategory < len(row) {
+			purchase["subCategory"] = fmt.Sprintf("%v", row[colSubCategory])
+		}
+
+		if colChargeType >= 0 && colChargeType < len(row) {
+			purchase["chargeType"] = fmt.Sprintf("%v", row[colChargeType])
+		}
+
+		results = append(results, purchase)
+	}
+
+	return results
+}
+
+func parseMarketplaceResults(res armcostmanagement.QueryResult) []map[string]any {
+	if res.Properties == nil || res.Properties.Rows == nil {
+		return nil
+	}
+
+	rows := res.Properties.Rows
+	results := make([]map[string]any, 0, len(rows))
+	colCost, colDate, colResourceID, colResourceGroup, colPublisher, colProduct := -1, -1, -1, -1, -1, -1
+
+	if res.Properties.Columns != nil {
+		for i, col := range res.Properties.Columns {
+			if col.Name == nil {
+				continue
+			}
+			name := strings.ToLower(*col.Name)
+			if strings.Contains(name, "date") || strings.Contains(name, "usage") {
+				colDate = i
+			}
+			if strings.Contains(name, "cost") || strings.Contains(name, "pretax") {
+				colCost = i
+			}
+			if strings.Contains(name, "resourceid") || strings.Contains(name, "resource_id") {
+				colResourceID = i
+			}
+			if strings.Contains(name, "resourcegroup") || strings.Contains(name, "resource_group") {
+				colResourceGroup = i
+			}
+			if strings.Contains(name, "publishername") || strings.Contains(name, "publisher") {
+				colPublisher = i
+			}
+			if strings.Contains(name, "product") {
+				colProduct = i
+			}
+		}
+	}
+
+	// Validate column indices
+	if colCost < 0 || colDate < 0 {
+		log.Printf("Warning: Could not detect cost/date columns (cost=%d, date=%d)", colCost, colDate)
+		return nil
+	}
+
+	for _, row := range rows {
+		if len(row) <= colCost || len(row) <= colDate {
+			continue
+		}
+
+		dateVal := fmt.Sprintf("%v", row[colDate])
+		costVal := row[colCost]
+		cost := parseFloatVal(costVal)
+
+		// Only include non-zero costs
+		if cost <= 0 {
+			continue
+		}
+
+		// Parse date
+		dateStr := parseAzureDate(dateVal)
+
+		purchase := map[string]any{
+			"date": dateStr,
+			"cost": cost,
+		}
+
+		if colResourceID >= 0 && colResourceID < len(row) {
+			resourceID := fmt.Sprintf("%v", row[colResourceID])
+			purchase["resourceId"] = resourceID
+			// Extract resource name from ID
+			if idx := strings.LastIndex(resourceID, "/"); idx >= 0 {
+				purchase["resourceName"] = resourceID[idx+1:]
+			}
+		}
+
+		if colResourceGroup >= 0 && colResourceGroup < len(row) {
+			purchase["resourceGroup"] = fmt.Sprintf("%v", row[colResourceGroup])
+		}
+
+		if colPublisher >= 0 && colPublisher < len(row) {
+			purchase["publisher"] = fmt.Sprintf("%v", row[colPublisher])
+		}
+
+		if colProduct >= 0 && colProduct < len(row) {
+			purchase["product"] = fmt.Sprintf("%v", row[colProduct])
+		}
+
+		results = append(results, purchase)
+	}
+
+	return results
+}
+
 func fetchSubscriptionNames(ctx context.Context, subIDs []string) map[string]string {
 	result := make(map[string]string)
 	if len(subIDs) == 0 {
