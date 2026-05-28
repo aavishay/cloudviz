@@ -57,7 +57,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.32.1"
+var Version = "1.32.2"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -4173,10 +4173,10 @@ func sseHandler(c *gin.Context) {
 		}
 		log.Printf("SSE: %d cached, %d uncached subscriptions", cachedCount, len(uncached))
 
-		// Fetch uncached subs in parallel batches of 4.
+		// Fetch uncached subs in parallel batches of 2 (reduced from 4 to avoid rate limits).
 		// Each sub gets up to 2 minutes to handle internal 429 retries.
 		if len(uncached) > 0 {
-			const batchSize = 4
+			const batchSize = 2
 			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
 				// Check if client disconnected before starting batch
 				select {
@@ -4201,19 +4201,12 @@ func sseHandler(c *gin.Context) {
 						// Reduced timeout from 5 minutes to 2 minutes
 						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 
-						// Fetch current and previous periods concurrently
+						// Fetch current period first, then previous (sequential to reduce rate limit pressure)
 						var currErr, prevErr error
-						var fetchWg sync.WaitGroup
-						fetchWg.Add(2)
-						go func() {
-							defer fetchWg.Done()
-							_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
-						}()
-						go func() {
-							defer fetchWg.Done()
-							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), ctx)
-						}()
-						fetchWg.Wait()
+						_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
+						// Small delay between current and previous to avoid rate limits
+						time.Sleep(500 * time.Millisecond)
+						_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), ctx)
 						cancel()
 
 						// Log any errors but don't fail if current succeeds
@@ -4264,6 +4257,10 @@ func sseHandler(c *gin.Context) {
 					}(subID)
 				}
 				wg.Wait()
+				// Delay between batches to respect Azure rate limits (2 req/s with burst)
+				if batchStart+batchSize < len(uncached) {
+					time.Sleep(2 * time.Second)
+				}
 			}
 		}
 		log.Printf("SSE: sending done message")
