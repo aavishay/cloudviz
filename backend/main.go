@@ -57,7 +57,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.31.0"
+var Version = "1.32.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -145,7 +145,7 @@ func main() {
 			now := time.Now()
 			start := now.AddDate(0, 0, -30)
 
-			res, err := fetchSubCostsSync(costClient, subID, "current", start, context.Background())
+			res, err := fetchSubCostsSync(costClient, subID, CostPeriodCurrent, start, context.Background())
 			if err != nil {
 				log.Fatalf("Error: %v", err)
 			}
@@ -4179,11 +4179,11 @@ func sseHandler(c *gin.Context) {
 						fetchWg.Add(2)
 						go func() {
 							defer fetchWg.Done()
-							_, currErr = fetchSubCostsSync(costClient, sid, "current", now.AddDate(0, 0, -30), ctx)
+							_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
 						}()
 						go func() {
 							defer fetchWg.Done()
-							_, prevErr = fetchSubCostsSync(costClient, sid, "previous", now.AddDate(0, 0, -60), ctx)
+							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), ctx)
 						}()
 						fetchWg.Wait()
 						cancel()
@@ -4275,7 +4275,7 @@ func backgroundSync(client *armcostmanagement.QueryClient) {
 		log.Printf("Background sync: fetching %s (%d/%d)", sid, i+1, len(subs))
 		now := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		_, err := fetchSubCostsSync(client, sid, "current", now.AddDate(0, 0, -30), ctx)
+		_, err := fetchSubCostsSync(client, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
 		cancel()
 
 		if err != nil {

@@ -2,6 +2,14 @@ package main
 
 import "time"
 
+// CostPeriod represents a cost reporting period type
+type CostPeriod string
+
+const (
+	CostPeriodCurrent  CostPeriod = "current"
+	CostPeriodPrevious CostPeriod = "previous"
+)
+
 // Subscription represents an Azure subscription with its metadata
 type Subscription struct {
 	ID          string `json:"id"`

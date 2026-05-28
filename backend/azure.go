@@ -332,10 +332,17 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 	return zero, fmt.Errorf("max retries exceeded for %s", logCtx)
 }
 
-func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p string, start time.Time, ctx context.Context) (*armcostmanagement.QueryClientUsageResponse, error) {
+func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, period CostPeriod, start time.Time, ctx context.Context) (*armcostmanagement.QueryClientUsageResponse, error) {
 	scope := "subscriptions/" + sid
+
+	now := time.Now()
+	end := now
+	if period == CostPeriodPrevious {
+		end = now.AddDate(0, 0, -30)
+	}
+
 	props := armcostmanagement.QueryDefinition{
-		Type: to.Ptr(armcostmanagement.ExportTypeActualCost),
+		Type: to.Ptr(armcostmanagement.ExportTypeAmortizedCost),
 		Dataset: &armcostmanagement.QueryDataset{
 			Aggregation: map[string]*armcostmanagement.QueryAggregation{
 				"totalCost": {Name: to.Ptr("PreTaxCost"), Function: to.Ptr(armcostmanagement.FunctionTypeSum)},
@@ -348,17 +355,17 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, p stri
 			},
 		},
 		Timeframe:  to.Ptr(armcostmanagement.TimeframeTypeCustom),
-		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(time.Now())},
+		TimePeriod: &armcostmanagement.QueryTimePeriod{From: to.Ptr(start), To: to.Ptr(end)},
 	}
 
-	logCtx := fmt.Sprintf("%s/%s", sid, p)
+	logCtx := fmt.Sprintf("%s/%s", sid, period)
 	res, err := retryAfter429(ctx, logCtx, func() (armcostmanagement.QueryClientUsageResponse, error) {
 		return client.Usage(ctx, scope, props, nil)
 	})
 	if err != nil {
 		return nil, err
 	}
-	cache.set(sid, p, res.QueryResult)
+	cache.set(sid, string(period), res.QueryResult)
 	return &res, nil
 }
 
