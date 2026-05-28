@@ -57,7 +57,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.32.0"
+var Version = "1.32.1"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -4131,7 +4131,11 @@ func sseHandler(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
-	msgChan := make(chan streamMsg, len(subs)*4) // Larger buffer to prevent blocking
+	// Get client context for cancellation detection
+	clientCtx := c.Request.Context()
+
+	// Larger buffer to prevent blocking; use select with timeout on sends
+	msgChan := make(chan streamMsg, len(subs)*10)
 	go func() {
 		defer close(msgChan)
 		var uncached []string
@@ -4146,8 +4150,23 @@ func sseHandler(c *gin.Context) {
 				if ok2 {
 					data["previous"] = normalizeResults(prev)
 				}
-				msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}
-				msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
+				// Send with timeout and context check
+				select {
+				case msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}:
+				case <-clientCtx.Done():
+					log.Printf("SSE: client disconnected during cached data send")
+					return
+				case <-time.After(5 * time.Second):
+					log.Printf("SSE: timeout sending cached data for %s", sid)
+				}
+				select {
+				case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
+				case <-clientCtx.Done():
+					log.Printf("SSE: client disconnected during cached status send")
+					return
+				case <-time.After(5 * time.Second):
+					log.Printf("SSE: timeout sending cached status for %s", sid)
+				}
 			} else {
 				uncached = append(uncached, sid)
 			}
@@ -4155,10 +4174,18 @@ func sseHandler(c *gin.Context) {
 		log.Printf("SSE: %d cached, %d uncached subscriptions", cachedCount, len(uncached))
 
 		// Fetch uncached subs in parallel batches of 4.
-		// Each sub gets up to 5 minutes to handle internal 429 retries.
+		// Each sub gets up to 2 minutes to handle internal 429 retries.
 		if len(uncached) > 0 {
 			const batchSize = 4
 			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
+				// Check if client disconnected before starting batch
+				select {
+				case <-clientCtx.Done():
+					log.Printf("SSE: client disconnected before batch %d", batchStart)
+					return
+				default:
+				}
+
 				end := batchStart + batchSize
 				if end > len(uncached) {
 					end = len(uncached)
@@ -4171,7 +4198,8 @@ func sseHandler(c *gin.Context) {
 						defer wg.Done()
 						log.Printf("SSE: fetching sub %d/%d: %s", batchStart+1, len(uncached), sid)
 						now := time.Now()
-						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+						// Reduced timeout from 5 minutes to 2 minutes
+						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 
 						// Fetch current and previous periods concurrently
 						var currErr, prevErr error
@@ -4191,11 +4219,23 @@ func sseHandler(c *gin.Context) {
 						// Log any errors but don't fail if current succeeds
 						if currErr != nil {
 							log.Printf("SSE: error fetching current %s: %v", sid, currErr)
-							msgChan <- streamMsg{Type: "status", SubID: sid, Message: "error: " + currErr.Error()}
+							select {
+							case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "error: " + currErr.Error()}:
+							case <-clientCtx.Done():
+								log.Printf("SSE: client disconnected during error send")
+							case <-time.After(5 * time.Second):
+								log.Printf("SSE: timeout sending error status for %s", sid)
+							}
 							return
 						}
 						if prevErr != nil {
 							log.Printf("SSE: error fetching previous %s: %v", sid, prevErr)
+							// Send warning but continue
+							select {
+							case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "warning: previous period unavailable"}:
+							case <-clientCtx.Done():
+							case <-time.After(3 * time.Second):
+							}
 						}
 
 						data := gin.H{}
@@ -4205,19 +4245,39 @@ func sseHandler(c *gin.Context) {
 						if res, ok := cache.get(sid, "previous"); ok {
 							data["previous"] = normalizeResults(res)
 						}
-						msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}
-						msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}
+						select {
+						case msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}:
+						case <-clientCtx.Done():
+							log.Printf("SSE: client disconnected during data send")
+							return
+						case <-time.After(5 * time.Second):
+							log.Printf("SSE: timeout sending data for %s", sid)
+						}
+						select {
+						case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
+						case <-clientCtx.Done():
+							log.Printf("SSE: client disconnected during status send")
+							return
+						case <-time.After(5 * time.Second):
+							log.Printf("SSE: timeout sending status for %s", sid)
+						}
 					}(subID)
 				}
 				wg.Wait()
 			}
 		}
 		log.Printf("SSE: sending done message")
-		msgChan <- streamMsg{Type: "done"}
+		select {
+		case msgChan <- streamMsg{Type: "done"}:
+		case <-clientCtx.Done():
+			log.Printf("SSE: client disconnected before sending done")
+		case <-time.After(5 * time.Second):
+			log.Printf("SSE: timeout sending done message")
+		}
 	}()
 
-	// Keep-alive ticker to prevent connection timeouts
-	keepAlive := time.NewTicker(5 * time.Second)
+	// Keep-alive ticker to prevent connection timeouts - more frequent to keep connection alive
+	keepAlive := time.NewTicker(2 * time.Second)
 	defer keepAlive.Stop()
 
 	clientDisconnected := c.Request.Context().Done()
