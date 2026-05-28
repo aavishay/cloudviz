@@ -4265,29 +4265,42 @@ func backgroundSync(client *armcostmanagement.QueryClient) {
 	}
 	log.Printf("Background sync: found %d subscriptions", len(subs))
 
-	// Fetch costs for each subscription
+	// Process subscriptions concurrently with worker pool
+	const maxWorkers = 3
+	sem := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
+
 	for i, sid := range subs {
 		// Check if already cached
 		if _, ok := cache.get(sid, "current"); ok {
 			continue
 		}
 
-		log.Printf("Background sync: fetching %s (%d/%d)", sid, i+1, len(subs))
-		now := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		_, err := fetchSubCostsSync(client, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
-		cancel()
+		wg.Add(1)
+		sem <- struct{}{}
 
-		if err != nil {
-			log.Printf("Background sync: failed for %s: %v", sid, err)
-		} else {
-			log.Printf("Background sync: completed %s", sid)
-		}
+		go func(subscriptionID string, idx int) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		// Sleep to avoid rate limits - Azure is very strict
-		time.Sleep(30 * time.Second)
+			log.Printf("Background sync: fetching %s (%d/%d)", subscriptionID, idx+1, len(subs))
+
+			// Timeout accounts for max retry backoff (150s) + API call time
+			ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+			defer cancel()
+
+			now := time.Now()
+			_, err := fetchSubCostsSync(client, subscriptionID, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
+
+			if err != nil {
+				log.Printf("Background sync: failed for %s: %v", subscriptionID, err)
+			} else {
+				log.Printf("Background sync: completed %s", subscriptionID)
+			}
+		}(sid, i)
 	}
 
+	wg.Wait()
 	log.Println("Background sync: completed")
 }
 
