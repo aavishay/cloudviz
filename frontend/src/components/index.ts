@@ -62,4 +62,16 @@ export type {
 
 // Views
 export { WasteView } from './WasteView';
+export { HistoryView } from './HistoryView';
+export { AIInsightsModal } from './AIInsightsModal';
+export { DependencyGraphModal } from './DependencyGraphModal';
 export { RGTrendsChart } from './RGTrendsChart';
+
+// Navigation
+export { Sidebar } from './Sidebar';
+
+// Error Handling
+export { ErrorBoundary } from './ErrorBoundary';
+
+// Constants
+export { STORAGE_KEYS, API_ENDPOINTS, DEFAULTS, CHART_COLORS, RESOURCE_TYPE_COLORS, EFFICIENCY_THRESHOLDS } from './constants';

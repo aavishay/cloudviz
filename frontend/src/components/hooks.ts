@@ -177,3 +177,12 @@ export function useInterval(callback: () => void, delay: number | null): void {
     return () => clearInterval(id);
   }, [delay]);
 }
+
+// Re-export domain-specific hooks
+export { useResources } from './hooks/useResources';
+export { useCosts } from './hooks/useCosts';
+export { useSelection } from './hooks/useSelection';
+export { useFavorites } from './hooks/useFavorites';
+export { useFilters } from './hooks/useFilters';
+export { useSorting } from './hooks/useSorting';
+export { usePagination } from './hooks/usePagination';

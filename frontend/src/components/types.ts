@@ -76,16 +76,22 @@ export interface ResourceDependency {
   id: string;
   name: string;
   type: string;
-  subscriptionId: string;
-  resourceGroup: string;
-  location: string;
+  subscriptionId?: string;
+  resourceGroup?: string;
+  location?: string;
+  relationship?: string;
+  direction?: 'inbound' | 'outbound';
+  properties?: Record<string, any>;
 }
 
 export interface DependencyGraph {
-  root: ResourceDependency;
-  parents: ResourceDependency[];
-  children: ResourceDependency[];
-  peers: ResourceDependency[];
+  resourceId: string;
+  resourceName: string;
+  resourceType: string;
+  dependencies: ResourceDependency[];
+  dependents: ResourceDependency[];
+  relationships: number;
+  generatedAt: string;
 }
 
 // ─── Sort Configuration ───────────────────────────────────────────────────────
