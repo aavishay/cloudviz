@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -220,8 +222,13 @@ func parseFloatVal(v any) float64 {
 	case int:
 		return float64(val)
 	case string:
-		var f float64
-		fmt.Sscanf(val, "%f", &f)
+		if val == "" {
+			return 0
+		}
+		f, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return math.NaN()
+		}
 		return f
 	default:
 		return 0
@@ -1096,7 +1103,10 @@ func calculateMetricsStats(metrics map[string][]float64) MetricsSummary {
 			sum += v
 		}
 
-		p95Index := int(float64(len(sorted)) * 0.95)
+		p95Index := int(math.Ceil(float64(len(sorted))*0.95)) - 1
+		if p95Index < 0 {
+			p95Index = 0
+		}
 		if p95Index >= len(sorted) {
 			p95Index = len(sorted) - 1
 		}

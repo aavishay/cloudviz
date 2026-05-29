@@ -1188,7 +1188,10 @@ func startServer(port string) {
 				}
 
 				cache.db.QueryRow(q, args...).Scan(&currentSpend)
-				pct := (currentSpend / budgetAmount) * 100
+				pct := 0.0
+				if budgetAmount > 0 {
+					pct = (currentSpend / budgetAmount) * 100
+				}
 				status := "ok"
 				if pct >= 100 {
 					status = "exceeded"
@@ -2127,6 +2130,12 @@ func startServer(port string) {
 		var deltaPct, deltaAbs float64
 		if previousTotal > 0 {
 			deltaPct = ((currentTotal - previousTotal) / previousTotal) * 100
+			if deltaPct > 1000 {
+				deltaPct = 1000
+			}
+			if deltaPct < -1000 {
+				deltaPct = -1000
+			}
 			deltaAbs = currentTotal - previousTotal
 		}
 
@@ -3094,6 +3103,12 @@ func startServer(port string) {
 				changePercent := 0.0
 				if previousCost > 0 {
 					changePercent = (change / previousCost) * 100
+					if changePercent > 1000 {
+						changePercent = 1000
+					}
+					if changePercent < -1000 {
+						changePercent = -1000
+					}
 				}
 
 				// Get day-by-day cost data for current month
@@ -3274,6 +3289,12 @@ func startServer(port string) {
 				changePercent := 0.0
 				if previousCost > 0 {
 					changePercent = (change / previousCost) * 100
+					if changePercent > 1000 {
+						changePercent = 1000
+					}
+					if changePercent < -1000 {
+						changePercent = -1000
+					}
 				}
 
 				var changeType string
@@ -6283,8 +6304,10 @@ func buildBudgetTracking(totalCurrentCost float64, rgReports []ResourceGroupCost
 	var rgBudgets []ResourceGroupBudget
 	for _, rg := range rgReports {
 		// Estimate RG budget based on proportion of total
-		rgBudget := budgetAmount * (rg.CurrentMonthCost / totalCurrentCost)
-		if totalCurrentCost == 0 {
+		rgBudget := 0.0
+		if totalCurrentCost > 0 {
+			rgBudget = budgetAmount * (rg.CurrentMonthCost / totalCurrentCost)
+		} else if len(rgReports) > 0 {
 			rgBudget = budgetAmount / float64(len(rgReports))
 		}
 
@@ -7349,6 +7372,13 @@ func buildExportData(rgReports []ResourceGroupCostReport, trendReports []CostTre
 }
 
 // buildColorIndicators creates color-coded visual indicators
+func safePct(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
+}
+
 func buildColorIndicators(totalCurrentCost, totalPreviousCost, budgetLimit float64, rgReports []ResourceGroupCostReport) ColorIndicators {
 	// Calculate overall health score
 	costChangePercent := 0.0
@@ -7457,9 +7487,9 @@ func buildColorIndicators(totalCurrentCost, totalPreviousCost, budgetLimit float
 			Status:    costStatus,
 			Color:     costStatusColor,
 			ProgressBar: ProgressInfo{
-				Percentage: math.Min(costChangePercent, 100),
+				Percentage: math.Min(safePct(costChangePercent), 100),
 				Color:      costStatusColor,
-				Width:      fmt.Sprintf("%.0f%%", math.Min(costChangePercent, 100)),
+				Width:      fmt.Sprintf("%.0f%%", math.Min(safePct(costChangePercent), 100)),
 			},
 		},
 		BudgetStatus: StatusIndicator{
@@ -7468,9 +7498,9 @@ func buildColorIndicators(totalCurrentCost, totalPreviousCost, budgetLimit float
 			Status:    budgetStatus,
 			Color:     budgetColor,
 			ProgressBar: ProgressInfo{
-				Percentage: math.Min(budgetPct, 100),
+				Percentage: math.Min(safePct(budgetPct), 100),
 				Color:      budgetColor,
-				Width:      fmt.Sprintf("%.0f%%", math.Min(budgetPct, 100)),
+				Width:      fmt.Sprintf("%.0f%%", math.Min(safePct(budgetPct), 100)),
 			},
 		},
 		EfficiencyStatus: StatusIndicator{

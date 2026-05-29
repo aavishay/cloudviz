@@ -261,17 +261,18 @@ const Sparkline = ({ data }: { data: number[] }) => {
 // ─── Score ring ───────────────────────────────────────────────────────────────
 
 const ScoreRing = ({ score }: { score: number }) => {
+  const clampedScore = typeof score === 'number' && Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0;
   const r = 12, circ = 2 * Math.PI * r;
-  const color = score >= 80 ? 'var(--accent)' : score >= 50 ? 'var(--warning)' : 'var(--danger)';
-  const glowColor = score >= 80 ? 'rgba(16 185 129 / 0.4)' : score >= 50 ? 'rgba(245 158 11 / 0.4)' : 'rgba(244 63 94 / 0.4)';
+  const color = clampedScore >= 80 ? 'var(--accent)' : clampedScore >= 50 ? 'var(--warning)' : 'var(--danger)';
+  const glowColor = clampedScore >= 80 ? 'rgba(16 185 129 / 0.4)' : clampedScore >= 50 ? 'rgba(245 158 11 / 0.4)' : 'rgba(244 63 94 / 0.4)';
   return (
     <svg width={30} height={30} className="score-ring" style={{ flexShrink: 0, filter: `drop-shadow(0 0 4px ${glowColor})` }}>
       <circle cx={15} cy={15} r={r} fill="none" stroke="var(--border-strong)" strokeWidth="2.5" />
       <circle cx={15} cy={15} r={r} fill="none" stroke={color} strokeWidth="2.5"
-        strokeDasharray={circ} strokeDashoffset={circ - (score / 100) * circ}
+        strokeDasharray={circ} strokeDashoffset={circ - (clampedScore / 100) * circ}
         strokeLinecap="round" transform="rotate(-90 15 15)" style={{ transition: 'stroke-dashoffset 0.5s ease' }} />
       <text x={15} y={15} dominantBaseline="central" textAnchor="middle"
-        style={{ fontSize: 7, fontWeight: 900, fill: color }}>{score}</text>
+        style={{ fontSize: 7, fontWeight: 900, fill: color }}>{clampedScore}</text>
     </svg>
   );
 };
@@ -568,7 +569,7 @@ function RGTrendsChart({ data, period, onPeriodChange }: {
   const yRange = yMax - yMin;
   const zeroY = padT + plotH * (yMax / yRange);
 
-  const barWidth = dates.length > 14 ? plotW / dates.length * 0.7 : plotW / dates.length * 0.6;
+  const barWidth = dates.length === 0 ? 0 : dates.length > 14 ? plotW / dates.length * 0.7 : plotW / dates.length * 0.6;
   const xOf = (i: number) => dates.length < 2 ? padL + plotW / 2 : padL + (i + 0.5) * (plotW / dates.length);
   const yOf = (v: number) => padT + plotH * (1 - (v - yMin) / yRange);
 
@@ -977,7 +978,7 @@ function HistoryView({ history, historyLoading, fetchHistory, resources, setSele
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {topUsers.map((u, idx) => {
               const maxCount = topUsers[0].total;
-              const barPct = Math.round((u.total / maxCount) * 100);
+              const barPct = maxCount > 0 ? Math.round((u.total / maxCount) * 100) : 0;
               const isUnknown = u.user === 'Unknown';
               const avatarColors = ['var(--accent)', 'var(--blue)', '#a855f7', '#f59e0b', '#ec4899', '#06b6d4', '#84cc16', '#f97316'];
               const color = isUnknown ? 'var(--text-3)' : avatarColors[idx % avatarColors.length];
@@ -3606,7 +3607,7 @@ export default function App() {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: c.change > 0 ? 'var(--danger)' : 'var(--accent)' }}>
-                      {c.change > 0 ? '+' : ''}{c.percentChange.toFixed(0)}%
+                      {(c as any).isNew ? 'New' : `${c.change > 0 ? '+' : ''}${(c.percentChange ?? 0).toFixed(0)}%`}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
                       ${Math.abs(c.change).toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -5719,10 +5720,19 @@ export default function App() {
           const newItems: AggregatedCost[] = currentItems.map((item: CostItem) => {
             const cost = Number(item.cost) || 0;
             const prev = prevMap.get(`${item.resourceGroup}-${item.resourceType}-${item.resourceLocation}`) ?? 0;
+            const MIN_PREV = 0.01; // 1 cent threshold for meaningful comparison
+            let trend = 0;
+            if (prev >= MIN_PREV) {
+              trend = ((cost - prev) / prev) * 100;
+              if (trend > 1000) trend = 1000;
+              if (trend < -1000) trend = -1000;
+            } else if (cost > 0) {
+              trend = 100; // "New" marker
+            }
             return {
               cost,
               previousCost: prev,
-              trend: prev > 0 ? ((cost - prev) / prev) * 100 : (cost > 0 ? 100 : 0),
+              trend,
               resourceId: '', // Aggregated
               resourceGroup: item.resourceGroup || '',
               resourceType: item.resourceType || '',
@@ -7112,7 +7122,9 @@ export default function App() {
     });
     if (previousTotal === 0) return null;
     const change = currentTotal - previousTotal;
-    const percentChange = ((change / previousTotal) * 100);
+    let percentChange = ((change / previousTotal) * 100);
+    if (percentChange > 1000) percentChange = 1000;
+    if (percentChange < -1000) percentChange = -1000;
     return {
       current: currentTotal,
       previous: previousTotal,
@@ -7124,13 +7136,21 @@ export default function App() {
 
   // Biggest cost changes (by absolute change)
   const biggestChanges = useMemo(() => {
+    const MIN_CHANGE = 0.01; // Ignore sub-cent noise
     return costs
-      .filter(c => c.previousCost && c.previousCost > 0 && c.cost !== c.previousCost)
-      .map(c => ({
-        ...c,
-        change: c.cost - (c.previousCost || 0),
-        percentChange: ((c.cost - (c.previousCost || 0)) / (c.previousCost || 1)) * 100
-      }))
+      .map(c => {
+        const prev = c.previousCost || 0;
+        const change = c.cost - prev;
+        const isNew = prev === 0 && c.cost > 0;
+        let percentChange: number | null = null;
+        if (prev >= MIN_CHANGE) {
+          percentChange = ((change) / prev) * 100;
+          if (percentChange > 1000) percentChange = 1000;
+          if (percentChange < -1000) percentChange = -1000;
+        }
+        return { ...c, change, percentChange, isNew };
+      })
+      .filter(c => Math.abs(c.change) >= MIN_CHANGE || c.isNew)
       .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
       .slice(0, 5);
   }, [costs]);
