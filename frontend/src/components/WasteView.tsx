@@ -8,7 +8,7 @@ interface WasteViewProps {
   wasteLoading: boolean;
   fetchWaste: () => void;
   setSearchQuery: (q: string) => void;
-  setActiveTab: (tab: string) => void;
+  setActiveTab: (tab: any) => void;
   setCurrentPage: (p: number) => void;
 }
 
