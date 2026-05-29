@@ -4,6 +4,9 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis
 import { jsPDF } from 'jspdf';
 import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 
+// ─── Enhanced Components ───────────────────────────────────────────────────────
+import { ScoreRing, Sparkline } from './components';
+
 // ─── Error Boundary ───────────────────────────────────────────────────────────
 
 export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
@@ -236,45 +239,6 @@ const inferEnvFromRG = (rg: string): string => {
   if (low.includes('test') || low.includes('qa') || low.includes('uat')) return 'Test/QA';
   if (low.includes('dr') || low.includes('disaster') || low.includes('backup')) return 'DR';
   return 'Unknown';
-};
-
-// ─── Sparkline ────────────────────────────────────────────────────────────────
-
-const Sparkline = ({ data }: { data: number[] }) => {
-  if (!data || !Array.isArray(data) || data.length < 2) return null;
-  // Filter out NaN/Infinity values
-  const validData = data.filter(v => typeof v === 'number' && isFinite(v));
-  if (validData.length < 2) return null;
-  const max = Math.max(...validData), min = Math.min(...validData), range = max - min || 1;
-  const W = 72, H = 22;
-  const pts = validData.map((v, i) => `${(i / (validData.length - 1)) * W},${H - ((v - min) / range) * H}`).join(' ');
-  const lastVal = validData[validData.length - 1];
-  const prevVal = validData[validData.length - 2] || lastVal;
-  const trendUp = lastVal >= prevVal;
-  return (
-    <svg width={W} height={H} style={{ overflow: 'visible', flexShrink: 0 }}>
-      <polyline points={pts} fill="none" stroke={trendUp ? 'var(--accent)' : 'var(--danger)'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-};
-
-// ─── Score ring ───────────────────────────────────────────────────────────────
-
-const ScoreRing = ({ score }: { score: number }) => {
-  const clampedScore = typeof score === 'number' && Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0;
-  const r = 12, circ = 2 * Math.PI * r;
-  const color = clampedScore >= 80 ? 'var(--accent)' : clampedScore >= 50 ? 'var(--warning)' : 'var(--danger)';
-  const glowColor = clampedScore >= 80 ? 'rgba(16 185 129 / 0.4)' : clampedScore >= 50 ? 'rgba(245 158 11 / 0.4)' : 'rgba(244 63 94 / 0.4)';
-  return (
-    <svg width={30} height={30} className="score-ring" style={{ flexShrink: 0, filter: `drop-shadow(0 0 4px ${glowColor})` }}>
-      <circle cx={15} cy={15} r={r} fill="none" stroke="var(--border-strong)" strokeWidth="2.5" />
-      <circle cx={15} cy={15} r={r} fill="none" stroke={color} strokeWidth="2.5"
-        strokeDasharray={circ} strokeDashoffset={circ - (clampedScore / 100) * circ}
-        strokeLinecap="round" transform="rotate(-90 15 15)" style={{ transition: 'stroke-dashoffset 0.5s ease' }} />
-      <text x={15} y={15} dominantBaseline="central" textAnchor="middle"
-        style={{ fontSize: 7, fontWeight: 900, fill: color }}>{clampedScore}</text>
-    </svg>
-  );
 };
 
 // ─── StatusDot ────────────────────────────────────────────────────────────────
