@@ -2519,11 +2519,15 @@ func startServer(port string) {
 			// Convert type breakdown to slice for easier consumption
 			typeList := make([]map[string]interface{}, 0)
 			for t, count := range typeBreakdown {
+				percent := 0.0
+				if resourceCount > 0 {
+					percent = float64(count) / float64(resourceCount) * 100
+				}
 				typeList = append(typeList, map[string]interface{}{
 					"type":        t,
 					"count":       count,
 					"cost":        typeCosts[t],
-					"percent":     float64(count) / float64(resourceCount) * 100,
+					"percent":     percent,
 					"costPercent": func() float64 {
 						if totalCost > 0 {
 							return typeCosts[t] / totalCost * 100
@@ -2741,11 +2745,15 @@ func startServer(port string) {
 			// Convert type breakdown to slice
 			typeList := make([]map[string]interface{}, 0)
 			for t, count := range typeBreakdown {
+				percent := 0.0
+				if resourceCount > 0 {
+					percent = float64(count) / float64(resourceCount) * 100
+				}
 				typeList = append(typeList, map[string]interface{}{
 					"type":        t,
 					"count":       count,
 					"cost":        typeCosts[t],
-					"percent":     float64(count) / float64(resourceCount) * 100,
+					"percent":     percent,
 					"costPercent": func() float64 {
 						if totalCost > 0 {
 							return typeCosts[t] / totalCost * 100
@@ -2761,11 +2769,15 @@ func startServer(port string) {
 			// Convert location breakdown to slice
 			locList := make([]map[string]interface{}, 0)
 			for loc, count := range locationBreakdown {
+				percent := 0.0
+				if resourceCount > 0 {
+					percent = float64(count) / float64(resourceCount) * 100
+				}
 				locList = append(locList, map[string]interface{}{
 					"location":    loc,
 					"count":       count,
 					"cost":        locationCosts[loc],
-					"percent":     float64(count) / float64(resourceCount) * 100,
+					"percent":     percent,
 					"costPercent": func() float64 {
 						if totalCost > 0 {
 							return locationCosts[loc] / totalCost * 100
