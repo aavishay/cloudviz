@@ -2864,7 +2864,7 @@ export default function App() {
           setResources(prev => {
             return prev.map(r => {
               if (r.subscriptionId !== subId) return r;
-              const matchingCost = newItems.find((c: AggregatedCost) => 
+              const matchingCost = newItems.find((c: AggregatedCost) =>
                 c.resourceGroup.toLowerCase() === r.resourceGroup?.toLowerCase() &&
                 // Flexible match for types and exact match for normalized location
                 (c.resourceType.includes(r.type?.toLowerCase() || '') || (r.type?.toLowerCase() || '').includes(c.resourceType)) &&
@@ -2888,8 +2888,75 @@ export default function App() {
             }
             return next;
           });
+        } else if (msg.type === 'batch') {
+          // Handle batch update with cached subscription data
+          if (msg.data?.subscriptions) {
+            const subIds = Object.keys(msg.data.subscriptions);
+            const currentSubs = msg.data.subscriptions as Record<string, { current?: CostItem[]; previous?: CostItem[] }>;
+
+            // Process each subscription in the batch
+            subIds.forEach((subId) => {
+              const subData = currentSubs[subId];
+              const currentItems = subData?.current || [];
+              const previousItems = subData?.previous || [];
+              const prevMap = new Map<string, number>();
+              previousItems.forEach((item: CostItem) => prevMap.set(`${item.resourceGroup}-${item.resourceType}-${item.resourceLocation}`, Number(item.cost)));
+
+              const newItems: AggregatedCost[] = currentItems.map((item: CostItem) => {
+                const cost = Number(item.cost) || 0;
+                const prev = prevMap.get(`${item.resourceGroup}-${item.resourceType}-${item.resourceLocation}`) ?? 0;
+                const MIN_PREV = 0.01;
+                let trend = 0;
+                if (prev >= MIN_PREV) {
+                  trend = ((cost - prev) / prev) * 100;
+                  if (trend > 1000) trend = 1000;
+                  if (trend < -1000) trend = -1000;
+                } else if (cost > 0) {
+                  trend = 100;
+                }
+                return {
+                  cost,
+                  previousCost: prev,
+                  trend,
+                  resourceId: '',
+                  resourceGroup: item.resourceGroup || '',
+                  resourceType: item.resourceType || '',
+                  resourceLocation: item.resourceLocation || '',
+                  subscriptionId: subId
+                };
+              }).filter((item: AggregatedCost) => isFinite(item.cost) && isFinite(item.previousCost));
+
+              setCosts(prev => {
+                const filtered = prev.filter(c => c.subscriptionId !== subId);
+                return [...filtered, ...newItems];
+              });
+            });
+
+            // Update dataSubIds with all subscription IDs from the batch
+            setDataSubIds(prev => {
+              const next = new Set(prev);
+              subIds.forEach(id => next.add(id));
+              if (next.size === toFetch.length) {
+                clearTimeout(safetyTimeout);
+                setCostsLoading(false);
+                setIsRefreshing(false);
+              }
+              return next;
+            });
+          }
         } else if (msg.type === 'status') {
-          if (msg.message?.includes('error')) {
+          if (msg.message === 'synced' && msg.subId) {
+            // Update counter when a subscription is marked as synced
+            setDataSubIds(prev => {
+              const next = new Set(prev).add(msg.subId);
+              if (next.size === toFetch.length) {
+                clearTimeout(safetyTimeout);
+                setCostsLoading(false);
+                setIsRefreshing(false);
+              }
+              return next;
+            });
+          } else if (msg.message?.includes('error')) {
             console.error('SSE status error for', msg.subId, ':', msg.message);
             // Detect Azure authentication errors
             const errorMsg = msg.message.toLowerCase();

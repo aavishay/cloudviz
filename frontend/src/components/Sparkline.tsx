@@ -54,12 +54,7 @@ export function Sparkline({
     };
   }, [data, width, height]);
 
-  if (validData.length === 0) return null;
-
-  const color = trendUp ? '#10b981' : '#f43f5e';
-  const glowColor = trendUp ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)';
-
-  // Generate area path
+  // Generate area path - must be defined before early return to satisfy hooks rules
   const areaPath = useMemo(() => {
     if (!showArea || points === '') return '';
     const pts = points.split(' ');
@@ -67,6 +62,11 @@ export function Sparkline({
     const lastPt = pts[pts.length - 1];
     return `${firstPt} ${points} ${lastPt.split(',')[0]},${height} ${firstPt.split(',')[0]},${height}`;
   }, [points, showArea, height]);
+
+  if (validData.length === 0) return null;
+
+  const color = trendUp ? '#10b981' : '#f43f5e';
+  const glowColor = trendUp ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)';
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!interactive || validData.length === 0) return;

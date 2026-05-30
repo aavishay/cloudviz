@@ -66,7 +66,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.33.0"
+var Version = "1.34.0"
 
 func main() {
 	var rootCmd = &cobra.Command{

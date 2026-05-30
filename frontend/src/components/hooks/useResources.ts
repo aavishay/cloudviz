@@ -84,7 +84,7 @@ export function useResources(options: UseResourcesOptions = {}) {
               setLoading(false); // Show cached data immediately
             }
           }
-        } catch (e) {
+        } catch {
           // Ignore cache fetch errors
         }
       }

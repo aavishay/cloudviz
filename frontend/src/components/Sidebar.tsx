@@ -140,12 +140,25 @@ function SingleFilterDropdown({ label, options, selected, onSelect, getLabel }: 
   const filtered = options.filter(o => display(o).toLowerCase().includes(search.toLowerCase()));
   const hasValue = !!selected;
 
-  const rect = ref.current?.getBoundingClientRect();
+  // Use state for dropdown position to avoid ref access during render
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 220 });
+
+  useLayoutEffect(() => {
+    if (open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setDropdownPos({
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: Math.max(rect.width, 220),
+      });
+    }
+  }, [open]);
+
   const dropdownStyle = {
     position: 'fixed' as const,
-    top: (rect?.bottom ?? 0) + 4,
-    left: rect?.left ?? 0,
-    width: Math.max(rect?.width ?? 0, 220),
+    top: dropdownPos.top,
+    left: dropdownPos.left,
+    width: dropdownPos.width,
     maxHeight: 300,
     zIndex: 900,
   };

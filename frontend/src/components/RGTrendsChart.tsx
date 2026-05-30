@@ -14,6 +14,7 @@ export function RGTrendsChart({ data, period, onPeriodChange }: RGTrendsChartPro
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [hoverGroup, setHoverGroup] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [scaleX, setScaleX] = useState(1);
   const svgRef = useRef<SVGSVGElement>(null);
 
   const dates: string[] = data?.dates ?? [];
@@ -77,8 +78,10 @@ export function RGTrendsChart({ data, period, onPeriodChange }: RGTrendsChartPro
   const handleSVGMouseMove = (e: React.MouseEvent<SVGRectElement>) => {
     if (!svgRef.current || dates.length < 2) return;
     const rect = svgRef.current.getBoundingClientRect();
-    const scaleX = W / rect.width;
-    const x = (e.clientX - rect.left) * scaleX;
+    const scale = rect.width / W;
+    setScaleX(scale);
+    const scaleXValue = W / rect.width;
+    const x = (e.clientX - rect.left) * scaleXValue;
     const idx = Math.floor(((x - padL) / plotW) * dates.length);
     setHoverIdx(Math.max(0, Math.min(dates.length - 1, idx)));
   };
@@ -207,13 +210,9 @@ export function RGTrendsChart({ data, period, onPeriodChange }: RGTrendsChartPro
 
         {/* Hover tooltip */}
         {hoverInfo && (() => {
-          const svgEl = svgRef.current;
-          if (!svgEl) return null;
-          const svgRect = svgEl.getBoundingClientRect();
-          const scaleX = svgRect.width / W;
           const tipX = xOf(hoverIdx!) * scaleX;
           const tipLeft = tipX + 16;
-          const maxLeft = svgRect.width - 180;
+          const maxLeft = (W * scaleX) - 180;
 
           return (
             <div style={{
@@ -254,7 +253,11 @@ export function RGTrendsChart({ data, period, onPeriodChange }: RGTrendsChartPro
           return (
             <button key={gi} onClick={() => setHidden(prev => {
               const next = new Set(prev);
-              next.has(g.name) ? next.delete(g.name) : next.add(g.name);
+              if (next.has(g.name)) {
+                next.delete(g.name);
+              } else {
+                next.add(g.name);
+              }
               return next;
             })} style={{
               display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px',

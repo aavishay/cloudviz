@@ -1522,7 +1522,7 @@ Provide exactly 3 cost-saving recommendations. For each recommendation:
 ## Response Format (JSON only, no markdown)
 {
   "recommendations": [
-    {"category": "rightsize", "action": "Downsize from D4s_v3 to D2s_v3", "estimatedSavings": 85.50, "savingsPercent": 40, "rationale": "P95 CPU is 20%, average is 12%", "priority": 1}
+    {"category": "rightsize", "action": "Downsize from D4s_v3 to D2s_v3", "estimatedSavings": 85.50, "savingsPercent": 40, "rationale": "P95 CPU is 20%%, average is 12%%", "priority": 1}
   ],
   "confidenceScore": 0.85,
   "overallCategory": "rightsize"

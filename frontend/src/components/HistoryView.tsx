@@ -42,6 +42,7 @@ export function HistoryView({ history, historyLoading, fetchHistory, resources, 
     if (!groupByDate) return { 'All Changes': filteredHistory };
     const groups: Record<string, ResourceChange[]> = {};
     const today = new Date().toDateString();
+    // eslint-disable-next-line react-hooks/purity
     const yesterday = new Date(Date.now() - 86400000).toDateString();
 
     filteredHistory.forEach(h => {
@@ -50,6 +51,7 @@ export function HistoryView({ history, historyLoading, fetchHistory, resources, 
       let groupKey: string;
       if (dateStr === today) groupKey = 'Today';
       else if (dateStr === yesterday) groupKey = 'Yesterday';
+      // eslint-disable-next-line react-hooks/purity
       else if (Date.now() - date.getTime() < 7 * 86400000) groupKey = 'This Week';
       else groupKey = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 

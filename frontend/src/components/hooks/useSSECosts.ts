@@ -50,6 +50,7 @@ export function useSSECosts(options: UseSSECostsOptions = {}) {
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const connectRef = useRef<(subscriptionIds: string[]) => void>(() => {});
 
   // Close SSE connection
   const closeConnection = useCallback(() => {
@@ -193,11 +194,16 @@ export function useSSECosts(options: UseSSECostsOptions = {}) {
       // Auto-reconnect after 5 seconds if not completed
       if (!sseState.completed) {
         reconnectTimerRef.current = setTimeout(() => {
-          connect(subscriptionIds);
+          connectRef.current(subscriptionIds);
         }, 5000);
       }
     };
   }, [baseUrl, closeConnection, onBatchReceived, onSubscriptionSynced, sseState.completed]);
+
+  // Keep connect ref updated to avoid accessing connect before declaration / TDZ
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   // Cleanup on unmount
   useEffect(() => {

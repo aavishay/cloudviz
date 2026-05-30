@@ -15,19 +15,21 @@ export function ScoreRing({
   tooltipText,
   animated = true
 }: ScoreRingProps) {
-  const [displayScore, setDisplayScore] = useState(0);
-  const [isHovered, setIsHovered] = useState(false);
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-  const svgRef = useRef<SVGSVGElement>(null);
-
   const clampedScore = typeof score === 'number' && Number.isFinite(score)
     ? Math.max(0, Math.min(100, score))
     : 0;
 
+  const [displayScore, setDisplayScore] = useState(() => animated ? 0 : clampedScore);
+  const [isHovered, setIsHovered] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const svgRef = useRef<SVGSVGElement>(null);
+
   // Animate score on mount and when score changes
   useEffect(() => {
     if (!animated) {
-      setDisplayScore(clampedScore);
+      if (displayScore !== clampedScore) {
+        setDisplayScore(clampedScore);
+      }
       return;
     }
 
@@ -49,6 +51,7 @@ export function ScoreRing({
     };
 
     requestAnimationFrame(animate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clampedScore, animated]);
 
   // Calculate dimensions
@@ -77,7 +80,7 @@ export function ScoreRing({
   const color = getColor(clampedScore);
   const glowColor = color.replace(')', ' / 0.4)').replace('rgb', 'rgba');
 
-  const handleMouseEnter = (_e: React.MouseEvent) => {
+  const handleMouseEnter = () => {
     setIsHovered(true);
     const rect = svgRef.current?.getBoundingClientRect();
     if (rect) {
