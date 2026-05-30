@@ -41,7 +41,17 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dataSubIds, setDataSubIds] = useState<Set<string>>(new Set());
   const dataSubIdsRef = useRef(dataSubIds);
+  const activeEventSourceRef = useRef<EventSource | null>(null);
   useEffect(() => { dataSubIdsRef.current = dataSubIds; }, [dataSubIds]);
+
+  // Cleanup EventSource on unmount
+  useEffect(() => {
+    return () => {
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+      }
+    };
+  }, []);
 
   // Azure authentication error state
   const [azureAuthError, setAzureAuthError] = useState<string | null>(null);
@@ -2800,6 +2810,12 @@ export default function App() {
     // Prevent concurrent fetches - if already loading, skip
     if (costsLoading && !forceAll) return;
 
+    // Close any existing active connection
+    if (activeEventSourceRef.current) {
+      activeEventSourceRef.current.close();
+      activeEventSourceRef.current = null;
+    }
+
     const existing = forceAll ? new Set<string>() : new Set(costs.map(c => c.subscriptionId));
     const toFetch = activeSubs.filter(s => !existing.has(s));
     if (toFetch.length === 0) {
@@ -2817,6 +2833,8 @@ export default function App() {
     toFetch.forEach(s => params.append('subscriptionId', s));
 
     const es = new EventSource(`http://localhost:8080/api/costs/stream?${params.toString()}`);
+    activeEventSourceRef.current = es;
+
     // Safety timeout: 70s per uncached sub (60s fetch + 10s buffer) + 10s base
     const estimatedMaxTime = Math.max(30000, toFetch.length * 70000 + 10000);
     const safetyTimeout = setTimeout(() => {
@@ -2824,6 +2842,9 @@ export default function App() {
         setCostsLoading(false);
         setIsRefreshing(false);
         es.close();
+        if (activeEventSourceRef.current === es) {
+          activeEventSourceRef.current = null;
+        }
       }
     }, estimatedMaxTime);
 
@@ -2880,9 +2901,13 @@ export default function App() {
           });
           setDataSubIds(prev => {
             const next = new Set(prev).add(subId);
-            // Compare against toFetch.length (the actual number of subscriptions being fetched)
-            if (next.size === toFetch.length) {
+            // Compare against total activeSubs.length to handle incremental loading properly
+            if (next.size === activeSubs.length) {
               clearTimeout(safetyTimeout);
+              es.close();
+              if (activeEventSourceRef.current === es) {
+                activeEventSourceRef.current = null;
+              }
               setCostsLoading(false);
               setIsRefreshing(false);
             }
@@ -2936,8 +2961,12 @@ export default function App() {
             setDataSubIds(prev => {
               const next = new Set(prev);
               subIds.forEach(id => next.add(id));
-              if (next.size === toFetch.length) {
+              if (next.size === activeSubs.length) {
                 clearTimeout(safetyTimeout);
+                es.close();
+                if (activeEventSourceRef.current === es) {
+                  activeEventSourceRef.current = null;
+                }
                 setCostsLoading(false);
                 setIsRefreshing(false);
               }
@@ -2949,8 +2978,12 @@ export default function App() {
             // Update counter when a subscription is marked as synced
             setDataSubIds(prev => {
               const next = new Set(prev).add(msg.subId);
-              if (next.size === toFetch.length) {
+              if (next.size === activeSubs.length) {
                 clearTimeout(safetyTimeout);
+                es.close();
+                if (activeEventSourceRef.current === es) {
+                  activeEventSourceRef.current = null;
+                }
                 setCostsLoading(false);
                 setIsRefreshing(false);
               }
@@ -2963,10 +2996,29 @@ export default function App() {
             if (errorMsg.includes('subscriptionnotfound') || errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('authentication') || errorMsg.includes('unauthorized')) {
               setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
             }
+            // Add failed subscriptions to synced count so loading doesn't get stuck permanently
+            if (msg.subId) {
+              setDataSubIds(prev => {
+                const next = new Set(prev).add(msg.subId);
+                if (next.size === activeSubs.length) {
+                  clearTimeout(safetyTimeout);
+                  es.close();
+                  if (activeEventSourceRef.current === es) {
+                    activeEventSourceRef.current = null;
+                  }
+                  setCostsLoading(false);
+                  setIsRefreshing(false);
+                }
+                return next;
+              });
+            }
           }
         } else if (msg.type === 'done') {
           clearTimeout(safetyTimeout);
           es.close();
+          if (activeEventSourceRef.current === es) {
+            activeEventSourceRef.current = null;
+          }
           setCostsLoading(false);
           setIsRefreshing(false);
         }
@@ -2983,6 +3035,9 @@ export default function App() {
         if (es.readyState === EventSource.CLOSED) {
           clearTimeout(safetyTimeout);
           es.close();
+          if (activeEventSourceRef.current === es) {
+            activeEventSourceRef.current = null;
+          }
           setCostsLoading(false);
           setIsRefreshing(false);
         }

@@ -173,8 +173,8 @@ func cooldownWait(ctx context.Context) error {
 	t := last429Time
 	last429Mu.Unlock()
 
-	if time.Since(t) < 30*time.Second {
-		wait := 30*time.Second - time.Since(t)
+	if time.Since(t) < 1*time.Second {
+		wait := 1*time.Second - time.Since(t)
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
