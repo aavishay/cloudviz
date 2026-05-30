@@ -47,6 +47,9 @@ export default function App() {
   const [azureAuthError, setAzureAuthError] = useState<string | null>(null);
   const [dismissedAuthError, setDismissedAuthError] = useState(false);
 
+  // Data completeness warning state
+  const [dataCompletenessWarning, setDataCompletenessWarning] = useState<string | null>(null);
+
 
   const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('cloudviz-search') || '');
   const [regionFilter, setRegionFilter] = useState<string[]>(() => {
@@ -2427,6 +2430,14 @@ export default function App() {
     fetch('http://localhost:8080/api/subscriptions')
       .then(r => r.json())
       .then(data => {
+        // Check for Azure authentication errors
+        if (data.error && typeof data.error === 'string') {
+          const errorLower = data.error.toLowerCase();
+          if (errorLower.includes('defaultazurecredential') || errorLower.includes('aadsts') || errorLower.includes('authentication') || errorLower.includes('unauthorized') || errorLower.includes('token') || errorLower.includes('mfa')) {
+            setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
+          }
+          return;
+        }
         const subs = (data.subscriptions || []).map((s: any) => ({ id: s.id, name: s.name }));
         setAllPossibleFilters(prev => ({ ...prev, subs }));
       })
@@ -2437,12 +2448,33 @@ export default function App() {
   useEffect(() => {
     fetch('http://localhost:8080/api/filters')
       .then(r => r.json())
-      .then(data => setAllPossibleFilters(data))
+      .then(data => {
+        // Check for Azure authentication errors
+        if (data.error && typeof data.error === 'string') {
+          const errorLower = data.error.toLowerCase();
+          if (errorLower.includes('defaultazurecredential') || errorLower.includes('aadsts') || errorLower.includes('authentication') || errorLower.includes('unauthorized') || errorLower.includes('token') || errorLower.includes('mfa')) {
+            setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
+          }
+          return;
+        }
+        setAllPossibleFilters(data);
+      })
       .catch(console.error);
 
     fetch('http://localhost:8080/api/resources?limit=1')
       .then(r => r.json())
-      .then(data => { setTrueTotalResources(data.total || 0); setResourcesCountLoading(false); })
+      .then(data => {
+        // Check for Azure authentication errors
+        if (data.error && typeof data.error === 'string') {
+          const errorLower = data.error.toLowerCase();
+          if (errorLower.includes('defaultazurecredential') || errorLower.includes('aadsts') || errorLower.includes('authentication') || errorLower.includes('unauthorized') || errorLower.includes('token') || errorLower.includes('mfa')) {
+            setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
+          }
+          setResourcesCountLoading(false);
+          return;
+        }
+        setTrueTotalResources(data.total || 0); setResourcesCountLoading(false);
+      })
       .catch(err => { console.error(err); setResourcesCountLoading(false); });
   }, []);
 
@@ -2471,7 +2503,20 @@ export default function App() {
 
     fetch(`http://localhost:8080/api/resources?${params}`)
       .then(r => r.json())
-      .then(data => { setResources(data.data || []); setTotalResources(data.total || 0); setFilteredTotalCost(data.totalCost || 0); setLoading(false); })
+      .then(data => {
+        // Check for Azure authentication errors
+        if (data.error && typeof data.error === 'string') {
+          const errorLower = data.error.toLowerCase();
+          if (errorLower.includes('defaultazurecredential') || errorLower.includes('aadsts') || errorLower.includes('authentication') || errorLower.includes('unauthorized') || errorLower.includes('token') || errorLower.includes('mfa')) {
+            setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
+          } else {
+            setError(data.error);
+          }
+          setLoading(false);
+          return;
+        }
+        setResources(data.data || []); setTotalResources(data.total || 0); setFilteredTotalCost(data.totalCost || 0); setLoading(false);
+      })
       .catch(err => { setError(err.message); setLoading(false); });
   }, [regionFilter, subFilter, rgFilter, typeFilter, creatorFilter, debouncedSearch, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, tagFilter, currentPage, sortConfig, piiMasking]);
 
@@ -2588,7 +2633,23 @@ export default function App() {
     activeSubs.forEach(s => params.append('subscriptionId', s));
     fetch(`http://localhost:8080/api/costs/comparison?${params}&days=${costPeriod}`)
       .then(r => r.json())
-      .then(data => { if (!data.error) setPeriodComparison(data); })
+      .then(data => {
+        if (!data.error) {
+          setPeriodComparison(data);
+          // Check for incomplete previous period data (likely due to auth issues)
+          const currentTotal = data.currentPeriod?.totalCost || 0;
+          const previousTotal = data.previousPeriod?.totalCost || 0;
+          if (currentTotal > 0 && previousTotal > 0) {
+            const ratio = previousTotal / currentTotal;
+            // If previous period is less than 60% of current, data may be incomplete
+            if (ratio < 0.6) {
+              setDataCompletenessWarning(`Previous period data appears incomplete ($${(previousTotal/1000).toFixed(0)}K vs $${(currentTotal/1000).toFixed(0)}K expected). Azure authentication may have expired - run "az login" to refresh.`);
+            } else {
+              setDataCompletenessWarning(null);
+            }
+          }
+        }
+      })
       .catch(() => {});
   }, [activeSubs, costPeriod]);
 
@@ -4193,10 +4254,30 @@ export default function App() {
     };
   }, [costs]);
 
-  // Biggest cost changes (by absolute change)
+  // Biggest cost changes (by absolute change) - aggregated by resource group
   const biggestChanges = useMemo(() => {
     const MIN_CHANGE = 0.01; // Ignore sub-cent noise
-    return costs
+
+    // Aggregate costs by resource group
+    const rgMap = new Map<string, { resourceGroup: string; resourceType: string; cost: number; previousCost: number }>();
+
+    costs.forEach(c => {
+      const rg = c.resourceGroup || 'Uncategorized';
+      const existing = rgMap.get(rg);
+      if (existing) {
+        existing.cost += c.cost;
+        existing.previousCost += (c.previousCost || 0);
+      } else {
+        rgMap.set(rg, {
+          resourceGroup: rg,
+          resourceType: c.resourceType || '',
+          cost: c.cost,
+          previousCost: c.previousCost || 0
+        });
+      }
+    });
+
+    return Array.from(rgMap.values())
       .map(c => {
         const prev = c.previousCost || 0;
         const change = c.cost - prev;
@@ -4611,6 +4692,63 @@ export default function App() {
                       Dismiss
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Data Completeness Warning Banner */}
+              {dataCompletenessWarning && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 16,
+                  padding: '14px 18px',
+                  background: 'var(--warning-dim)',
+                  border: '1px solid rgba(245 158 11 / 0.3)',
+                  borderRadius: 12,
+                  borderLeft: '4px solid var(--warning)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 8,
+                      background: 'var(--warning)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                        <line x1="12" y1="9" x2="12" y2="13" />
+                        <line x1="12" y1="17" x2="12.01" y2="17" />
+                      </svg>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--warning)', marginBottom: 2 }}>
+                        Incomplete Data
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                        {dataCompletenessWarning}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setDataCompletenessWarning(null)}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      background: 'transparent',
+                      color: 'var(--text-2)',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Dismiss
+                  </button>
                 </div>
               )}
 

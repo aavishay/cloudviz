@@ -181,6 +181,7 @@ export function useInterval(callback: () => void, delay: number | null): void {
 // Re-export domain-specific hooks
 export { useResources } from './hooks/useResources';
 export { useCosts } from './hooks/useCosts';
+export { useSSECosts } from './hooks/useSSECosts';
 export { useSelection } from './hooks/useSelection';
 export { useFavorites } from './hooks/useFavorites';
 export { useFilters } from './hooks/useFilters';

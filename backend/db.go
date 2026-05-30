@@ -37,10 +37,20 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_sub_period ON costs(subscription_id, period)`); err != nil {
+	// Composite index for primary lookup pattern (subscription + period + date)
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_sub_period ON costs(subscription_id, period, fetched_at)`); err != nil {
 		log.Printf("Warning: failed to create index: %v", err)
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_resource_id ON costs(resource_id)`); err != nil {
+	// Covering index for resource cost lookups
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_resource_lookup ON costs(resource_id, subscription_id, cost)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
+	}
+	// Index for resource group + type aggregations
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_rg_type ON costs(resource_group, resource_type, resource_location, cost)`); err != nil {
+		log.Printf("Warning: failed to create index: %v", err)
+	}
+	// Index for period-based queries
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_costs_period ON costs(period, fetched_at)`); err != nil {
 		log.Printf("Warning: failed to create index: %v", err)
 	}
 
@@ -283,6 +293,22 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_daily_sub_date ON cost_daily(subscription_id, date)`); err != nil {
 		log.Printf("Warning: failed to create daily index: %v", err)
+	}
+
+	// Cached aggregated sums table - avoids recalculating totals
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS cost_aggregates (
+		subscription_id TEXT,
+		period TEXT,
+		total_cost REAL,
+		resource_count INTEGER,
+		fetched_at DATETIME,
+		PRIMARY KEY (subscription_id, period)
+	)`)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_aggregates_fetch ON cost_aggregates(fetched_at)`); err != nil {
+		log.Printf("Warning: failed to create aggregate index: %v", err)
 	}
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS alerts (
@@ -559,6 +585,135 @@ func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
 			log.Printf("Warning: failed to insert daily cost: %v", err)
 		}
 	}
+}
+
+// Batch cache operations for improved performance
+
+// getBatch returns cached cost data for multiple subscriptions in a single query
+func (dc *dbCache) getBatch(subIDs []string, period string) (map[string]armcostmanagement.QueryResult, []string) {
+	if len(subIDs) == 0 {
+		return make(map[string]armcostmanagement.QueryResult), nil
+	}
+
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(subIDs))
+	args := make([]any, len(subIDs))
+	for i, subID := range subIDs {
+		placeholders[i] = "?"
+		args[i] = subID
+	}
+	args = append(args, period)
+
+	// Get all costs for the subscriptions in one query
+	query := fmt.Sprintf(`SELECT subscription_id, cost, resource_id, resource_group, resource_type, resource_location, fetched_at
+		FROM costs WHERE subscription_id IN (%s) AND period = ?`,
+		strings.Join(placeholders, ","))
+
+	rows, err := dc.db.Query(query, args...)
+	if err != nil {
+		return make(map[string]armcostmanagement.QueryResult), subIDs
+	}
+	defer rows.Close()
+
+	results := make(map[string]armcostmanagement.QueryResult)
+	fetchedAtMap := make(map[string]time.Time)
+
+	for rows.Next() {
+		var subID, id, rg, rt, rl string
+		var cost float64
+		var fetchedAt time.Time
+		if err := rows.Scan(&subID, &cost, &id, &rg, &rt, &rl, &fetchedAt); err != nil {
+			continue
+		}
+		if existing, ok := results[subID]; ok {
+			existing.Properties.Rows = append(existing.Properties.Rows, []any{cost, id, rg, rt, rl})
+		} else {
+			results[subID] = armcostmanagement.QueryResult{
+				Properties: &armcostmanagement.QueryProperties{
+					Rows: [][]any{{cost, id, rg, rt, rl}},
+				},
+			}
+		}
+		fetchedAtMap[subID] = fetchedAt
+	}
+
+	// Check freshness and return missing subscriptions
+	var missing []string
+	for _, subID := range subIDs {
+		if fetchedAt, ok := fetchedAtMap[subID]; !ok || time.Since(fetchedAt) > 24*time.Hour {
+			missing = append(missing, subID)
+			delete(results, subID)
+		}
+	}
+
+	return results, missing
+}
+
+// getAggregate returns cached aggregate totals for a subscription/period
+func (dc *dbCache) getAggregate(subID, period string) (totalCost float64, resourceCount int, ok bool) {
+	var fetchedAt time.Time
+	err := dc.db.QueryRow(
+		"SELECT total_cost, resource_count, fetched_at FROM cost_aggregates WHERE subscription_id = ? AND period = ?",
+		subID, period).Scan(&totalCost, &resourceCount, &fetchedAt)
+	if err != nil || time.Since(fetchedAt) > 24*time.Hour {
+		return 0, 0, false
+	}
+	return totalCost, resourceCount, true
+}
+
+// setAggregate caches aggregate totals for a subscription/period
+func (dc *dbCache) setAggregate(subID, period string, totalCost float64, resourceCount int) {
+	_, err := dc.db.Exec(
+		`INSERT OR REPLACE INTO cost_aggregates (subscription_id, period, total_cost, resource_count, fetched_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		subID, period, totalCost, resourceCount, time.Now())
+	if err != nil {
+		log.Printf("Warning: failed to cache aggregate: %v", err)
+	}
+}
+
+// getCachedSubscriptions returns subscriptions that have fresh cached data
+func (dc *dbCache) getCachedSubscriptions(subIDs []string, period string) ([]string, []string) {
+	if len(subIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(subIDs))
+	args := make([]any, len(subIDs))
+	for i, subID := range subIDs {
+		placeholders[i] = "?"
+		args[i] = subID
+	}
+	args = append(args, period)
+
+	query := fmt.Sprintf(
+		`SELECT DISTINCT subscription_id FROM costs
+		WHERE subscription_id IN (%s) AND period = ? AND fetched_at > datetime('now', '-24 hours')`,
+		strings.Join(placeholders, ","))
+
+	rows, err := dc.db.Query(query, args...)
+	if err != nil {
+		return nil, subIDs
+	}
+	defer rows.Close()
+
+	cached := make(map[string]bool)
+	for rows.Next() {
+		var subID string
+		if rows.Scan(&subID) == nil {
+			cached[subID] = true
+		}
+	}
+
+	var cachedSubs, missingSubs []string
+	for _, subID := range subIDs {
+		if cached[subID] {
+			cachedSubs = append(cachedSubs, subID)
+		} else {
+			missingSubs = append(missingSubs, subID)
+		}
+	}
+	return cachedSubs, missingSubs
 }
 
 func recordResourceChanges(db *sql.DB, newResources []AzureResource) {

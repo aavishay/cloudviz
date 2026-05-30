@@ -294,7 +294,7 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 		if l, ok := subCostLimiters.Load(subID); ok {
 			lim = l.(*rate.Limiter)
 		} else {
-			lim = rate.NewLimiter(rate.Limit(5), 3)
+			lim = rate.NewLimiter(rate.Limit(10), 5)
 			if actual, loaded := subCostLimiters.LoadOrStore(subID, lim); loaded {
 				lim = actual.(*rate.Limiter)
 			}
