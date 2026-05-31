@@ -4,19 +4,37 @@
 
 ---
 
+**Current Version**: `1.34.0` (May 2026) · [GitHub Releases](https://github.com/avishay/cloudviz/releases)
+
 ## 🎉 Recently Completed
 
-### v1.3.0 (May 2026)
-- [x] Multi-subscription daily cost aggregation — Dashboard trends now aggregate daily costs across all active subscriptions instead of showing only the first subscription
+### v1.34.0 (May 2026)
+- [x] Backend compilation fix for Go 1.26 + React lint fixes across frontend components
 
-### v1.2.0 (April 2026)
+### v1.33.0 (May 2026)
+- [x] Major frontend refactor — extracted monolithic `App.tsx` into 22 component/hook files
+- [x] Design system with animations, typography, and color tokens
+
+### v1.32.0–v1.32.2 (May 2026)
+- [x] Dashboard sync stall fix — SSE error handling + reduced global 429 cooldown
+- [x] Optimized subscription cost loading speed
+
+### v1.31.0 (April 2026)
+- [x] Commitments tab — RI and Savings Plan purchase tracking
 - [x] Cost display in Dependency Graph — Show cost per dependency/dependent resource
 - [x] Null safety improvements — Fixed dependents/dependencies null handling
 - [x] Clickable History items — Navigate to resources from history, handle deleted resources
 - [x] Sortable Cost Details table — Persistent column sorting
-- [x] Clickable dashboard elements — Environment bars, history items
 
-### Code Quality & Performance (2024)
+### v1.30.0 (April 2026)
+- [x] Configurable cost anomaly detection parameters
+- [x] Stopped VM detection in waste analysis
+
+### v1.29.0 (April 2026)
+- [x] Orphaned disk detection via Azure `managedBy` field
+- [x] Subscription auto-discovery + improved anomaly detection
+
+### Code Quality & Performance
 - [x] Backend code simplification — Consolidated 6 duplicate metrics fetchers
 - [x] Error handling improvements — Fixed silent error handlers across codebase
 - [x] Performance optimizations — Cached Azure Metrics clients, batch DB operations
@@ -25,7 +43,7 @@
 
 ---
 
-## v0.1.x - Current Release
+## v0.1.x — Core (shipped as v1.17.0–v1.22.0)
 
 - [x] Azure Resource Graph integration (resource inventory)
 - [x] Azure Cost Management API (billing data)
@@ -44,7 +62,7 @@
 
 ---
 
-## v0.2.0 - Enhanced Analytics ✅ Released
+## v0.2.0 — Enhanced Analytics (shipped as v1.23.0–v1.28.0)
 
 ### Backend
 - [x] Cost anomaly detection (flag unusual spikes/drops) — z-score + ratio-based dual detection
@@ -60,32 +78,33 @@
 - [x] Cost trend charts with zoom/pan — drag-to-zoom + Brush navigator
 - [x] Filter presets (save/load custom filter combinations)
 - [x] Dark mode improvements (system preference sync) — CSS custom properties with auto detection
-- [ ] Keyboard shortcuts for power users
+- [x] Keyboard shortcuts for power users (v1.33.0 — `useKeyboardShortcuts` hook)
+- [ ] Keyboard shortcuts help modal (`?` key) — tracked in v0.5.0
 
 ---
 
-## v0.3.0 - Automation & Integration ✅ Released
+## v0.3.0 — Automation & Integration (shipped as v1.24.0–v1.31.0)
 
 ### Backend
-- [ ] Scheduled cost reports (email via SendGrid/AWS SES) — TODO: Requires email provider integration
-- [x] Azure Advisor integration for recommendations — `/api/advisor/recommendations`
-- [x] Webhook notifications for budget alerts — Webhook delivery system with retries, rate limiting, and delivery logging
-- [ ] Kubernetes cost attribution (Azure Kubernetes Service) — TODO: AKS-specific metrics
-- [x] Azure Reserved Instance coverage analysis — `/api/commitment/savings`
-- [ ] Multi-cloud support (AWS, GCP - foundation) — TODO: Major feature
+- [x] Azure Advisor integration for recommendations — `/api/advisor/recommendations` (v1.24.0)
+- [x] Webhook notifications for budget alerts — Webhook delivery with retries, rate limiting, delivery logging (v1.25.0)
+- [x] Azure Reserved Instance coverage analysis — `/api/commitment/savings` (v1.31.0)
+- [ ] Scheduled cost reports (email via SendGrid/AWS SES) — requires email provider integration
+- [ ] Kubernetes cost attribution (AKS) — AKS-specific metrics
+- [ ] Multi-cloud support (AWS/GCP) — foundation work
 
 ### Frontend
-- [ ] Report scheduling UI — Blocked by backend email service
-- [x] Alert configuration panel — Budgets and alerts management UI
-- [x] Dashboard customization (drag-and-drop cards) — Full drag-and-drop with persistence
-- [x] Export to Excel format — CSV export with Excel compatibility
-- [x] Shared dashboard links (read-only) — URL-based filter sharing
-- [x] Cost display in Dependency Graph — Show cost per resource in dependency view
-- [x] Clickable History items — Navigate to resources from history tab
+- [x] Alert configuration panel — Budgets and alerts management UI (v1.25.0)
+- [x] Dashboard customization (drag-and-drop cards) — Full drag-and-drop with persistence (v1.26.0)
+- [x] Export to Excel format — CSV export with Excel compatibility (v1.26.0)
+- [x] Shared dashboard links (read-only) — URL-based filter sharing (v1.27.0)
+- [x] Cost display in Dependency Graph — Show cost per resource in dependency view (v1.31.0)
+- [x] Clickable History items — Navigate to resources from history tab (v1.31.0)
+- [ ] Report scheduling UI — blocked by email provider integration
 
 ---
 
-## v0.4.0 - Enterprise Features ✅ Released (v1.7.0)
+## v0.4.0 — Enterprise Features (shipped as v1.26.0–v1.32.0)
 
 ### Backend
 - [x] Cost allocation (chargeback reports) — Cost by subscription/environment available
@@ -117,7 +136,7 @@
 - [ ] Advanced query builder for custom reports
 - [ ] Custom dashboard widget SDK
 - [ ] Keyboard shortcuts help modal — `?` key for shortcut discovery
-- [ ] Component extraction — Split App.tsx into separate files
+- [x] Component extraction — Split App.tsx into separate component files ✅ (v1.33.0)
 
 ---
 

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -173,8 +174,9 @@ func cooldownWait(ctx context.Context) error {
 	t := last429Time
 	last429Mu.Unlock()
 
-	if time.Since(t) < 1*time.Second {
-		wait := 1*time.Second - time.Since(t)
+	const cooldown = 10 * time.Second
+	if elapsed := time.Since(t); elapsed < cooldown {
+		wait := cooldown - elapsed
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
@@ -281,8 +283,21 @@ func getMetricsClient(subID string) (*armmonitor.MetricsClient, error) {
 	return client, nil
 }
 
-// retryAfter429 calls fn with up to 4 retries. On 429 responses it backs off
-// exponentially starting at 10s (10s, 20s, 40s, 80s), capped at 80s, with jitter.
+// getRetryAfterSeconds extracts the Retry-After header value from Azure HTTP error responses.
+func getRetryAfterSeconds(err error) int {
+	var httpErr *azcore.ResponseError
+	if errors.As(err, &httpErr) && httpErr.RawResponse != nil {
+		if ra := httpErr.RawResponse.Header.Get("Retry-After"); ra != "" {
+			if secs, parseErr := strconv.Atoi(strings.TrimSpace(ra)); parseErr == nil && secs > 0 {
+				return secs
+			}
+		}
+	}
+	return 0
+}
+
+// retryAfter429 calls fn with up to 6 retries. On 429 responses it backs off
+// exponentially starting at 10s (10s, 20s, 40s, 80s, 120s, 120s), capped at 120s, with jitter.
 func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, error)) (T, error) {
 	var zero T
 
@@ -294,7 +309,8 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 		if l, ok := subCostLimiters.Load(subID); ok {
 			lim = l.(*rate.Limiter)
 		} else {
-			lim = rate.NewLimiter(rate.Limit(10), 5)
+			// Azure Cost Management API limit is 100 per minute per sub scope (1.66 req/s)
+			lim = rate.NewLimiter(rate.Limit(1.5), 2)
 			if actual, loaded := subCostLimiters.LoadOrStore(subID, lim); loaded {
 				lim = actual.(*rate.Limiter)
 			}
@@ -304,7 +320,7 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 		}
 	}
 
-	for retry := 0; retry < 4; retry++ {
+	for retry := 0; retry < 6; retry++ {
 		if err := cooldownWait(ctx); err != nil {
 			return zero, err
 		}
@@ -319,13 +335,18 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 
 		if strings.Contains(err.Error(), "429") {
 			record429()
-			waitSecs := 10 * (1 << retry)
-			if waitSecs > 80 {
-				waitSecs = 80
+			waitSecs := getRetryAfterSeconds(err)
+			if waitSecs > 0 {
+				log.Printf("Rate limit (429) hit for %s, Retry-After=%ds, retry %d", logCtx, waitSecs, retry)
+				waitSecs += rand.Intn(5)
+			} else {
+				waitSecs = 10 * (1 << retry)
+				if waitSecs > 120 {
+					waitSecs = 120
+				}
+				waitSecs += rand.Intn(10)
+				log.Printf("Rate limit (429) hit for %s, retry %d in %ds", logCtx, retry, waitSecs)
 			}
-			// Add 0-5s jitter to prevent thundering herd on retry
-			waitSecs += rand.Intn(5)
-			log.Printf("Rate limit (429) hit for %s, retry %d in %ds", logCtx, retry, waitSecs)
 			select {
 			case <-time.After(time.Duration(waitSecs) * time.Second):
 			case <-ctx.Done():
@@ -336,7 +357,7 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 		}
 		return zero, err
 	}
-	return zero, fmt.Errorf("max retries exceeded for %s", logCtx)
+	return zero, fmt.Errorf("max retries (6) exceeded for %s", logCtx)
 }
 
 func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, period CostPeriod, start time.Time, ctx context.Context) (*armcostmanagement.QueryClientUsageResponse, error) {
@@ -713,7 +734,7 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 			subList = append(subList, s)
 		}
 
-		costRows, err := cache.db.Query("SELECT subscription_id, resource_id, resource_group, resource_type, resource_location, cost FROM costs WHERE subscription_id IN ("+placeholders(len(subList))+")", (func() []any {
+		costRows, err := cache.db.Query("SELECT subscription_id, resource_id, resource_group, resource_type, resource_location, cost FROM costs WHERE subscription_id IN ("+placeholders(len(subList))+") AND period = 'current'", (func() []any {
 			args := []any{}
 			for _, s := range subList {
 				args = append(args, s)

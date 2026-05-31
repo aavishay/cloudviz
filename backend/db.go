@@ -363,7 +363,18 @@ func newDBCache(dbPath string) (*dbCache, error) {
 func (dc *dbCache) get(subID string, period string) (armcostmanagement.QueryResult, bool) {
 	var fetchedAt time.Time
 	err := dc.db.QueryRow("SELECT fetched_at FROM costs WHERE subscription_id = ? AND period = ? LIMIT 1", subID, period).Scan(&fetchedAt)
-	if err != nil || time.Since(fetchedAt) > 24*time.Hour {
+	if err != nil {
+		return armcostmanagement.QueryResult{}, false
+	}
+	// Current period: 6h TTL so cost data stays reasonably fresh.
+	// Previous period: 7-day TTL — the Apr→May window barely shifts daily,
+	// and stale previous data is far better than no previous data at all
+	// (missing previous data makes Month-over-Month look like a false increase).
+	ttl := 6 * time.Hour
+	if period == "previous" {
+		ttl = 7 * 24 * time.Hour
+	}
+	if time.Since(fetchedAt) > ttl {
 		return armcostmanagement.QueryResult{}, false
 	}
 

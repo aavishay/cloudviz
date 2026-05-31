@@ -18,6 +18,7 @@ import (
 
 	"embed"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/costmanagement/armcostmanagement"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
@@ -43,9 +44,9 @@ var (
 	argClient      *armresourcegraph.Client
 	lastSync       time.Time
 	syncMutex      sync.Mutex
-	// Azure Cost Management: ~10 req/s per subscription
-	// Increased to 10 req/s with burst of 15 for better parallelization
-	costLimiter    = rate.NewLimiter(rate.Limit(10), 15)
+	// Azure Cost Management is very sensitive to 429s (100/min per scope).
+	// Limit globally to ~2.5 req/s to prevent global 429s and avoid overwhelming DNS/sockets.
+	costLimiter    = rate.NewLimiter(rate.Limit(2.5), 10)
 	// HTTP client with connection pooling for reuse
 	httpClient     = &http.Client{
 		Timeout: 60 * time.Second,
@@ -55,6 +56,11 @@ var (
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
+	// Active subscription cache to avoid repeated ARG queries
+	activeSubsCache     []Subscription
+	activeSubsMu        sync.RWMutex
+	activeSubsFetchedAt time.Time
+	activeSubsTTL       = 10 * time.Minute
 )
 
 // toAnySlice converts a string slice to []any for SQL query arguments
@@ -66,7 +72,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.34.0"
+var Version = "1.35.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -79,17 +85,27 @@ func main() {
 				return fmt.Errorf("failed to create credential: %w", err)
 			}
 
-			argClient, err = armresourcegraph.NewClient(cred, nil)
+			clientOpts := &arm.ClientOptions{
+				ClientOptions: policy.ClientOptions{
+					Transport: httpClient,
+				},
+			}
+
+			argClient, err = armresourcegraph.NewClient(cred, &arm.ClientOptions{
+				ClientOptions: policy.ClientOptions{
+					Transport: httpClient,
+				},
+			})
 			if err != nil {
 				return fmt.Errorf("failed to create ARG client: %w", err)
 			}
 
-			costClient, err = armcostmanagement.NewQueryClient(cred, nil)
+			costClient, err = armcostmanagement.NewQueryClient(cred, clientOpts)
 			if err != nil {
 				return fmt.Errorf("failed to create Cost Management client: %w", err)
 			}
 
-			forecastClient, err = armcostmanagement.NewForecastClient(cred, nil)
+			forecastClient, err = armcostmanagement.NewForecastClient(cred, clientOpts)
 			if err != nil {
 				return fmt.Errorf("failed to create Forecast client: %w", err)
 			}
@@ -213,6 +229,31 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+// getActiveSubscriptions returns discovered active subscriptions, using a 10-minute in-memory cache.
+func getActiveSubscriptions(ctx context.Context) ([]Subscription, error) {
+	activeSubsMu.RLock()
+	if len(activeSubsCache) > 0 && time.Since(activeSubsFetchedAt) < activeSubsTTL {
+		subs := make([]Subscription, len(activeSubsCache))
+		copy(subs, activeSubsCache)
+		activeSubsMu.RUnlock()
+		return subs, nil
+	}
+	activeSubsMu.RUnlock()
+
+	subs, err := DiscoverSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	activeSubsMu.Lock()
+	activeSubsCache = subs
+	activeSubsFetchedAt = time.Now()
+	activeSubsMu.Unlock()
+
+	log.Printf("Active subscriptions refreshed: %d subscriptions cached", len(subs))
+	return subs, nil
 }
 
 // ─── Web Server Implementation ──────────────────────────────────────────────
@@ -349,7 +390,7 @@ func startServer(port string) {
 		}
 
 		// Get subscriptions from dedicated discovery endpoint for full list
-		subscriptions, err := DiscoverSubscriptions(c.Request.Context())
+		subscriptions, err := getActiveSubscriptions(c.Request.Context())
 		if err != nil {
 			// Fallback to empty if discovery fails
 			subscriptions = []Subscription{}
@@ -372,7 +413,7 @@ func startServer(port string) {
 
 	// DiscoverSubscriptions returns all Azure subscriptions the user has access to
 	r.GET("/api/subscriptions", func(c *gin.Context) {
-		subs, err := DiscoverSubscriptions(c.Request.Context())
+		subs, err := getActiveSubscriptions(c.Request.Context())
 		if err != nil {
 			if isAuthError(err) {
 				c.JSON(401, gin.H{"error": err.Error(), "auth_error": true})
@@ -3661,9 +3702,9 @@ func startServer(port string) {
 		time.Sleep(60 * time.Second)
 		log.Println("Startup: pre-fetching daily costs for all subscriptions...")
 		ctx := context.Background()
-		subs, err := DiscoverSubscriptions(ctx)
+		subs, err := getActiveSubscriptions(ctx)
 		if err != nil {
-			log.Printf("Startup: failed to discover subscriptions: %v", err)
+			log.Printf("Startup: failed to get active subscriptions: %v", err)
 			return
 		}
 
@@ -4162,6 +4203,27 @@ type streamMsg struct {
 
 func sseHandler(c *gin.Context) {
 	subs := c.QueryArray("subscriptionId")
+	// Auto-discover active subscriptions when none are provided by the client
+	if len(subs) == 0 {
+		discovered, err := getActiveSubscriptions(c.Request.Context())
+		if err != nil {
+			if isAuthError(err) {
+				c.Header("Content-Type", "text/event-stream")
+				c.Header("Cache-Control", "no-cache")
+				c.Header("Connection", "keep-alive")
+				data, _ := json.Marshal(streamMsg{Type: "auth_error", Message: err.Error()})
+				c.SSEvent("message", string(data))
+				c.Writer.Flush()
+				return
+			}
+			log.Printf("SSE: failed to discover subscriptions: %v", err)
+		} else {
+			for _, sub := range discovered {
+				subs = append(subs, sub.ID)
+			}
+			log.Printf("SSE: auto-discovered %d active subscriptions", len(subs))
+		}
+	}
 	log.Printf("SSE: starting stream for %d subscriptions", len(subs))
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -4174,17 +4236,6 @@ func sseHandler(c *gin.Context) {
 	msgChan := make(chan streamMsg, len(subs)*10)
 	go func() {
 		defer close(msgChan)
-
-		// Quick auth probe: if we have no subscriptions at all, check whether
-		// the credential chain is broken before doing any real work.
-		if len(subs) == 0 {
-			_, probeErr := DiscoverSubscriptions(clientCtx)
-			if probeErr != nil && isAuthError(probeErr) {
-				log.Printf("SSE: Azure auth error detected: %v", probeErr)
-				msgChan <- streamMsg{Type: "auth_error", Message: probeErr.Error()}
-				return
-			}
-		}
 
 		// Use batch cache lookup for better performance
 		cachedResults, uncached := cache.getCachedSubscriptions(subs, "current")
@@ -4550,14 +4601,22 @@ func fetchDailyCostsWithCache(ctx context.Context, subID string, start, end time
 		}
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return nil, err
-	}
-
-	client, err := armcostmanagement.NewQueryClient(cred, nil)
-	if err != nil {
-		return nil, err
+	var client *armcostmanagement.QueryClient
+	if costClient != nil {
+		client = costClient
+	} else {
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			return nil, err
+		}
+		client, err = armcostmanagement.NewQueryClient(cred, &arm.ClientOptions{
+			ClientOptions: policy.ClientOptions{
+				Transport: httpClient,
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	daily, err := fetchDailyCosts(client, subID, start, end, ctx)

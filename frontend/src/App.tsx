@@ -2886,6 +2886,25 @@ export default function App() {
             };
           }).filter((item: AggregatedCost) => isFinite(item.cost) && isFinite(item.previousCost));
 
+          // Ghost entries for resource groups that existed only in the previous period
+          // (deleted/stopped resources). Without these, previousTotal is undercounted
+          // and Month-over-Month comparisons skew toward showing false increases.
+          const currentKeys = new Set(currentItems.map((item: CostItem) => `${item.resourceGroup}-${item.resourceType}-${item.resourceLocation}`));
+          const ghostItems: AggregatedCost[] = previousItems
+            .filter((item: CostItem) => !currentKeys.has(`${item.resourceGroup}-${item.resourceType}-${item.resourceLocation}`))
+            .map((item: CostItem) => ({
+              cost: 0,
+              previousCost: Number(item.cost) || 0,
+              trend: -100,
+              resourceId: '',
+              resourceGroup: item.resourceGroup || '',
+              resourceType: item.resourceType || '',
+              resourceLocation: item.resourceLocation || '',
+              subscriptionId: subId
+            }))
+            .filter((item: AggregatedCost) => item.previousCost > 0.01);
+          const allItems = [...newItems, ...ghostItems];
+
           setResources(prev => {
             return prev.map(r => {
               if (r.subscriptionId !== subId) return r;
@@ -2901,7 +2920,7 @@ export default function App() {
 
           setCosts(prev => {
             const filtered = prev.filter(c => c.subscriptionId !== subId);
-            return [...filtered, ...newItems];
+            return [...filtered, ...allItems];
           });
           setDataSubIds(prev => {
             const next = new Set(prev).add(subId);
@@ -2955,9 +2974,25 @@ export default function App() {
                 };
               }).filter((item: AggregatedCost) => isFinite(item.cost) && isFinite(item.previousCost));
 
+              const batchCurrentKeys = new Set(currentItems.map((item: CostItem) => `${item.resourceGroup}-${item.resourceType}-${item.resourceLocation}`));
+              const batchGhostItems: AggregatedCost[] = previousItems
+                .filter((item: CostItem) => !batchCurrentKeys.has(`${item.resourceGroup}-${item.resourceType}-${item.resourceLocation}`))
+                .map((item: CostItem) => ({
+                  cost: 0,
+                  previousCost: Number(item.cost) || 0,
+                  trend: -100,
+                  resourceId: '',
+                  resourceGroup: item.resourceGroup || '',
+                  resourceType: item.resourceType || '',
+                  resourceLocation: item.resourceLocation || '',
+                  subscriptionId: subId
+                }))
+                .filter((item: AggregatedCost) => item.previousCost > 0.01);
+              const batchAllItems = [...newItems, ...batchGhostItems];
+
               setCosts(prev => {
                 const filtered = prev.filter(c => c.subscriptionId !== subId);
-                return [...filtered, ...newItems];
+                return [...filtered, ...batchAllItems];
               });
             });
 
