@@ -56,6 +56,7 @@ export default function App() {
   // Azure authentication error state
   const [azureAuthError, setAzureAuthError] = useState<string | null>(null);
   const [dismissedAuthError, setDismissedAuthError] = useState(false);
+  const [copiedAzLogin, setCopiedAzLogin] = useState(false);
 
   // Data completeness warning state
   const [dataCompletenessWarning, setDataCompletenessWarning] = useState<string | null>(null);
@@ -2440,11 +2441,16 @@ export default function App() {
     fetch('http://localhost:8080/api/subscriptions')
       .then(r => r.json())
       .then(data => {
-        // Check for Azure authentication errors
+        // Dedicated auth_error flag from backend
+        if (data.auth_error) {
+          setAzureAuthError('not-logged-in');
+          return;
+        }
+        // Fallback: generic error keyword detection
         if (data.error && typeof data.error === 'string') {
           const errorLower = data.error.toLowerCase();
           if (errorLower.includes('defaultazurecredential') || errorLower.includes('aadsts') || errorLower.includes('authentication') || errorLower.includes('unauthorized') || errorLower.includes('token') || errorLower.includes('mfa')) {
-            setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
+            setAzureAuthError('not-logged-in');
           }
           return;
         }
@@ -2838,13 +2844,11 @@ export default function App() {
     // Safety timeout: 70s per uncached sub (60s fetch + 10s buffer) + 10s base
     const estimatedMaxTime = Math.max(30000, toFetch.length * 70000 + 10000);
     const safetyTimeout = setTimeout(() => {
-      if (dataSubIdsRef.current.size > 0) {
-        setCostsLoading(false);
-        setIsRefreshing(false);
-        es.close();
-        if (activeEventSourceRef.current === es) {
-          activeEventSourceRef.current = null;
-        }
+      setCostsLoading(false);
+      setIsRefreshing(false);
+      es.close();
+      if (activeEventSourceRef.current === es) {
+        activeEventSourceRef.current = null;
       }
     }, estimatedMaxTime);
 
@@ -2989,12 +2993,20 @@ export default function App() {
               }
               return next;
             });
+          } else if (msg.type === 'auth_error') {
+            // Dedicated auth error signal from backend
+            setAzureAuthError('not-logged-in');
+            setCostsLoading(false);
+            setIsRefreshing(false);
+            clearTimeout(safetyTimeout);
+            es.close();
+            if (activeEventSourceRef.current === es) activeEventSourceRef.current = null;
           } else if (msg.message?.includes('error')) {
             console.error('SSE status error for', msg.subId, ':', msg.message);
             // Detect Azure authentication errors
             const errorMsg = msg.message.toLowerCase();
-            if (errorMsg.includes('subscriptionnotfound') || errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('authentication') || errorMsg.includes('unauthorized')) {
-              setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
+            if (errorMsg.includes('subscriptionnotfound') || errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('authentication') || errorMsg.includes('unauthorized') || errorMsg.includes('defaultazurecredential') || errorMsg.includes('aadsts')) {
+              setAzureAuthError('not-logged-in');
             }
             // Add failed subscriptions to synced count so loading doesn't get stuck permanently
             if (msg.subId) {
@@ -3078,7 +3090,7 @@ export default function App() {
     if (uniqueSubs.length > 0 && allPossibleFilters.subs?.length > 0) {
       fetchCosts();
     }
-  }, [uniqueSubs, allPossibleFilters.subs]);
+  }, [uniqueSubs, allPossibleFilters.subs, activeSubs]);
 
   // Auto-complete loading when all subscription data has arrived (don't wait for SSE "done")
   useEffect(() => {
@@ -4741,77 +4753,104 @@ export default function App() {
               {azureAuthError && !dismissedAuthError && (
                 <div style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 16,
-                  padding: '14px 18px',
-                  background: 'var(--danger-dim)',
-                  border: '1px solid rgba(244 63 94 / 0.3)',
-                  borderRadius: 12,
-                  borderLeft: '4px solid var(--danger)'
+                  flexDirection: 'column',
+                  gap: 0,
+                  background: 'linear-gradient(135deg, rgba(251,146,60,0.12) 0%, rgba(239,68,68,0.10) 100%)',
+                  border: '1px solid rgba(251,146,60,0.35)',
+                  borderRadius: 14,
+                  borderLeft: '4px solid #fb923c',
+                  overflow: 'hidden',
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: 8,
-                      background: 'var(--danger)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
-                    }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
-                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                        <line x1="12" y1="9" x2="12" y2="13" />
-                        <line x1="12" y1="17" x2="12.01" y2="17" />
-                      </svg>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger)', marginBottom: 2 }}>
-                        Azure Authentication Error
+                  {/* Header row */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px 10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{
+                        width: 36, height: 36, borderRadius: 8,
+                        background: 'linear-gradient(135deg, #fb923c, #ef4444)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+                      }}>
+                        {/* Lock icon */}
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        </svg>
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                        {azureAuthError}
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#fb923c', marginBottom: 2 }}>
+                          Azure login required
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                          Your Azure credentials have expired or are not set up. Run the command below in your terminal, then refresh.
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-                    <button
-                      onClick={() => window.location.reload()}
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: 8,
-                        border: 'none',
-                        background: 'var(--danger)',
-                        color: 'white',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6
-                      }}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                      </svg>
-                      Refresh
-                    </button>
                     <button
                       onClick={() => setDismissedAuthError(true)}
                       style={{
-                        padding: '8px 14px',
-                        borderRadius: 8,
-                        border: '1px solid var(--border)',
-                        background: 'transparent',
-                        color: 'var(--text-2)',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        cursor: 'pointer'
+                        padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)',
+                        background: 'transparent', color: 'var(--text-2)', fontSize: 12,
+                        fontWeight: 600, cursor: 'pointer', flexShrink: 0
+                      }}
+                    >✕</button>
+                  </div>
+
+                  {/* Command row */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px 14px' }}>
+                    <div style={{
+                      flex: 1, display: 'flex', alignItems: 'center', gap: 10,
+                      background: 'rgba(0,0,0,0.35)', borderRadius: 8,
+                      padding: '9px 14px', border: '1px solid rgba(251,146,60,0.2)',
+                      fontFamily: 'JetBrains Mono, monospace',
+                    }}>
+                      <span style={{ fontSize: 12, color: '#a3a3a3', userSelect: 'none' }}>$</span>
+                      <span style={{ fontSize: 13, color: '#fb923c', fontWeight: 600, letterSpacing: 0.2 }}>az login</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText('az login').then(() => {
+                          setCopiedAzLogin(true);
+                          setTimeout(() => setCopiedAzLogin(false), 2000);
+                        });
+                      }}
+                      style={{
+                        padding: '9px 14px', borderRadius: 8, border: '1px solid rgba(251,146,60,0.35)',
+                        background: copiedAzLogin ? 'rgba(34,197,94,0.15)' : 'rgba(251,146,60,0.12)',
+                        color: copiedAzLogin ? '#4ade80' : '#fb923c',
+                        fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        transition: 'all 0.2s ease', flexShrink: 0
                       }}
                     >
-                      Dismiss
+                      {copiedAzLogin ? (
+                        <>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="20 6 9 17 4 12"/>
+                          </svg>
+                          Copied!
+                        </>
+                      ) : (
+                        <>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                          </svg>
+                          Copy
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => window.location.reload()}
+                      style={{
+                        padding: '9px 14px', borderRadius: 8, border: 'none',
+                        background: 'linear-gradient(135deg, #fb923c, #ef4444)',
+                        color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                      </svg>
+                      Refresh
                     </button>
                   </div>
                 </div>

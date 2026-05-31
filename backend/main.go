@@ -374,7 +374,11 @@ func startServer(port string) {
 	r.GET("/api/subscriptions", func(c *gin.Context) {
 		subs, err := DiscoverSubscriptions(c.Request.Context())
 		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
+			if isAuthError(err) {
+				c.JSON(401, gin.H{"error": err.Error(), "auth_error": true})
+			} else {
+				c.JSON(500, gin.H{"error": err.Error()})
+			}
 			return
 		}
 		c.JSON(200, gin.H{"subscriptions": subs})
@@ -4123,6 +4127,32 @@ func rgTrendsHandler(c *gin.Context) {
 	})
 }
 
+// isAuthError returns true when err indicates the user is not logged in
+// (DefaultAzureCredential chain exhausted, AADSTS token errors, 401/403).
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	keywords := []string{
+		"defaultazurecredential",
+		"aadsts",
+		"no credentials",
+		"failed to acquire token",
+		"authentication failed",
+		"chained_token_credential",
+		"401",
+		"unauthorized",
+		"token",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(s, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 type streamMsg struct {
 	Type    string `json:"type"`
 	SubID   string `json:"subId,omitempty"`
@@ -4144,6 +4174,17 @@ func sseHandler(c *gin.Context) {
 	msgChan := make(chan streamMsg, len(subs)*10)
 	go func() {
 		defer close(msgChan)
+
+		// Quick auth probe: if we have no subscriptions at all, check whether
+		// the credential chain is broken before doing any real work.
+		if len(subs) == 0 {
+			_, probeErr := DiscoverSubscriptions(clientCtx)
+			if probeErr != nil && isAuthError(probeErr) {
+				log.Printf("SSE: Azure auth error detected: %v", probeErr)
+				msgChan <- streamMsg{Type: "auth_error", Message: probeErr.Error()}
+				return
+			}
+		}
 
 		// Use batch cache lookup for better performance
 		cachedResults, uncached := cache.getCachedSubscriptions(subs, "current")
