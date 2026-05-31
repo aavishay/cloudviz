@@ -3652,6 +3652,9 @@ func startServer(port string) {
 
 	// Pre-fetch daily costs for all subscriptions on startup
 	go func() {
+		// Wait 60s before competing with the first SSE stream for Azure rate limit budget
+		log.Println("Startup: waiting 60s before pre-fetching daily costs (to avoid rate limit contention with SSE)...")
+		time.Sleep(60 * time.Second)
 		log.Println("Startup: pre-fetching daily costs for all subscriptions...")
 		ctx := context.Background()
 		subs, err := DiscoverSubscriptions(ctx)
@@ -4186,7 +4189,9 @@ func sseHandler(c *gin.Context) {
 
 		// Fetch uncached subs in parallel with increased concurrency
 		if len(uncached) > 0 {
-			const batchSize = 5
+			// Batch size 3: reduces simultaneous Azure API calls (3 subs × 2 periods = 6 concurrent
+			// calls vs 10 previously), significantly reducing 429 pressure per batch.
+			const batchSize = 3
 			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
 				// Check if client disconnected before starting batch
 				select {
@@ -4208,15 +4213,18 @@ func sseHandler(c *gin.Context) {
 						defer wg.Done()
 						log.Printf("SSE: fetching sub %d/%d: %s", batchStart+1, len(uncached), sid)
 						now := time.Now()
-						// 2 minute timeout to handle rate limits
-						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 
-						// Fetch current period first, then previous
+						// Each period gets its own independent 3-minute context so that
+						// retries on "current" don't starve the "previous" fetch.
+						// 3 min covers worst-case retry chain: 10+20+40+80+jitter ≈ 166s.
 						var currErr, prevErr error
-						_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
+						currCtx, currCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+						_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), currCtx)
+						currCancel()
 						time.Sleep(200 * time.Millisecond)
-						_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), ctx)
-						cancel()
+						prevCtx, prevCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+						_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), prevCtx)
+						prevCancel()
 
 						if currErr != nil {
 							log.Printf("SSE: error fetching current %s: %v", sid, currErr)
@@ -4290,7 +4298,11 @@ func sseHandler(c *gin.Context) {
 		case <-clientDisconnected:
 			log.Printf("SSE: client disconnected")
 			return
-		case msg := <-msgChan:
+		case msg, ok := <-msgChan:
+			if !ok {
+				log.Printf("SSE: stream closed internally")
+				return
+			}
 			data, _ := json.Marshal(msg)
 			c.SSEvent("message", string(data))
 			c.Writer.Flush()
