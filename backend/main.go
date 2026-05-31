@@ -4228,11 +4228,12 @@ func sseHandler(c *gin.Context) {
 
 		log.Printf("SSE: %d cached, %d uncached subscriptions", cachedCount, len(uncached))
 
-		// Fetch uncached subs in parallel with increased concurrency
+		// Fetch uncached subs in parallel.
+		// Batch size 10: goroutines are cheap and the global costLimiter (10 req/s, burst 15)
+		// is the real throttle — larger batches just mean more goroutines waiting on tokens
+		// in parallel, which is efficient and eliminates idle time between batches.
 		if len(uncached) > 0 {
-			// Batch size 3: reduces simultaneous Azure API calls (3 subs × 2 periods = 6 concurrent
-			// calls vs 10 previously), significantly reducing 429 pressure per batch.
-			const batchSize = 3
+			const batchSize = 10
 			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
 				// Check if client disconnected before starting batch
 				select {
@@ -4255,17 +4256,25 @@ func sseHandler(c *gin.Context) {
 						log.Printf("SSE: fetching sub %d/%d: %s", batchStart+1, len(uncached), sid)
 						now := time.Now()
 
-						// Each period gets its own independent 3-minute context so that
-						// retries on "current" don't starve the "previous" fetch.
+						// Fetch current and previous periods in parallel — each with its own
+						// 3-minute context so retries on one period don't starve the other.
 						// 3 min covers worst-case retry chain: 10+20+40+80+jitter ≈ 166s.
 						var currErr, prevErr error
-						currCtx, currCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-						_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), currCtx)
-						currCancel()
-						time.Sleep(200 * time.Millisecond)
-						prevCtx, prevCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-						_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), prevCtx)
-						prevCancel()
+						var periodWg sync.WaitGroup
+						periodWg.Add(2)
+						go func() {
+							defer periodWg.Done()
+							currCtx, currCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+							defer currCancel()
+							_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), currCtx)
+						}()
+						go func() {
+							defer periodWg.Done()
+							prevCtx, prevCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+							defer prevCancel()
+							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), prevCtx)
+						}()
+						periodWg.Wait()
 
 						if currErr != nil {
 							log.Printf("SSE: error fetching current %s: %v", sid, currErr)
@@ -4313,10 +4322,8 @@ func sseHandler(c *gin.Context) {
 					}(subID)
 				}
 				wg.Wait()
-				// Reduced delay with increased rate limits
-				if batchStart+batchSize < len(uncached) {
-					time.Sleep(1 * time.Second)
-				}
+				// No inter-batch sleep: the costLimiter token bucket already spaces
+				// requests at ≤10/s globally — sleeping here would just waste time.
 			}
 		}
 		log.Printf("SSE: sending done message")
