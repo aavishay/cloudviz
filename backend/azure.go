@@ -447,7 +447,6 @@ func parseDailyCostResults(res armcostmanagement.QueryResult) []map[string]any {
 				colCost = i
 			}
 		}
-		log.Printf("Daily cost columns: %v, detected costIdx=%d, dateIdx=%d", colNames, colCost, colDate)
 	}
 
 	// Validate column indices
@@ -469,15 +468,11 @@ func parseDailyCostResults(res armcostmanagement.QueryResult) []map[string]any {
 		dateVal := fmt.Sprintf("%v", row[colDate])
 		costVal := row[colCost]
 		parsedCost := parseFloatVal(costVal)
-		if i < 3 {
-			log.Printf("Row %d: dateRaw=%v, costRaw=%v, parsedCost=%.4f", i, dateVal, costVal, parsedCost)
-		}
 		results = append(results, map[string]any{
 			"date": parseAzureDate(dateVal),
 			"cost": parsedCost,
 		})
 	}
-	log.Printf("Parsed %d daily cost rows", len(results))
 	return results
 }
 
@@ -2360,7 +2355,6 @@ func fetchSubscriptionNames(ctx context.Context, subIDs []string) map[string]str
 			subName = fmt.Sprint(m["name"])
 		}
 
-		log.Printf("fetchSubscriptionNames: row - subID=%s, subName=%s", subID, subName)
 		if subID != "" && subName != "" && subName != "<nil>" && isUUID(subID) {
 			subscriptionNameCache.Store(subID, subName)
 			result[subID] = subName
