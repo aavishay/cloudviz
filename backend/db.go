@@ -357,6 +357,50 @@ func newDBCache(dbPath string) (*dbCache, error) {
 		return nil, err
 	}
 
+	// Metrics cache table - stores VM/resource metrics to avoid repeated Azure Monitor API calls
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS metrics_cache (
+		resource_id TEXT PRIMARY KEY,
+		resource_type TEXT,
+		metrics_json TEXT,
+		fetched_at DATETIME
+	)`)
+	if err != nil {
+		log.Printf("Warning: failed to create metrics_cache table: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_metrics_fetched ON metrics_cache(fetched_at)`); err != nil {
+		log.Printf("Warning: failed to create metrics_cache index: %v", err)
+	}
+
+	// Advisor recommendations cache
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS advisor_cache (
+		subscription_id TEXT,
+		category TEXT,
+		recommendations_json TEXT,
+		fetched_at DATETIME,
+		PRIMARY KEY (subscription_id, category)
+	)`)
+	if err != nil {
+		log.Printf("Warning: failed to create advisor_cache table: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_advisor_fetched ON advisor_cache(fetched_at)`); err != nil {
+		log.Printf("Warning: failed to create advisor_cache index: %v", err)
+	}
+
+	// VM simple metrics cache - stores avgCPU and avgMemory for idle detection
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS vm_metrics_cache (
+		resource_id TEXT PRIMARY KEY,
+		days INTEGER,
+		avg_cpu REAL,
+		avg_memory REAL,
+		fetched_at DATETIME
+	)`)
+	if err != nil {
+		log.Printf("Warning: failed to create vm_metrics_cache table: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_vm_metrics_fetched ON vm_metrics_cache(fetched_at)`); err != nil {
+		log.Printf("Warning: failed to create vm_metrics_cache index: %v", err)
+	}
+
 	return &dbCache{db: db}, nil
 }
 
@@ -595,6 +639,36 @@ func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
 		if _, err := stmt.Exec(subID, date, cost, now); err != nil {
 			log.Printf("Warning: failed to insert daily cost: %v", err)
 		}
+	}
+}
+
+// populateCostsFromDaily aggregates daily cost data and inserts into costs table
+// This ensures the costs table stays in sync with cost_daily for display purposes
+func (dc *dbCache) populateCostsFromDaily(subID string, daily []map[string]any, period string) {
+	// Calculate total cost from daily entries
+	var totalCost float64
+	for _, item := range daily {
+		if cost, ok := item["cost"].(float64); ok {
+			totalCost += cost
+		}
+	}
+	if totalCost <= 0 {
+		return
+	}
+
+	// Delete old aggregate entry for this subscription/period
+	if _, err := dc.db.Exec("DELETE FROM costs WHERE subscription_id = ? AND period = ? AND resource_id = 'daily-aggregate'", subID, period); err != nil {
+		log.Printf("Warning: failed to delete old daily aggregate cost: %v", err)
+	}
+
+	// Insert aggregate cost entry
+	now := time.Now()
+	_, err := dc.db.Exec(
+		"INSERT INTO costs (subscription_id, resource_id, resource_group, resource_type, resource_location, cost, period, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		subID, "daily-aggregate", "", "DailyAggregate", "", totalCost, period, now,
+	)
+	if err != nil {
+		log.Printf("Warning: failed to insert daily aggregate cost: %v", err)
 	}
 }
 
@@ -912,5 +986,99 @@ func recordChange(db *sql.DB, resourceID, resourceName, resourceType, changeType
 	if _, err := db.Exec(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now(), "Unknown"); err != nil {
 		log.Printf("Warning: failed to record change: %v", err)
+	}
+}
+
+// Metrics cache operations
+
+func (dc *dbCache) getMetrics(resourceID string) (map[string][]float64, bool) {
+	var metricsJSON string
+	var fetchedAt time.Time
+	err := dc.db.QueryRow("SELECT metrics_json, fetched_at FROM metrics_cache WHERE resource_id = ?", resourceID).Scan(&metricsJSON, &fetchedAt)
+	if err != nil {
+		return nil, false
+	}
+	// 30 minute TTL for metrics - they're relatively stable
+	if time.Since(fetchedAt) > 30*time.Minute {
+		return nil, false
+	}
+	var metrics map[string][]float64
+	if err := json.Unmarshal([]byte(metricsJSON), &metrics); err != nil {
+		log.Printf("Warning: failed to unmarshal metrics cache: %v", err)
+		return nil, false
+	}
+	return metrics, true
+}
+
+func (dc *dbCache) setMetrics(resourceID, resourceType string, metrics map[string][]float64) {
+	metricsJSON, err := json.Marshal(metrics)
+	if err != nil {
+		log.Printf("Warning: failed to marshal metrics: %v", err)
+		return
+	}
+	_, err = dc.db.Exec(
+		"INSERT OR REPLACE INTO metrics_cache (resource_id, resource_type, metrics_json, fetched_at) VALUES (?, ?, ?, ?)",
+		resourceID, resourceType, string(metricsJSON), time.Now())
+	if err != nil {
+		log.Printf("Warning: failed to cache metrics: %v", err)
+	}
+}
+
+// Advisor recommendations cache operations
+
+func (dc *dbCache) getAdvisorRecommendations(subID, category string) ([]map[string]any, bool) {
+	var recsJSON string
+	var fetchedAt time.Time
+	err := dc.db.QueryRow("SELECT recommendations_json, fetched_at FROM advisor_cache WHERE subscription_id = ? AND category = ?", subID, category).Scan(&recsJSON, &fetchedAt)
+	if err != nil {
+		return nil, false
+	}
+	// 6 hour TTL for advisor recommendations
+	if time.Since(fetchedAt) > 6*time.Hour {
+		return nil, false
+	}
+	var recommendations []map[string]any
+	if err := json.Unmarshal([]byte(recsJSON), &recommendations); err != nil {
+		log.Printf("Warning: failed to unmarshal advisor cache: %v", err)
+		return nil, false
+	}
+	return recommendations, true
+}
+
+func (dc *dbCache) setAdvisorRecommendations(subID, category string, recommendations []map[string]any) {
+	recsJSON, err := json.Marshal(recommendations)
+	if err != nil {
+		log.Printf("Warning: failed to marshal advisor recommendations: %v", err)
+		return
+	}
+	_, err = dc.db.Exec(
+		"INSERT OR REPLACE INTO advisor_cache (subscription_id, category, recommendations_json, fetched_at) VALUES (?, ?, ?, ?)",
+		subID, category, string(recsJSON), time.Now())
+	if err != nil {
+		log.Printf("Warning: failed to cache advisor recommendations: %v", err)
+	}
+}
+
+// VM simple metrics cache operations (for idle detection)
+
+func (dc *dbCache) getVMMetrics(resourceID string, days int) (avgCPU, avgMemory float64, ok bool) {
+	var fetchedAt time.Time
+	err := dc.db.QueryRow("SELECT avg_cpu, avg_memory, fetched_at FROM vm_metrics_cache WHERE resource_id = ? AND days = ?", resourceID, days).Scan(&avgCPU, &avgMemory, &fetchedAt)
+	if err != nil {
+		return -1, -1, false
+	}
+	// 30 minute TTL for VM metrics
+	if time.Since(fetchedAt) > 30*time.Minute {
+		return -1, -1, false
+	}
+	return avgCPU, avgMemory, true
+}
+
+func (dc *dbCache) setVMMetrics(resourceID string, days int, avgCPU, avgMemory float64) {
+	_, err := dc.db.Exec(
+		"INSERT OR REPLACE INTO vm_metrics_cache (resource_id, days, avg_cpu, avg_memory, fetched_at) VALUES (?, ?, ?, ?, ?)",
+		resourceID, days, avgCPU, avgMemory, time.Now())
+	if err != nil {
+		log.Printf("Warning: failed to cache VM metrics: %v", err)
 	}
 }

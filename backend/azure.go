@@ -1190,6 +1190,13 @@ var metricConfigs = map[string]struct {
 
 // fetchResourceMetrics fetches metrics for a resource using the appropriate config
 func fetchResourceMetrics(ctx context.Context, resourceID, resType string) (map[string][]float64, error) {
+	// Check cache first
+	if cache != nil {
+		if metrics, ok := cache.getMetrics(resourceID); ok {
+			return metrics, nil
+		}
+	}
+
 	config, ok := metricConfigs[strings.ToLower(resType)]
 	if !ok {
 		return nil, fmt.Errorf("no metric config for resource type: %s", resType)
@@ -1225,6 +1232,12 @@ func fetchResourceMetrics(ctx context.Context, resourceID, resType string) (map[
 	if len(metrics) == 0 {
 		return config.fallback, nil
 	}
+
+	// Cache the metrics
+	if cache != nil {
+		cache.setMetrics(resourceID, resType, metrics)
+	}
+
 	return metrics, nil
 }
 
@@ -1609,6 +1622,13 @@ Only respond with valid JSON. No markdown, no explanations outside the JSON.`, r
 
 // fetchVMMetrics returns average CPU and memory utilization for a VM over the specified number of days
 func fetchVMMetrics(ctx context.Context, resourceID string, days int) (map[string]float64, error) {
+	// Check cache first
+	if cache != nil {
+		if avgCPU, avgMem, ok := cache.getVMMetrics(resourceID, days); ok {
+			return map[string]float64{"avgCPU": avgCPU, "avgMemory": avgMem}, nil
+		}
+	}
+
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return fallbackVMMetrics(), nil
@@ -1670,6 +1690,11 @@ func fetchVMMetrics(ctx context.Context, resourceID string, days int) (map[strin
 				avgMem = avg
 			}
 		}
+	}
+
+	// Cache the results
+	if cache != nil {
+		cache.setVMMetrics(resourceID, days, avgCPU, avgMem)
 	}
 
 	return map[string]float64{"avgCPU": avgCPU, "avgMemory": avgMem}, nil

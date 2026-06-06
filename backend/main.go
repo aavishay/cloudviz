@@ -45,8 +45,8 @@ var (
 	lastSync       time.Time
 	syncMutex      sync.Mutex
 	// Azure Cost Management is very sensitive to 429s (100/min per scope).
-	// Limit globally to ~2.5 req/s to prevent global 429s and avoid overwhelming DNS/sockets.
-	costLimiter    = rate.NewLimiter(rate.Limit(2.5), 10)
+	// Limit globally to ~2 req/s with burst 5 to prevent 429 stampedes.
+	costLimiter    = rate.NewLimiter(rate.Limit(2.0), 5)
 	// HTTP client with connection pooling for reuse
 	httpClient     = &http.Client{
 		Timeout: 60 * time.Second,
@@ -72,7 +72,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.35.0"
+var Version = "1.36.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -1076,13 +1076,30 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				// Fetch current period costs
-				current, err1 := fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
+				// Try cached data first, fall back to API
+				var current, previous []map[string]any
+				var err1, err2 error
+
+				current, ok1 := cache.getDailyCosts(subID, currentStart, now)
+				if !ok1 {
+					current, err1 = fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
+					if err1 == nil && len(current) > 0 {
+						cache.setDailyCosts(subID, current)
+					}
+				}
+
 				// Small delay between consecutive calls to same sub
 				time.Sleep(100 * time.Millisecond)
-				previous, err2 := fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
 
-				if err1 != nil || err2 != nil {
+				previous, ok2 := cache.getDailyCosts(subID, previousStart, previousEnd)
+				if !ok2 {
+					previous, err2 = fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
+					if err2 == nil && len(previous) > 0 {
+						cache.setDailyCosts(subID, previous)
+					}
+				}
+
+				if (err1 != nil && !ok1) || (err2 != nil && !ok2) {
 					return
 				}
 
@@ -1494,6 +1511,18 @@ func startServer(port string) {
 		category := c.DefaultQuery("category", "Cost")
 		subID := c.DefaultQuery("subscriptionId", "")
 
+		// Check cache first
+		if cache != nil {
+			if recommendations, ok := cache.getAdvisorRecommendations(subID, category); ok {
+				c.JSON(200, map[string]any{
+					"recommendations": recommendations,
+					"count":           len(recommendations),
+					"cached":          true,
+				})
+				return
+			}
+		}
+
 		apiVersion := "2024-11-18-preview"
 		url := fmt.Sprintf("https://management.azure.com/subscriptions/%s/providers/Microsoft.Advisor/recommendations?api-version=%s&$filter=properties/category eq '%s'",
 			subID, apiVersion, category)
@@ -1568,9 +1597,15 @@ func startServer(port string) {
 			recommendations = append(recommendations, rec)
 		}
 
+		// Cache the recommendations
+		if cache != nil {
+			cache.setAdvisorRecommendations(subID, category, recommendations)
+		}
+
 		c.JSON(200, map[string]any{
 			"recommendations": recommendations,
 			"count":           len(recommendations),
+			"cached":          false,
 		})
 	})
 
@@ -2143,30 +2178,31 @@ func startServer(port string) {
 		previousStart := now.AddDate(0, 0, -periodDays*2)
 		previousEnd := now.AddDate(0, 0, -periodDays)
 
-		// Use cached costs table data directly - this is more reliable than API calls
-		// and doesn't require Azure authentication
+		// Query cost_daily table with actual date ranges for accurate comparison
 		var currentTotal, previousTotal float64
+		currentStartStr := currentStart.Format("2006-01-02")
+		nowStr := now.Format("2006-01-02")
+		previousStartStr := previousStart.Format("2006-01-02")
+		previousEndStr := previousEnd.Format("2006-01-02")
 
-		// Query current period from cache
-		currentQuery := "SELECT COALESCE(SUM(cost), 0) FROM costs WHERE period = 'current'"
+		// Query current period from cost_daily with date range
+		currentQuery := "SELECT COALESCE(SUM(cost), 0) FROM cost_daily WHERE date >= ? AND date <= ?"
 		if len(subs) > 0 {
 			currentQuery += " AND subscription_id IN (" + placeholders(len(subs)) + ")"
-		}
-		if len(subs) > 0 {
-			cache.db.QueryRow(currentQuery, toAnySlice(subs)...).Scan(&currentTotal)
+			args := append([]any{currentStartStr, nowStr}, toAnySlice(subs)...)
+			cache.db.QueryRow(currentQuery, args...).Scan(&currentTotal)
 		} else {
-			cache.db.QueryRow(currentQuery).Scan(&currentTotal)
+			cache.db.QueryRow(currentQuery, currentStartStr, nowStr).Scan(&currentTotal)
 		}
 
-		// Query previous period from cache
-		previousQuery := "SELECT COALESCE(SUM(cost), 0) FROM costs WHERE period = 'previous'"
+		// Query previous period from cost_daily with date range
+		previousQuery := "SELECT COALESCE(SUM(cost), 0) FROM cost_daily WHERE date >= ? AND date <= ?"
 		if len(subs) > 0 {
 			previousQuery += " AND subscription_id IN (" + placeholders(len(subs)) + ")"
-		}
-		if len(subs) > 0 {
-			cache.db.QueryRow(previousQuery, toAnySlice(subs)...).Scan(&previousTotal)
+			args := append([]any{previousStartStr, previousEndStr}, toAnySlice(subs)...)
+			cache.db.QueryRow(previousQuery, args...).Scan(&previousTotal)
 		} else {
-			cache.db.QueryRow(previousQuery).Scan(&previousTotal)
+			cache.db.QueryRow(previousQuery, previousStartStr, previousEndStr).Scan(&previousTotal)
 		}
 
 		var deltaPct, deltaAbs float64
@@ -2320,10 +2356,10 @@ func startServer(port string) {
 		if len(missingSubs) > 0 {
 			go func(subsToFetch []string) {
 				var wg sync.WaitGroup
-				sem := make(chan struct{}, 10)
+				sem := make(chan struct{}, 3)
 				for i, sid := range subsToFetch {
-					if i > 0 && i%5 == 0 {
-						time.Sleep(500 * time.Millisecond)
+					if i > 0 {
+						time.Sleep(2 * time.Second)
 					}
 					wg.Add(1)
 					go func(subID string) {
@@ -2939,6 +2975,9 @@ func startServer(port string) {
 		cache.db.Exec("DELETE FROM cost_type_daily")
 		cache.db.Exec("DELETE FROM cost_forecast")
 		cache.db.Exec("DELETE FROM cost_daily")
+		cache.db.Exec("DELETE FROM metrics_cache")
+		cache.db.Exec("DELETE FROM advisor_cache")
+		cache.db.Exec("DELETE FROM vm_metrics_cache")
 		c.JSON(200, gin.H{"message": "Cache cleared"})
 	})
 
@@ -3695,42 +3734,39 @@ func startServer(port string) {
 
 	fmt.Printf("CloudViz server starting at :%s\n", port)
 
-	// Pre-fetch daily costs for all subscriptions on startup
-	go func() {
-		// Wait 60s before competing with the first SSE stream for Azure rate limit budget
-		log.Println("Startup: waiting 60s before pre-fetching daily costs (to avoid rate limit contention with SSE)...")
-		time.Sleep(60 * time.Second)
-		log.Println("Startup: pre-fetching daily costs for all subscriptions...")
-		ctx := context.Background()
-		subs, err := getActiveSubscriptions(ctx)
-		if err != nil {
-			log.Printf("Startup: failed to get active subscriptions: %v", err)
-			return
-		}
-
-		now := time.Now()
-		start := now.AddDate(0, 0, -30)
-
-		for i, sub := range subs {
-			// Check if already cached
-			if _, ok := cache.getDailyCosts(sub.ID, start, now); ok {
-				continue
-			}
-
-			log.Printf("Startup: fetching daily costs for %s (%d/%d)", sub.Name, i+1, len(subs))
-			daily, err := fetchDailyCosts(costClient, sub.ID, start, now, ctx)
-			if err != nil {
-				log.Printf("Startup: failed to fetch daily costs for %s: %v", sub.Name, err)
-				continue
-			}
-			cache.setDailyCosts(sub.ID, daily)
-			log.Printf("Startup: cached %d daily cost entries for %s", len(daily), sub.Name)
-
-			// Sleep to avoid rate limits
-			time.Sleep(2 * time.Second)
-		}
-		log.Println("Startup: daily cost pre-fetch complete")
-	}()
+// DISABLED: 	// Pre-fetch daily costs for all subscriptions on startup
+// DISABLED: 	go func() {
+// DISABLED: 		log.Println("Startup: pre-fetching daily costs for all subscriptions...")
+// DISABLED: 		ctx := context.Background()
+// DISABLED: 		subs, err := getActiveSubscriptions(ctx)
+// DISABLED: 		if err != nil {
+// DISABLED: 			log.Printf("Startup: failed to get active subscriptions: %v", err)
+// DISABLED: 			return
+// DISABLED: 		}
+// DISABLED: 
+// DISABLED: 		now := time.Now()
+// DISABLED: 		start := now.AddDate(0, 0, -30)
+// DISABLED: 
+// DISABLED: 		for i, sub := range subs {
+// DISABLED: 			// Check if already cached
+// DISABLED: 			if _, ok := cache.getDailyCosts(sub.ID, start, now); ok {
+// DISABLED: 				continue
+// DISABLED: 			}
+// DISABLED: 
+// DISABLED: 			log.Printf("Startup: fetching daily costs for %s (%d/%d)", sub.Name, i+1, len(subs))
+// DISABLED: 			daily, err := fetchDailyCosts(costClient, sub.ID, start, now, ctx)
+// DISABLED: 			if err != nil {
+// DISABLED: 				log.Printf("Startup: failed to fetch daily costs for %s: %v", sub.Name, err)
+// DISABLED: 				continue
+// DISABLED: 			}
+// DISABLED: 			cache.setDailyCosts(sub.ID, daily)
+// DISABLED: 			log.Printf("Startup: cached %d daily cost entries for %s", len(daily), sub.Name)
+// DISABLED: 
+// DISABLED: 			// Sleep to avoid rate limits
+// DISABLED: 			time.Sleep(2 * time.Second)
+// DISABLED: 		}
+// DISABLED: 		log.Println("Startup: daily cost pre-fetch complete")
+// DISABLED: 	}()
 
 	// Background sync disabled - fetch costs on-demand via SSE only
 	// go backgroundSync(costClient)
@@ -4232,6 +4268,15 @@ func sseHandler(c *gin.Context) {
 	// Get client context for cancellation detection
 	clientCtx := c.Request.Context()
 
+	// 10-second startup delay before fetching cost data
+	log.Printf("SSE: waiting 10s before starting cost fetch")
+	select {
+	case <-time.After(10 * time.Second):
+	case <-clientCtx.Done():
+		log.Printf("SSE: client disconnected during startup delay")
+		return
+	}
+
 	// Larger buffer to prevent blocking; use select with timeout on sends
 	msgChan := make(chan streamMsg, len(subs)*10)
 	go func() {
@@ -4266,25 +4311,28 @@ func sseHandler(c *gin.Context) {
 				log.Printf("SSE: timeout sending batch cached data")
 			}
 
-			// Send individual statuses
+			// Send individual statuses immediately for all cached subscriptions
+			log.Printf("SSE: sending synced status for %d cached subscriptions", len(cachedResults))
 			for _, sid := range cachedResults {
 				select {
 				case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
+					log.Printf("SSE: marked cached sub %s as synced", sid)
 				case <-clientCtx.Done():
+					log.Printf("SSE: client disconnected while sending cached statuses")
 					return
-				case <-time.After(100 * time.Millisecond):
+				case <-time.After(500 * time.Millisecond):
+					log.Printf("SSE: timeout sending synced status for cached sub %s", sid)
 				}
 			}
 		}
 
-		log.Printf("SSE: %d cached, %d uncached subscriptions", cachedCount, len(uncached))
+		log.Printf("SSE: %d cached, %d uncached subscriptions - starting uncached fetch", cachedCount, len(uncached))
 
 		// Fetch uncached subs in parallel.
-		// Batch size 10: goroutines are cheap and the global costLimiter (10 req/s, burst 15)
-		// is the real throttle — larger batches just mean more goroutines waiting on tokens
-		// in parallel, which is efficient and eliminates idle time between batches.
+		// Batch size 3: each sub makes 3 API calls (daily + current + previous), so max 9 concurrent
+		// requests per batch. This keeps us under the global costLimiter and avoids 429s.
 		if len(uncached) > 0 {
-			const batchSize = 10
+			const batchSize = 3
 			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
 				// Check if client disconnected before starting batch
 				select {
@@ -4300,12 +4348,32 @@ func sseHandler(c *gin.Context) {
 				}
 				batch := uncached[batchStart:end]
 				var wg sync.WaitGroup
-				for _, subID := range batch {
+				for i, subID := range batch {
 					wg.Add(1)
-					go func(sid string) {
+					go func(sid string, idx int) {
 						defer wg.Done()
-						log.Printf("SSE: fetching sub %d/%d: %s", batchStart+1, len(uncached), sid)
+						log.Printf("SSE: fetching sub %d/%d: %s", idx+1, len(uncached), sid)
 						now := time.Now()
+
+						// Always fetch daily costs first (separate goroutine) so costs table gets populated
+						// even if main fetch fails due to rate limits
+						var dailyData []map[string]any
+						var dailyErr error
+						var dailyWg sync.WaitGroup
+						dailyWg.Add(1)
+						go func() {
+							defer dailyWg.Done()
+							dailyCtx, dailyCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+							defer dailyCancel()
+							start := now.AddDate(0, 0, -60)
+							dailyData, dailyErr = fetchDailyCosts(costClient, sid, start, now, dailyCtx)
+							if dailyErr == nil && len(dailyData) > 0 {
+								cache.setDailyCosts(sid, dailyData)
+								log.Printf("SSE: cached %d daily cost entries for %s", len(dailyData), sid)
+								// Also populate costs table from daily data for consistent display
+								cache.populateCostsFromDaily(sid, dailyData, "current")
+							}
+						}()
 
 						// Fetch current and previous periods in parallel — each with its own
 						// 3-minute context so retries on one period don't starve the other.
@@ -4326,15 +4394,36 @@ func sseHandler(c *gin.Context) {
 							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), prevCtx)
 						}()
 						periodWg.Wait()
+						dailyWg.Wait()
 
 						if currErr != nil {
 							log.Printf("SSE: error fetching current %s: %v", sid, currErr)
-							select {
-							case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "error: " + currErr.Error()}:
-							case <-clientCtx.Done():
-								log.Printf("SSE: client disconnected during error send")
-							case <-time.After(5 * time.Second):
-								log.Printf("SSE: timeout sending error status for %s", sid)
+							// Try to send cached data even on error (daily costs may have been populated)
+							data := gin.H{}
+							if res, ok := cache.get(sid, "current"); ok {
+								data["current"] = normalizeResults(res)
+								if prev, ok := cache.get(sid, "previous"); ok {
+									data["previous"] = normalizeResults(prev)
+								}
+								select {
+								case msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}:
+									log.Printf("SSE: sent cached data for failed sub %s", sid)
+								case <-clientCtx.Done():
+								case <-time.After(3 * time.Second):
+								}
+								select {
+								case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
+								case <-clientCtx.Done():
+								case <-time.After(3 * time.Second):
+								}
+							} else {
+								select {
+								case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "error: " + currErr.Error()}:
+								case <-clientCtx.Done():
+									log.Printf("SSE: client disconnected during error send")
+								case <-time.After(5 * time.Second):
+									log.Printf("SSE: timeout sending error status for %s", sid)
+								}
 							}
 							return
 						}
@@ -4370,11 +4459,12 @@ func sseHandler(c *gin.Context) {
 						case <-time.After(5 * time.Second):
 							log.Printf("SSE: timeout sending status for %s", sid)
 						}
-					}(subID)
+
+					}(subID, batchStart+i)
 				}
 				wg.Wait()
-				// No inter-batch sleep: the costLimiter token bucket already spaces
-				// requests at ≤10/s globally — sleeping here would just waste time.
+				// Delay between batches to let rate limiter recover and avoid 429s
+				time.Sleep(5 * time.Second)
 			}
 		}
 		log.Printf("SSE: sending done message")

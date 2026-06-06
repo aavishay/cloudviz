@@ -471,10 +471,10 @@ export default function App() {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" style={{ opacity: 0.5 }}><path d="M9 18l6-6-6-6" /></svg>
         </div>
         <div style={{ fontSize: 32, fontWeight: 900, color: budgetStatus?.status === 'over' ? 'var(--danger)' : budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', letterSpacing: '-0.03em', lineHeight: 1 }}>
-          {costsLoading ? <span style={{ opacity: 0.5 }}>—</span> : (() => { const c = formatCost(totalCostsSum); return `$${c.formatted}${c.suffix}`; })()}
+          {(() => { const c = formatCost(totalCostsSum); return `$${c.formatted}${c.suffix}`; })()}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span>{costsLoading ? 'Loading...' : `${costs.length} cost entries`}</span>
+          <span>{costsLoading ? `Loading... (${costs.length} entries so far)` : `${costs.length} cost entries`}</span>
           {budgetStatus && !costsLoading && <span style={{ padding: '2px 8px', borderRadius: 12, background: budgetStatus.color === 'var(--accent)' ? 'var(--accent-dim)' : budgetStatus.color === 'var(--warning)' ? 'var(--warning-dim)' : 'var(--danger-dim)', color: budgetStatus.color, fontSize: 10, fontWeight: 600 }}>{budgetStatus.message}</span>}
         </div>
         {!costsLoading && periodComparison && (
@@ -3137,6 +3137,27 @@ export default function App() {
 
   // Note: fetchCosts is only triggered by the useEffect above when uniqueSubs/allPossibleFilters.subs changes.
   // The fetchCosts function now prevents concurrent calls and handles incremental fetching.
+
+  // Reconnect SSE when tab regains focus if sync was interrupted
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Check if we need to reconnect: loading was active but connection is closed
+        // and we haven't received data for all subscriptions yet
+        if (costsLoading && activeEventSourceRef.current === null && dataSubIds.size < uniqueSubs.length && uniqueSubs.length > 0) {
+          console.log('Tab regained focus, resuming SSE connection...');
+          // Use true to fetch all subscriptions, not just missing ones
+          // This ensures we get complete cost data even for subs that had partial data
+          fetchCosts(true);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [costsLoading, activeEventSourceRef.current, dataSubIds.size, uniqueSubs.length]);
 
   // Fetch resource change history since start of day (browser timezone)
   const fetchHistory = async () => {
