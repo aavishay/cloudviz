@@ -773,7 +773,7 @@ func (dc *dbCache) getCachedSubscriptions(subIDs []string, period string) ([]str
 
 	query := fmt.Sprintf(
 		`SELECT DISTINCT subscription_id FROM costs
-		WHERE subscription_id IN (%s) AND period = ? AND fetched_at > datetime('now', '-24 hours')`,
+		WHERE subscription_id IN (%s) AND period = ? AND fetched_at > datetime('now', '-6 hours')`,
 		strings.Join(placeholders, ","))
 
 	rows, err := dc.db.Query(query, args...)

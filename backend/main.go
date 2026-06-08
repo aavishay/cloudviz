@@ -72,7 +72,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "1.37.0"
+var Version = "1.38.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -4355,8 +4355,9 @@ func sseHandler(c *gin.Context) {
 						log.Printf("SSE: fetching sub %d/%d: %s", idx+1, len(uncached), sid)
 						now := time.Now()
 
-						// Always fetch daily costs first (separate goroutine) so costs table gets populated
-						// even if main fetch fails due to rate limits
+						// Fetch daily costs in parallel — stored in cost_daily for trend charts only.
+						// populateCostsFromDaily (DailyAggregate fallback) is only used if the
+						// main resource-group fetch fails, to avoid double-counting.
 						var dailyData []map[string]any
 						var dailyErr error
 						var dailyWg sync.WaitGroup
@@ -4370,8 +4371,6 @@ func sseHandler(c *gin.Context) {
 							if dailyErr == nil && len(dailyData) > 0 {
 								cache.setDailyCosts(sid, dailyData)
 								log.Printf("SSE: cached %d daily cost entries for %s", len(dailyData), sid)
-								// Also populate costs table from daily data for consistent display
-								cache.populateCostsFromDaily(sid, dailyData, "current")
 							}
 						}()
 
@@ -4395,6 +4394,12 @@ func sseHandler(c *gin.Context) {
 						}()
 						periodWg.Wait()
 						dailyWg.Wait()
+
+						// If main fetch failed, use daily aggregate as fallback so the sub
+						// still contributes to the total rather than showing as missing.
+						if currErr != nil && dailyErr == nil && len(dailyData) > 0 {
+							cache.populateCostsFromDaily(sid, dailyData, "current")
+						}
 
 						if currErr != nil {
 							log.Printf("SSE: error fetching current %s: %v", sid, currErr)

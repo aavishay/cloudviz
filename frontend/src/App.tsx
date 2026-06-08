@@ -474,14 +474,14 @@ export default function App() {
           {(() => { const c = formatCost(totalCostsSum); return `$${c.formatted}${c.suffix}`; })()}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span>{costsLoading ? `Loading... (${costs.length} entries so far)` : `${costs.length} cost entries`}</span>
+          <span>{costsLoading ? `Loading... (${costs.length} entries so far)` : `${costs.length} entries · last ${costPeriod}d`}</span>
           {budgetStatus && !costsLoading && <span style={{ padding: '2px 8px', borderRadius: 12, background: budgetStatus.color === 'var(--accent)' ? 'var(--accent-dim)' : budgetStatus.color === 'var(--warning)' ? 'var(--warning-dim)' : 'var(--danger-dim)', color: budgetStatus.color, fontSize: 10, fontWeight: 600 }}>{budgetStatus.message}</span>}
         </div>
-        {!costsLoading && periodComparison && (
-          <div style={{ fontSize: 11, color: periodComparison.delta?.percent > 0 ? 'var(--danger)' : 'var(--accent)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-            {periodComparison.delta?.percent > 0 ? '↑' : '↓'} {Math.abs(periodComparison.delta?.percent || 0).toFixed(1)}% vs prior {costPeriod}d period
+        {!costsLoading && costComparison && (
+          <div style={{ fontSize: 11, color: costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+            {costComparison.isIncrease ? '↑' : '↓'} {Math.abs(costComparison.percentChange).toFixed(1)}% vs prior {costPeriod}d period
             <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>
-              ({periodComparison.delta?.absolute > 0 ? '+' : ''}${periodComparison.delta?.absolute?.toLocaleString(undefined, { maximumFractionDigits: 0 })})
+              ({costComparison.change > 0 ? '+' : ''}${costComparison.change.toLocaleString(undefined, { maximumFractionDigits: 0 })})
             </span>
           </div>
         )}
@@ -552,7 +552,7 @@ export default function App() {
           {forecastedMonthlyCost ? `$${forecastedMonthlyCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>{forecastedMonthlyCost ? 'monthly estimate' : 'loading...'}</span>
+          <span>{forecastedMonthlyCost ? `${new Date().toLocaleString('default', { month: 'long' })} estimate` : 'loading...'}</span>
           {budgetLimit > 0 && forecastedMonthlyCost && <span style={{ padding: '2px 8px', borderRadius: 12, background: forecastedMonthlyCost > budgetLimit ? 'var(--danger-dim)' : 'var(--accent-dim)', color: forecastedMonthlyCost > budgetLimit ? 'var(--danger)' : 'var(--accent)', fontSize: 10, fontWeight: 600 }}>vs ${budgetLimit.toLocaleString()}</span>}
         </div>
       </div>
@@ -4249,8 +4249,12 @@ export default function App() {
 
   const debouncedCostSearch = useDebounce(costSearchQuery, 300);
 
+  const displayCosts = useMemo(() =>
+    costs.filter(c => c.resourceType?.toLowerCase() !== 'dailyaggregate'),
+  [costs]);
+
   const filteredCosts = useMemo(() => {
-    let result = costs;
+    let result = displayCosts;
 
     // Filter by Environment tag when tagFilter is set (from chart click)
     if (tagFilter?.key === 'Environment') {
@@ -4281,14 +4285,14 @@ export default function App() {
     }
 
     return result;
-  }, [costs, debouncedCostSearch, tagFilter, resources]);
+  }, [displayCosts, debouncedCostSearch, tagFilter, resources]);
 
   const totalCostsSum = useMemo(() => costs.reduce((s, c) => s + c.cost, 0), [costs]);
 
   // Dashboard computed values
   const costsByType = useMemo(() => {
     const map = new Map<string, { value: number; raw: string }>();
-    costs.forEach(c => {
+    displayCosts.forEach(c => {
       const raw = c.resourceType;
       if (!raw || raw === 'Other') return; // skip untyped costs (reservations, marketplace, etc.)
       const type = friendlyType(raw);
@@ -4300,15 +4304,15 @@ export default function App() {
       }
     });
     return Array.from(map.entries()).map(([name, data]) => ({ name, value: data.value, raw: data.raw })).sort((a, b) => b.value - a.value).slice(0, 8);
-  }, [costs]);
+  }, [displayCosts]);
 
   const costsByRegion = useMemo(() => {
     const map = new Map<string, number>();
-    costs.forEach(c => {
+    displayCosts.forEach(c => {
       map.set(c.resourceLocation || 'Unknown', (map.get(c.resourceLocation || 'Unknown') || 0) + c.cost);
     });
     return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 8);
-  }, [costs]);
+  }, [displayCosts]);
 
   const costsBySubscription = useMemo(() => {
     const map = new Map<string, number>();
@@ -4327,8 +4331,8 @@ export default function App() {
   }, [costs, resources]);
 
   const topSpenders = useMemo(() => {
-    return [...costs].sort((a, b) => b.cost - a.cost).slice(0, 5);
-  }, [costs]);
+    return [...displayCosts].sort((a, b) => b.cost - a.cost).slice(0, 5);
+  }, [displayCosts]);
 
   const orphanedCount = useMemo(() => {
     return resources.filter(r => r.isOrphaned).length;
@@ -4451,7 +4455,7 @@ export default function App() {
     // Aggregate costs by resource group
     const rgMap = new Map<string, { resourceGroup: string; resourceType: string; cost: number; previousCost: number }>();
 
-    costs.forEach(c => {
+    displayCosts.forEach(c => {
       const rg = c.resourceGroup || 'Uncategorized';
       const existing = rgMap.get(rg);
       if (existing) {
@@ -4483,7 +4487,7 @@ export default function App() {
       .filter(c => Math.abs(c.change) >= MIN_CHANGE || c.isNew)
       .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
       .slice(0, 5);
-  }, [costs]);
+  }, [displayCosts]);
 
   // Reserved Instance recommendations (for consistent VMs)
   const riRecommendations = useMemo(() => {
@@ -4521,7 +4525,7 @@ export default function App() {
   // Cost anomalies - significant cost spikes
   const costAnomalies = useMemo(() => {
     const anomalies: { resourceGroup: string; resourceType: string; location: string; currentCost: number; previousCost: number; spike: number; severity: 'high' | 'medium' | 'low' }[] = [];
-    costs.forEach(c => {
+    displayCosts.forEach(c => {
       if (c.previousCost && c.previousCost > 10 && c.cost > c.previousCost * 1.5) {
         const spike = ((c.cost - c.previousCost) / c.previousCost) * 100;
         anomalies.push({
@@ -4536,7 +4540,7 @@ export default function App() {
       }
     });
     return anomalies.sort((a, b) => b.spike - a.spike).slice(0, 5);
-  }, [costs]);
+  }, [displayCosts]);
 
   const COLORS = useMemo(() => isDarkMode
     ? ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
