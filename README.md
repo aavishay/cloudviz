@@ -7,7 +7,7 @@
 [![Version](https://img.shields.io/badge/version-v1.39.0-brightgreen)](https://github.com/aavishay/cloudviz/releases)
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://react.dev)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/aavishay/cloudviz/releases)
 
 CloudViz gives engineering and FinOps teams a real-time, unified view of Azure resources and costs — without sending data to a third party. Install it in seconds, point it at your Azure tenant, and get immediate visibility across dozens of subscriptions.
@@ -206,7 +206,7 @@ Contributions are welcome. Please open an issue first to discuss what you would 
 
 ## License
 
-[MIT](LICENSE) — free to use, modify, and distribute.
+[AGPL-3.0](LICENSE) — free to use and modify; if you run a modified version as a network service, you must make the source available.
 
 ---
 
