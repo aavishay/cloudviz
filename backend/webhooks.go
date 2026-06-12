@@ -5,8 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -144,10 +149,66 @@ func (wn *WebhookNotifier) GetCurrentCost(alert Alert) (float64, error) {
 	return cost, nil
 }
 
+// validateWebhookURL validates a webhook URL to prevent SSRF attacks
+func validateWebhookURL(urlStr string) error {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// Require HTTPS in production, allow HTTP in development
+	if u.Scheme != "https" && os.Getenv("ENV") == "production" {
+		return fmt.Errorf("webhook URL must use HTTPS in production")
+	}
+
+	// Allow only http and https schemes
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("webhook URL must use HTTP or HTTPS scheme")
+	}
+
+	// Block internal/private IP addresses
+	hostname := u.Hostname()
+	if isPrivateHost(hostname) {
+		return fmt.Errorf("webhook URL cannot use internal or private addresses")
+	}
+
+	return nil
+}
+
+// isPrivateHost checks if a hostname resolves to a private/internal IP
+func isPrivateHost(host string) bool {
+	// Check for localhost variations
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+
+	// Check for private IP ranges by parsing as IP
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+	}
+
+	// Check for common internal hostname patterns
+	lowerHost := strings.ToLower(host)
+	if strings.HasPrefix(lowerHost, "localhost.") ||
+		strings.HasSuffix(lowerHost, ".local") ||
+		strings.HasSuffix(lowerHost, ".internal") ||
+		strings.HasSuffix(lowerHost, ".cluster.local") {
+		return true
+	}
+
+	return false
+}
+
 // SendWebhook sends a webhook notification
 func (wn *WebhookNotifier) SendWebhook(alert Alert, currentCost float64) error {
 	if alert.WebhookURL == "" {
 		return nil
+	}
+
+	// Validate webhook URL to prevent SSRF
+	if err := validateWebhookURL(alert.WebhookURL); err != nil {
+		return fmt.Errorf("webhook URL validation failed: %w", err)
 	}
 
 	percentage := 0.0
@@ -164,6 +225,8 @@ func (wn *WebhookNotifier) SendWebhook(alert Alert, currentCost float64) error {
 	} else if percentage >= 75 {
 		severity = "info"
 	}
+
+	const maxResponseSize = 1024 * 1024 // 1MB limit
 
 	payload := WebhookPayload{
 		AlertID:        fmt.Sprintf("%d", alert.ID),
@@ -214,9 +277,10 @@ func (wn *WebhookNotifier) SendWebhook(alert Alert, currentCost float64) error {
 			continue
 		}
 
-		// Read response body
+		// Read response body with size limit to prevent memory exhaustion
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(resp.Body)
+		limitedReader := io.LimitReader(resp.Body, maxResponseSize)
+		buf.ReadFrom(limitedReader)
 		resp.Body.Close()
 
 		// Log delivery

@@ -34,6 +34,17 @@ import (
 	"cloudviz-backend/anomaly"
 )
 
+// standardizedErrorResponse logs full error internally but returns generic message externally
+func standardizedErrorResponse(c *gin.Context, statusCode int, internalErr error, publicMessage string) {
+	log.Printf("[ERROR] %s: %v", publicMessage, internalErr)
+	c.JSON(statusCode, gin.H{
+		"error": gin.H{
+			"code":    fmt.Sprintf("ERR-%d", statusCode),
+			"message": publicMessage,
+		},
+	})
+}
+
 //go:embed dist
 var frontendAssets embed.FS
 
@@ -234,8 +245,10 @@ func main() {
 // getActiveSubscriptions returns discovered active subscriptions, using a 10-minute in-memory cache.
 func getActiveSubscriptions(ctx context.Context) ([]Subscription, error) {
 	activeSubsMu.RLock()
-	if len(activeSubsCache) > 0 && time.Since(activeSubsFetchedAt) < activeSubsTTL {
-		subs := make([]Subscription, len(activeSubsCache))
+	cacheLen := len(activeSubsCache)
+	elapsed := time.Since(activeSubsFetchedAt)
+	if cacheLen > 0 && elapsed < activeSubsTTL {
+		subs := make([]Subscription, cacheLen)
 		copy(subs, activeSubsCache)
 		activeSubsMu.RUnlock()
 		return subs, nil
@@ -261,10 +274,21 @@ func getActiveSubscriptions(ctx context.Context) ([]Subscription, error) {
 func startServer(port string) {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
+
+	// Configure CORS with environment-based origin restrictions
+	allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		// Default to development origins
+		allowedOrigins = "http://localhost:3000,http://localhost:5173,http://localhost:4173"
+	}
+
+	origins := strings.Split(allowedOrigins, ",")
 	r.Use(cors.New(cors.Config{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Origin", "Content-Type", "Authorization"},
+		AllowOrigins:     origins,
+		AllowMethods:     []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
 	}))
 
 	// Initialize webhook notifier and start background checker
@@ -297,8 +321,24 @@ func startServer(port string) {
 		unattachedNICOnly := c.Query("unattachedNICOnly") == "true"
 		tagKey := c.Query("tagKey")
 		tagValue := c.Query("tagValue")
+		// Whitelist validation for sort parameters to prevent injection
+		allowedSortColumns := map[string]bool{
+			"name":           true,
+			"type":           true,
+			"location":       true,
+			"resourceGroup":  true,
+			"cost":           true,
+			"subscriptionId": true,
+			"score":          true,
+		}
 		sortBy := c.Query("sortBy")
-		sortOrder := c.Query("sortOrder")
+		if sortBy != "" && !allowedSortColumns[sortBy] {
+			sortBy = "name" // default to safe value
+		}
+		sortOrder := strings.ToLower(c.Query("sortOrder"))
+		if sortOrder != "asc" && sortOrder != "desc" {
+			sortOrder = "asc" // default to safe value
+		}
 		mask := c.Query("mask") == "true"
 
 		res, totalCost, err := FetchResourcesWithCosts(c.Request.Context(), subs, rgs, types, locs, search, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly, tagKey, tagValue)
@@ -317,7 +357,7 @@ func startServer(port string) {
 			res = filtered
 		}
 		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
+			standardizedErrorResponse(c, 500, err, "Failed to filter resources")
 			return
 		}
 
@@ -1533,7 +1573,11 @@ func startServer(port string) {
 			return
 		}
 
-		cred, _ := azidentity.NewDefaultAzureCredential(nil)
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to create Azure credential: %v", err)})
+			return
+		}
 		token, err := cred.GetToken(context.Background(), policy.TokenRequestOptions{Scopes: []string{"https://management.azure.com/.default"}})
 		if err != nil {
 			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to get token: %v", err)})
@@ -1755,10 +1799,17 @@ func startServer(port string) {
 		// Group by date and type
 		byDateType := make(map[string]map[string]float64)
 		for _, d := range allDaily {
-			date, _ := d["date"].(string)
-			rtype, _ := d["resourceType"].(string)
-			cost, _ := d["cost"].(float64)
-			if date == "" || rtype == "" {
+			date, ok := d["date"].(string)
+			if !ok || date == "" {
+				continue
+			}
+			rtype, ok := d["resourceType"].(string)
+			if !ok || rtype == "" {
+				continue
+			}
+			cost, ok := d["cost"].(float64)
+			if !ok {
+				log.Printf("Warning: cost is not a float64 in date/type grouping, got %T", d["cost"])
 				continue
 			}
 			if _, exists := byDateType[date]; !exists {
@@ -2288,7 +2339,11 @@ func startServer(port string) {
 					if dateStr, ok := d["date"].(string); ok {
 						if len(dateStr) >= 7 {
 							monthKey := dateStr[:7] // "YYYY-MM"
-							cost, _ := d["cost"].(float64)
+							cost, ok := d["cost"].(float64)
+							if !ok {
+								log.Printf("Warning: cost is not a float64 in monthly trend, got %T", d["cost"])
+								continue
+							}
 							monthlyCosts[monthKey] += cost
 						}
 					}
@@ -3012,11 +3067,13 @@ func startServer(port string) {
 
 		var results []map[string]any
 		var mu sync.Mutex
+		var wg sync.WaitGroup
 		sem := make(chan struct{}, 3)
 
 		for _, vm := range vms {
-			vm := vm
-			go func() {
+			wg.Add(1)
+			go func(vm AzureResource) {
+				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
@@ -3042,13 +3099,11 @@ func startServer(port string) {
 					"hasMetrics":       err == nil,
 				})
 				mu.Unlock()
-			}()
+			}(vm)
 		}
 
 		// Wait for all goroutines to finish
-		for i := 0; i < len(vms); i++ {
-			sem <- struct{}{}
-		}
+		wg.Wait()
 
 		// Sort by uptime asc (worst first)
 		sort.Slice(results, func(i, j int) bool {
@@ -3896,11 +3951,13 @@ func historyHandler(c *gin.Context) {
 		DeletedCount  int     `json:"deletedCount"`
 	}
 	dayMap := make(map[string]*daySummary)
+	var dayMapMu sync.Mutex
 	for _, h := range history {
 		if h.Cost == 0 {
 			continue
 		}
 		day := h.Timestamp.Format("2006-01-02")
+		dayMapMu.Lock()
 		if dayMap[day] == nil {
 			dayMap[day] = &daySummary{Date: day}
 		}
@@ -3913,6 +3970,7 @@ func historyHandler(c *gin.Context) {
 			dayMap[day].RemovedCost += daily
 			dayMap[day].DeletedCount++
 		}
+		dayMapMu.Unlock()
 	}
 
 	// Enrich with actual daily totals from cost_daily
@@ -4282,48 +4340,71 @@ func sseHandler(c *gin.Context) {
 	go func() {
 		defer close(msgChan)
 
-		// Use batch cache lookup for better performance
+		// Stale-while-revalidate: serve ALL subs that have any data immediately,
+		// then re-fetch only those whose data is older than 6h as live updates.
 		cachedResults, uncached := cache.getCachedSubscriptions(subs, "current")
 		cachedCount := len(cachedResults)
 
-		// First, send all cached data as a batch
+		// Split cached into fresh (no re-fetch needed) and stale (re-fetch after serving).
+		var freshCached, staleCached []string
+		for _, sid := range cachedResults {
+			if cache.isStale(sid) {
+				staleCached = append(staleCached, sid)
+			} else {
+				freshCached = append(freshCached, sid)
+			}
+		}
+		// Stale subs get served immediately from cache, then queued for live re-fetch.
+		uncached = append(staleCached, uncached...)
+
+		// Send cached data in chunks of 10 subs to avoid oversized SSE messages.
+		// A single message for 60+ subs can exceed 8MB and cause silent browser failures.
+		const batchChunkSize = 10
 		if len(cachedResults) > 0 {
-			batchData := make(map[string]gin.H)
-			for _, sid := range cachedResults {
-				curr, ok1 := cache.get(sid, "current")
-				prev, ok2 := cache.get(sid, "previous")
-				if ok1 {
-					data := gin.H{"current": normalizeResults(curr)}
-					if ok2 {
-						data["previous"] = normalizeResults(prev)
+			for chunkStart := 0; chunkStart < len(cachedResults); chunkStart += batchChunkSize {
+				chunkEnd := chunkStart + batchChunkSize
+				if chunkEnd > len(cachedResults) {
+					chunkEnd = len(cachedResults)
+				}
+				chunk := cachedResults[chunkStart:chunkEnd]
+
+				batchData := make(map[string]gin.H)
+				for _, sid := range chunk {
+					curr, ok1 := cache.get(sid, "current")
+					prev, ok2 := cache.get(sid, "previous")
+					if ok1 {
+						data := gin.H{"current": normalizeResults(curr)}
+						if ok2 {
+							data["previous"] = normalizeResults(prev)
+						}
+						batchData[sid] = data
 					}
-					batchData[sid] = data
 				}
-			}
+				if len(batchData) == 0 {
+					continue
+				}
 
-			// Send batch update with all cached data
-			select {
-			case msgChan <- streamMsg{Type: "batch", Data: gin.H{"subscriptions": batchData, "count": len(batchData)}}:
-			case <-clientCtx.Done():
-				log.Printf("SSE: client disconnected during batch cached data send")
-				return
-			case <-time.After(5 * time.Second):
-				log.Printf("SSE: timeout sending batch cached data")
-			}
-
-			// Send individual statuses immediately for all cached subscriptions
-			log.Printf("SSE: sending synced status for %d cached subscriptions", len(cachedResults))
-			for _, sid := range cachedResults {
 				select {
-				case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
-					log.Printf("SSE: marked cached sub %s as synced", sid)
+				case msgChan <- streamMsg{Type: "batch", Data: gin.H{"subscriptions": batchData, "count": len(batchData)}}:
 				case <-clientCtx.Done():
-					log.Printf("SSE: client disconnected while sending cached statuses")
+					log.Printf("SSE: client disconnected during batch cached data send")
 					return
-				case <-time.After(500 * time.Millisecond):
-					log.Printf("SSE: timeout sending synced status for cached sub %s", sid)
+				case <-time.After(10 * time.Second):
+					log.Printf("SSE: timeout sending batch cached data chunk %d", chunkStart/batchChunkSize)
+				}
+
+				// Send synced status for each sub in this chunk
+				for _, sid := range chunk {
+					select {
+					case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
+					case <-clientCtx.Done():
+						log.Printf("SSE: client disconnected while sending cached statuses")
+						return
+					case <-time.After(500 * time.Millisecond):
+					}
 				}
 			}
+			log.Printf("SSE: sent cached data for %d subscriptions in %d chunks", len(cachedResults), (len(cachedResults)+batchChunkSize-1)/batchChunkSize)
 		}
 
 		log.Printf("SSE: %d cached, %d uncached subscriptions - starting uncached fetch", cachedCount, len(uncached))
@@ -4364,7 +4445,7 @@ func sseHandler(c *gin.Context) {
 						dailyWg.Add(1)
 						go func() {
 							defer dailyWg.Done()
-							dailyCtx, dailyCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+							dailyCtx, dailyCancel := context.WithTimeout(clientCtx, 2*time.Minute)
 							defer dailyCancel()
 							start := now.AddDate(0, 0, -60)
 							dailyData, dailyErr = fetchDailyCosts(costClient, sid, start, now, dailyCtx)
@@ -4382,13 +4463,13 @@ func sseHandler(c *gin.Context) {
 						periodWg.Add(2)
 						go func() {
 							defer periodWg.Done()
-							currCtx, currCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+							currCtx, currCancel := context.WithTimeout(clientCtx, 3*time.Minute)
 							defer currCancel()
 							_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), currCtx)
 						}()
 						go func() {
 							defer periodWg.Done()
-							prevCtx, prevCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+							prevCtx, prevCancel := context.WithTimeout(clientCtx, 3*time.Minute)
 							defer prevCancel()
 							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), prevCtx)
 						}()
@@ -4535,13 +4616,13 @@ func backgroundSync(client *armcostmanagement.QueryClient) {
 	}
 	log.Printf("Background sync: found %d subscriptions", len(subs))
 
-	// First, identify subscriptions that need cache warming
+	// Identify subscriptions that need refreshing: missing data or data older than 6h.
 	var subsToWarm []string
 	var cachedCount int
 	for _, sid := range subs {
-		_, okCurrent := cache.get(sid, "current")
-		_, okPrevious := cache.get(sid, "previous")
-		if !okCurrent || !okPrevious {
+		_, hasCurrent := cache.get(sid, "current")
+		_, hasPrevious := cache.get(sid, "previous")
+		if !hasCurrent || !hasPrevious || cache.isStale(sid) {
 			subsToWarm = append(subsToWarm, sid)
 		} else {
 			cachedCount++
@@ -4554,9 +4635,12 @@ func backgroundSync(client *armcostmanagement.QueryClient) {
 		return
 	}
 
-	// Process subscriptions concurrently with increased worker pool
-	const maxWorkers = 10
-	sem := make(chan struct{}, maxWorkers)
+	// Process subscriptions using a worker pool with fixed number of workers
+	const numWorkers = 5
+	jobs := make(chan struct {
+		id  string
+		idx int
+	}, len(subsToWarm))
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	successCount := 0
@@ -4564,44 +4648,53 @@ func backgroundSync(client *armcostmanagement.QueryClient) {
 
 	now := time.Now()
 
-	for i, sid := range subsToWarm {
+	// Start workers
+	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		sem <- struct{}{}
-
-		go func(subscriptionID string, idx int) {
+		go func(workerID int) {
 			defer wg.Done()
-			defer func() { <-sem }()
+			for job := range jobs {
+				log.Printf("Background sync: worker %d fetching %s (%d/%d)", workerID, job.id, job.idx+1, len(subsToWarm))
 
-			log.Printf("Background sync: fetching %s (%d/%d)", subscriptionID, idx+1, len(subsToWarm))
+				// Timeout accounts for max retry backoff + API call time
+				ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 
-			// Timeout accounts for max retry backoff + API call time
-			ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+				var currErr, prevErr error
 
-			var currErr, prevErr error
+				// Fetch current period
+				_, currErr = fetchSubCostsSync(client, job.id, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
 
-			// Fetch current period
-			_, currErr = fetchSubCostsSync(client, subscriptionID, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
+				// Small delay between current and previous
+				time.Sleep(200 * time.Millisecond)
 
-			// Small delay between current and previous
-			time.Sleep(200 * time.Millisecond)
+				// Fetch previous period (aggressive caching for historical data)
+				_, prevErr = fetchSubCostsSync(client, job.id, CostPeriodPrevious, now.AddDate(0, 0, -60), ctx)
 
-			// Fetch previous period (aggressive caching for historical data)
-			_, prevErr = fetchSubCostsSync(client, subscriptionID, CostPeriodPrevious, now.AddDate(0, 0, -60), ctx)
+				cancel()
 
-			cancel()
-
-			mu.Lock()
-			if currErr != nil {
-				log.Printf("Background sync: failed for %s: %v", subscriptionID, currErr)
-				failedCount++
-			} else {
-				successCount++
-				log.Printf("Background sync: completed %s (previous: %v)", subscriptionID, prevErr)
+				mu.Lock()
+				if currErr != nil {
+					log.Printf("Background sync: failed for %s: %v", job.id, currErr)
+					failedCount++
+				} else {
+					successCount++
+					log.Printf("Background sync: completed %s (previous: %v)", job.id, prevErr)
+				}
+				mu.Unlock()
 			}
-			mu.Unlock()
-		}(sid, i)
+		}(i)
 	}
 
+	// Queue all jobs
+	for i, sid := range subsToWarm {
+		jobs <- struct {
+			id  string
+			idx int
+		}{id: sid, idx: i}
+	}
+	close(jobs)
+
+	// Wait for all workers to complete
 	wg.Wait()
 	log.Printf("Background sync: completed - %d succeeded, %d failed", successCount, failedCount)
 }

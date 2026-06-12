@@ -473,7 +473,7 @@ export function DependencyGraphModal({ resource, onClose, onResourceClick, allRe
                                 onResourceClick(fullResource);
                               } else {
                                 // Fetch the resource details from API
-                                fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(dep.id)}`)
+                                fetch(`/api/resources?id=${encodeURIComponent(dep.id)}`)
                                   .then(r => r.json())
                                   .then(data => {
                                     if (data.data && data.data.length > 0) {
@@ -548,7 +548,7 @@ export function DependencyGraphModal({ resource, onClose, onResourceClick, allRe
                                 onResourceClick(fullResource);
                               } else {
                                 // Fetch the resource details from API
-                                fetch(`http://localhost:8080/api/resources?id=${encodeURIComponent(dep.id)}`)
+                                fetch(`/api/resources?id=${encodeURIComponent(dep.id)}`)
                                   .then(r => r.json())
                                   .then(data => {
                                     if (data.data && data.data.length > 0) {

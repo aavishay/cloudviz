@@ -1,6 +1,90 @@
 package main
 
-import "time"
+import (
+	"sync"
+	"time"
+)
+
+// CircuitBreakerState represents the state of a circuit breaker
+type CircuitBreakerState string
+
+const (
+	// CircuitClosed means requests flow normally
+	CircuitClosed CircuitBreakerState = "closed"
+	// CircuitOpen means requests fail fast
+	CircuitOpen CircuitBreakerState = "open"
+	// CircuitHalfOpen means one test request is allowed
+	CircuitHalfOpen CircuitBreakerState = "half-open"
+)
+
+// OllamaCircuitBreaker implements circuit breaker pattern for Ollama API calls
+type OllamaCircuitBreaker struct {
+	failures        int
+	lastFailure     time.Time
+	state           CircuitBreakerState
+	mu              sync.Mutex
+	threshold       int           // number of failures before opening circuit
+	timeout         time.Duration // how long to keep circuit open
+	halfOpenMaxWait time.Duration // max time to wait in half-open before resetting
+}
+
+// NewOllamaCircuitBreaker creates a new circuit breaker with default settings
+func NewOllamaCircuitBreaker() *OllamaCircuitBreaker {
+	return &OllamaCircuitBreaker{
+		state:           CircuitClosed,
+		threshold:       3,
+		timeout:         60 * time.Second,
+		halfOpenMaxWait: 30 * time.Second,
+	}
+}
+
+// IsOpen returns true if the circuit is open (should fail fast)
+func (cb *OllamaCircuitBreaker) IsOpen() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	switch cb.state {
+	case CircuitClosed:
+		return false
+	case CircuitOpen:
+		// Check if timeout has passed
+		if time.Since(cb.lastFailure) >= cb.timeout {
+			cb.state = CircuitHalfOpen
+			return false
+		}
+		return true
+	case CircuitHalfOpen:
+		// Allow one request through in half-open state
+		return false
+	}
+	return false
+}
+
+// RecordSuccess records a successful call and resets the breaker
+func (cb *OllamaCircuitBreaker) RecordSuccess() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.failures = 0
+	cb.state = CircuitClosed
+}
+
+// RecordFailure records a failed call and may open the circuit
+func (cb *OllamaCircuitBreaker) RecordFailure() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.failures++
+	cb.lastFailure = time.Now()
+
+	if cb.state == CircuitHalfOpen {
+		// Failed in half-open, go back to open
+		cb.state = CircuitOpen
+	} else if cb.failures >= cb.threshold {
+		// Threshold reached, open circuit
+		cb.state = CircuitOpen
+	}
+}
 
 // CostPeriod represents a cost reporting period type
 type CostPeriod string

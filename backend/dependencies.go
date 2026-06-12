@@ -81,11 +81,13 @@ func (da *DependencyAnalyzer) queryResourceFromARG(ctx context.Context, resource
 		return nil, fmt.Errorf("could not extract subscription ID from resource ID")
 	}
 
+	// Escape double quotes in resourceID to prevent KQL injection
+	escapedResourceID := strings.ReplaceAll(resourceID, `"`, `\"`)
 	query := fmt.Sprintf(`
 		resources
 		| where id == "%s"
 		| project name, type, subscriptionId, resourceGroup
-	`, resourceID)
+	`, escapedResourceID)
 
 	result, err := da.argClient.Resources(ctx, armresourcegraph.QueryRequest{
 		Subscriptions: []*string{&[]string{subID}[0]},

@@ -28,6 +28,22 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// sanitizeKQL escapes single quotes and removes dangerous KQL operators to prevent injection
+func sanitizeKQL(input string) string {
+	if input == "" {
+		return ""
+	}
+	// Remove dangerous KQL operators that could be used for injection
+	dangerous := []string{"|", "where", "or", "union", "join", "extend", "project", "summarize", "take", "limit"}
+	result := strings.ToLower(input)
+	for _, d := range dangerous {
+		result = strings.ReplaceAll(result, d, "")
+	}
+	// Escape single quotes by doubling them (KQL escape sequence)
+	result = strings.ReplaceAll(result, "'", "\\'")
+	return result
+}
+
 // metricsClients caches MetricsClient per subscription to avoid recreating them
 var metricsClients sync.Map // map[string]*armmonitor.MetricsClient
 
@@ -36,6 +52,24 @@ var objectIDCache sync.Map
 
 // subscriptionNameCache caches subscription ID -> subscription name
 var subscriptionNameCache sync.Map
+
+// ollamaCircuitBreaker prevents cascading failures when Ollama is down
+var ollamaCircuitBreaker = NewOllamaCircuitBreaker()
+
+// Cached Azure credential to avoid recreating for every API call
+var (
+	cachedCred     *azidentity.DefaultAzureCredential
+	credOnce       sync.Once
+	credInitErr    error
+)
+
+// getCachedCredential returns a singleton DefaultAzureCredential, initialized once.
+func getCachedCredential() (*azidentity.DefaultAzureCredential, error) {
+	credOnce.Do(func() {
+		cachedCred, credInitErr = azidentity.NewDefaultAzureCredential(nil)
+	})
+	return cachedCred, credInitErr
+}
 
 // isUUID returns true if s looks like a UUID (8-4-4-4-12 hex digits).
 func isUUID(s string) bool {
@@ -61,7 +95,7 @@ func resolveObjectIDToName(ctx context.Context, objectID string) string {
 		return v.(string)
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getCachedCredential()
 	if err != nil {
 		return objectID
 	}
@@ -100,6 +134,9 @@ func resolveObjectIDToName(ctx context.Context, objectID string) string {
 	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
 		return objectID
 	}
+
+	// Drain body for connection reuse
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	name := obj.DisplayName
 	if obj.UserPrincipalName != "" {
@@ -157,22 +194,30 @@ func resolveChangedByBatch(ctx context.Context, items []string) []string {
 // subCostLimiters ensures only one cost API request per subscription is in flight at a time
 var subCostLimiters sync.Map // map[string]*rate.Limiter
 
-// Global 429 cooldown: when any request hits 429, all requests pause for 30s
-var (
-	last429Mu   sync.Mutex
-	last429Time time.Time
-)
-
-func record429() {
-	last429Mu.Lock()
-	last429Time = time.Now()
-	last429Mu.Unlock()
+// SubscriptionRateLimiter tracks 429 cooldowns per-subscription to prevent
+// head-of-line blocking when one subscription hits a rate limit
+var subscriptionRateLimiter = &SubscriptionRateLimiter{
+	last429Time: make(map[string]time.Time),
 }
 
-func cooldownWait(ctx context.Context) error {
-	last429Mu.Lock()
-	t := last429Time
-	last429Mu.Unlock()
+// SubscriptionRateLimiter tracks per-subscription 429 cooldowns
+type SubscriptionRateLimiter struct {
+	mu          sync.Mutex
+	last429Time map[string]time.Time // subscriptionID -> last 429 time
+}
+
+// record429 records a 429 response for the given subscription
+func (rl *SubscriptionRateLimiter) record429(subscriptionID string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.last429Time[subscriptionID] = time.Now()
+}
+
+// cooldownWait waits for the cooldown period to expire for the given subscription
+func (rl *SubscriptionRateLimiter) cooldownWait(ctx context.Context, subscriptionID string) error {
+	rl.mu.Lock()
+	t := rl.last429Time[subscriptionID]
+	rl.mu.Unlock()
 
 	const cooldown = 10 * time.Second
 	if elapsed := time.Since(t); elapsed < cooldown {
@@ -321,8 +366,10 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 	}
 
 	for retry := 0; retry < 6; retry++ {
-		if err := cooldownWait(ctx); err != nil {
-			return zero, err
+		if subID != "" {
+			if err := subscriptionRateLimiter.cooldownWait(ctx, subID); err != nil {
+				return zero, err
+			}
 		}
 		if err := costLimiter.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Rate limiter error for %s: %v", logCtx, err)
@@ -334,7 +381,9 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 		}
 
 		if strings.Contains(err.Error(), "429") {
-			record429()
+			if subID != "" {
+				subscriptionRateLimiter.record429(subID)
+			}
 			waitSecs := getRetryAfterSeconds(err)
 			if waitSecs > 0 {
 				log.Printf("Rate limit (429) hit for %s, Retry-After=%ds, retry %d", logCtx, waitSecs, retry)
@@ -577,13 +626,17 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 		clauses = append(clauses, fmt.Sprintf("location in~ (%s)", strings.Join(quoteAll(locs), ",")))
 	}
 	if search != "" {
-		clauses = append(clauses, fmt.Sprintf("name contains '%s' or resourceGroup contains '%s' or type contains '%s'", search, search, search))
+		sanitizedSearch := sanitizeKQL(search)
+		clauses = append(clauses, fmt.Sprintf("name contains '%s' or resourceGroup contains '%s' or type contains '%s'", sanitizedSearch, sanitizedSearch, sanitizedSearch))
 	}
 	if tagKey != "" && tagValue != "" {
+		// Sanitize tag key and value to prevent injection
+		sanitizedTagKey := sanitizeKQL(tagKey)
+		sanitizedTagValue := sanitizeKQL(tagValue)
 		if tagValue == "Untagged" {
-			clauses = append(clauses, fmt.Sprintf("isempty(tags['%s']) or isnull(tags['%s'])", tagKey, tagKey))
+			clauses = append(clauses, fmt.Sprintf("isempty(tags['%s']) or isnull(tags['%s'])", sanitizedTagKey, sanitizedTagKey))
 		} else {
-			clauses = append(clauses, fmt.Sprintf("tags['%s'] =~ '%s'", tagKey, tagValue))
+			clauses = append(clauses, fmt.Sprintf("tags['%s'] =~ '%s'", sanitizedTagKey, sanitizedTagValue))
 		}
 	}
 	if orphaned {
@@ -1352,7 +1405,9 @@ func getResourceContext(ctx context.Context, resourceID string) (*AzureResource,
 		return nil, err
 	}
 
-	query := fmt.Sprintf("Resources | where id == '%s' | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState", resourceID)
+	// Sanitize resourceID to prevent KQL injection
+	sanitizedResourceID := sanitizeKQL(resourceID)
+	query := fmt.Sprintf("Resources | where id == '%s' | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState", sanitizedResourceID)
 	request := armresourcegraph.QueryRequest{
 		Query: to.Ptr(query),
 		Options: &armresourcegraph.QueryRequestOptions{
@@ -1516,6 +1571,11 @@ func getRuleBasedRecommendation(resource *AzureResource, stats MetricsSummary) [
 }
 
 func getOllamaRecommendation(metrics map[string][]float64, resourceID string, resource *AzureResource) ([]Recommendation, float64, string, error) {
+	// Check circuit breaker first to prevent cascading failures
+	if ollamaCircuitBreaker.IsOpen() {
+		return nil, 0, "", fmt.Errorf("ollama circuit breaker is open")
+	}
+
 	stats := calculateMetricsStats(metrics)
 
 	// Build utilization text
@@ -1574,18 +1634,21 @@ Only respond with valid JSON. No markdown, no explanations outside the JSON.`, r
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Post("http://localhost:11434/api/generate", "application/json", bytes.NewBuffer(jsonPayload))
 	if err != nil {
+		ollamaCircuitBreaker.RecordFailure()
 		return nil, 0, "", err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		ollamaCircuitBreaker.RecordFailure()
 		return nil, 0, "", fmt.Errorf("failed to read response: %w", err)
 	}
 	var result struct {
 		Response string `json:"response"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
+		ollamaCircuitBreaker.RecordFailure()
 		return nil, 0, "", fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -1609,9 +1672,12 @@ Only respond with valid JSON. No markdown, no explanations outside the JSON.`, r
 	}
 
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		ollamaCircuitBreaker.RecordFailure()
 		return nil, 0, "", fmt.Errorf("failed to parse Ollama response: %v", err)
 	}
 
+	// Success - reset circuit breaker
+	ollamaCircuitBreaker.RecordSuccess()
 	return parsed.Recommendations, parsed.ConfidenceScore, parsed.OverallCategory, nil
 }
 

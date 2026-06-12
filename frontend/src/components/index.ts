@@ -23,7 +23,9 @@ export {
   usePrevious,
   useClickOutside,
   useMediaQuery,
-  useInterval
+  useInterval,
+  useCachedFetch,
+  invalidateCache
 } from './hooks';
 export type { ShortcutConfig } from './hooks';
 

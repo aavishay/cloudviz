@@ -51,6 +51,7 @@ export function useSSECosts(options: UseSSECostsOptions = {}) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const connectRef = useRef<(subscriptionIds: string[]) => void>(() => {});
+  const subscriptionIdsRef = useRef<string[]>([]);
 
   // Close SSE connection
   const closeConnection = useCallback(() => {
@@ -71,6 +72,9 @@ export function useSSECosts(options: UseSSECostsOptions = {}) {
 
   // Connect to SSE endpoint
   const connect = useCallback((subscriptionIds: string[]) => {
+    // Update ref to avoid stale closure in auto-reconnect
+    subscriptionIdsRef.current = subscriptionIds;
+
     // Close existing connection
     closeConnection();
 
@@ -194,7 +198,7 @@ export function useSSECosts(options: UseSSECostsOptions = {}) {
       // Auto-reconnect after 5 seconds if not completed
       if (!sseState.completed) {
         reconnectTimerRef.current = setTimeout(() => {
-          connectRef.current(subscriptionIds);
+          connectRef.current(subscriptionIdsRef.current);
         }, 5000);
       }
     };

@@ -7,18 +7,31 @@ import { getTimeAgo, friendlyType } from './utils';
 interface HistoryViewProps {
   history: ResourceChange[];
   historyLoading: boolean;
-  fetchHistory: () => void;
+  historyFetched: boolean;
+  fetchHistory: (days?: 1 | 7 | 30 | 90) => void;
+  historyDays: 1 | 7 | 30 | 90;
+  setHistoryDays: (d: 1 | 7 | 30 | 90) => void;
   resources: AzureResource[];
   setSelectedResource: (r: AzureResource | null) => void;
   setCurrentPage: (p: number) => void;
   setAlertModal: (modal: { open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info' }) => void;
 }
 
-export function HistoryView({ history, historyLoading, fetchHistory, resources, setSelectedResource, setCurrentPage, setAlertModal }: HistoryViewProps) {
+export function HistoryView({ history, historyLoading, historyFetched, fetchHistory, historyDays, setHistoryDays, resources, setSelectedResource, setCurrentPage, setAlertModal }: HistoryViewProps) {
   const [filterType, setFilterType] = useState<'all' | 'created' | 'deleted' | 'modified'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [groupByDate, setGroupByDate] = useState(true);
   const [costImpactOnly] = useState(false);
+
+  // Calculate dates once on mount for stable references in useMemo
+  const [dateRefs] = useState(() => {
+    const now = Date.now();
+    return {
+      today: new Date().toDateString(),
+      yesterday: new Date(now - 86400000).toDateString(),
+      now,
+    };
+  });
 
   const filteredHistory = useMemo(() => {
     let result = history;
@@ -36,14 +49,12 @@ export function HistoryView({ history, historyLoading, fetchHistory, resources, 
       );
     }
     return result;
-  }, [history, filterType, searchQuery]);
+  }, [history, filterType, searchQuery, costImpactOnly]);
 
   const groupedHistory = useMemo(() => {
     if (!groupByDate) return { 'All Changes': filteredHistory };
     const groups: Record<string, ResourceChange[]> = {};
-    const today = new Date().toDateString();
-    // eslint-disable-next-line react-hooks/purity
-    const yesterday = new Date(Date.now() - 86400000).toDateString();
+    const { today, yesterday, now } = dateRefs;
 
     filteredHistory.forEach(h => {
       const date = new Date(h.timestamp);
@@ -51,15 +62,14 @@ export function HistoryView({ history, historyLoading, fetchHistory, resources, 
       let groupKey: string;
       if (dateStr === today) groupKey = 'Today';
       else if (dateStr === yesterday) groupKey = 'Yesterday';
-      // eslint-disable-next-line react-hooks/purity
-      else if (Date.now() - date.getTime() < 7 * 86400000) groupKey = 'This Week';
+      else if (now - date.getTime() < 7 * 86400000) groupKey = 'This Week';
       else groupKey = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
       if (!groups[groupKey]) groups[groupKey] = [];
       groups[groupKey].push(h);
     });
     return groups;
-  }, [filteredHistory, groupByDate]);
+  }, [filteredHistory, groupByDate, dateRefs]);
 
   const stats = useMemo(() => {
     const created = history.filter(h => h.changeType === 'created').length;
@@ -118,11 +128,30 @@ export function HistoryView({ history, historyLoading, fetchHistory, resources, 
   }
 
   if (!history.length) {
+    if (!historyFetched) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320, gap: 16, color: 'var(--text-2)' }}>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+          <span style={{ fontSize: 15, fontWeight: 500 }}>Loading history...</span>
+        </div>
+      );
+    }
+    const periodLabel = historyDays === 1 ? 'today' : `the last ${historyDays} days`;
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320, gap: 16, color: 'var(--text-2)' }}>
-        <button className="btn btn-primary" onClick={fetchHistory} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.36" /></svg>
-          Load History
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320, gap: 12, color: 'var(--text-2)' }}>
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="10" /><path d="M12 8v4l3 3" /></svg>
+        <span style={{ fontSize: 15, fontWeight: 500 }}>No changes recorded in {periodLabel}</span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {([1, 7, 30, 90] as const).map(d => (
+            <button key={d} className={historyDays === d ? 'btn btn-primary' : 'btn'} style={{ fontSize: 12, padding: '4px 12px' }}
+              onClick={() => { setHistoryDays(d); fetchHistory(d); }}>
+              {d === 1 ? 'Today' : `${d}d`}
+            </button>
+          ))}
+        </div>
+        <button className="btn btn-secondary" onClick={() => fetchHistory(historyDays)} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.36" /></svg>
+          Refresh
         </button>
       </div>
     );
@@ -224,6 +253,15 @@ export function HistoryView({ history, historyLoading, fetchHistory, resources, 
       {/* History List */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {([1, 7, 30, 90] as const).map(d => (
+              <button key={d} className={historyDays === d ? 'btn btn-primary' : 'btn'} style={{ fontSize: 12, padding: '5px 12px' }}
+                onClick={() => { setHistoryDays(d); fetchHistory(d); }}>
+                {d === 1 ? 'Today' : `${d}d`}
+              </button>
+            ))}
+          </div>
+          <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
           <div style={{ display: 'flex', gap: 4 }}>
             {(['all', 'created', 'deleted', 'modified'] as const).map(type => (
               <button

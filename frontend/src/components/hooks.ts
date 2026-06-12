@@ -116,12 +116,15 @@ export function useCountUp(end: number, duration: number = 1000, startOnMount: b
 // ─── usePrevious ──────────────────────────────────────────────────────────────
 
 export function usePrevious<T>(value: T): T | undefined {
-  const ref = useRef<T | undefined>(undefined);
+  const [prevValue, setPrevValue] = useState<T | undefined>(undefined);
+  const valueRef = useRef<T | undefined>(undefined);
+
   useEffect(() => {
-    ref.current = value;
-  });
-  // eslint-disable-next-line react-hooks/refs
-  return ref.current;
+    setPrevValue(valueRef.current);
+    valueRef.current = value;
+  }, [value]);
+
+  return prevValue;
 }
 
 // ─── useClickOutside ───────────────────────────────────────────────────────────
@@ -173,6 +176,92 @@ export function useInterval(callback: () => void, delay: number | null): void {
     const id = setInterval(tick, delay);
     return () => clearInterval(id);
   }, [delay]);
+}
+
+// ─── useCachedFetch ─────────────────────────────────────────────────────────────
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+  ttl: number;
+}
+
+const globalCache = new Map<string, CacheEntry<unknown>>();
+
+interface UseCachedFetchOptions {
+  key: string;
+  ttl?: number; // Time to live in milliseconds (default: 5 minutes)
+  enabled?: boolean;
+  onError?: (error: Error) => void;
+}
+
+export function useCachedFetch<T>(
+  fetcher: () => Promise<T>,
+  options: UseCachedFetchOptions
+) {
+  const { key, ttl = 5 * 60 * 1000, enabled = true, onError } = options;
+  const [data, setData] = useState<T | null>(() => {
+    const cached = globalCache.get(key);
+    if (cached && Date.now() - cached.timestamp < cached.ttl) {
+      return cached.data as T;
+    }
+    return null;
+  });
+  const [isLoading, setIsLoading] = useState(!data && enabled);
+  const [error, setError] = useState<Error | null>(null);
+
+  const refetch = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await fetcher();
+      globalCache.set(key, { data: result, timestamp: Date.now(), ttl });
+      setData(result);
+      return result;
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      setError(error);
+      onError?.(error);
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [fetcher, key, ttl, onError]);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    // Check cache first
+    const cached = globalCache.get(key);
+    if (cached && Date.now() - cached.timestamp < cached.ttl) {
+      setData(cached.data as T);
+      setIsLoading(false);
+      return;
+    }
+
+    // Fetch if not cached or expired
+    refetch();
+  }, [key, enabled, refetch]);
+
+  const invalidate = useCallback(() => {
+    globalCache.delete(key);
+    setData(null);
+  }, [key]);
+
+  return { data, isLoading, error, refetch, invalidate };
+}
+
+// Helper to invalidate specific cache entries
+export function invalidateCache(keyPattern: string | RegExp): void {
+  if (typeof keyPattern === 'string') {
+    globalCache.delete(keyPattern);
+  } else {
+    for (const key of globalCache.keys()) {
+      if (keyPattern.test(key)) {
+        globalCache.delete(key);
+      }
+    }
+  }
 }
 
 // Re-export domain-specific hooks

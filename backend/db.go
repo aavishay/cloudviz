@@ -405,23 +405,9 @@ func newDBCache(dbPath string) (*dbCache, error) {
 }
 
 func (dc *dbCache) get(subID string, period string) (armcostmanagement.QueryResult, bool) {
-	var fetchedAt time.Time
-	err := dc.db.QueryRow("SELECT fetched_at FROM costs WHERE subscription_id = ? AND period = ? LIMIT 1", subID, period).Scan(&fetchedAt)
-	if err != nil {
-		return armcostmanagement.QueryResult{}, false
-	}
-	// Current period: 6h TTL so cost data stays reasonably fresh.
-	// Previous period: 7-day TTL — the Apr→May window barely shifts daily,
-	// and stale previous data is far better than no previous data at all
-	// (missing previous data makes Month-over-Month look like a false increase).
-	ttl := 6 * time.Hour
-	if period == "previous" {
-		ttl = 7 * 24 * time.Hour
-	}
-	if time.Since(fetchedAt) > ttl {
-		return armcostmanagement.QueryResult{}, false
-	}
-
+	// Always serve whatever is in the DB — stale data is far better than no data.
+	// Freshness is enforced separately via isStale() to decide when to re-fetch,
+	// but it never gates whether existing data is served to the frontend.
 	rows, err := dc.db.Query("SELECT cost, resource_id, resource_group, resource_type, resource_location FROM costs WHERE subscription_id = ? AND period = ?", subID, period)
 	if err != nil {
 		return armcostmanagement.QueryResult{}, false
@@ -642,10 +628,10 @@ func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
 	}
 }
 
-// populateCostsFromDaily aggregates daily cost data and inserts into costs table
-// This ensures the costs table stays in sync with cost_daily for display purposes
+// populateCostsFromDaily is a fallback: stores a single aggregate row for a subscription
+// when the normal resource-group-level fetch failed. Before inserting, it clears any
+// stale real rows so the aggregate doesn't double-count alongside old data.
 func (dc *dbCache) populateCostsFromDaily(subID string, daily []map[string]any, period string) {
-	// Calculate total cost from daily entries
 	var totalCost float64
 	for _, item := range daily {
 		if cost, ok := item["cost"].(float64); ok {
@@ -656,12 +642,12 @@ func (dc *dbCache) populateCostsFromDaily(subID string, daily []map[string]any, 
 		return
 	}
 
-	// Delete old aggregate entry for this subscription/period
-	if _, err := dc.db.Exec("DELETE FROM costs WHERE subscription_id = ? AND period = ? AND resource_id = 'daily-aggregate'", subID, period); err != nil {
-		log.Printf("Warning: failed to delete old daily aggregate cost: %v", err)
+	// Remove all existing rows for this sub/period (real rows + old aggregate) so the
+	// new aggregate is the only entry and can't double-count alongside stale real data.
+	if _, err := dc.db.Exec("DELETE FROM costs WHERE subscription_id = ? AND period = ?", subID, period); err != nil {
+		log.Printf("Warning: failed to delete old costs before daily aggregate: %v", err)
 	}
 
-	// Insert aggregate cost entry
 	now := time.Now()
 	_, err := dc.db.Exec(
 		"INSERT INTO costs (subscription_id, resource_id, resource_group, resource_type, resource_location, cost, period, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -771,9 +757,11 @@ func (dc *dbCache) getCachedSubscriptions(subIDs []string, period string) ([]str
 	}
 	args = append(args, period)
 
+	// Serve any sub that has data — stale-while-revalidate: show existing data
+	// immediately and refresh stale entries in the background via the uncached path.
 	query := fmt.Sprintf(
 		`SELECT DISTINCT subscription_id FROM costs
-		WHERE subscription_id IN (%s) AND period = ? AND fetched_at > datetime('now', '-6 hours')`,
+		WHERE subscription_id IN (%s) AND period = ?`,
 		strings.Join(placeholders, ","))
 
 	rows, err := dc.db.Query(query, args...)
@@ -799,6 +787,17 @@ func (dc *dbCache) getCachedSubscriptions(subIDs []string, period string) ([]str
 		}
 	}
 	return cachedSubs, missingSubs
+}
+
+// isStale returns true if the sub's current-period data is older than 6 hours.
+// Used to decide whether to queue a background re-fetch after serving cached data.
+func (dc *dbCache) isStale(subID string) bool {
+	var fetchedAt time.Time
+	err := dc.db.QueryRow("SELECT MAX(fetched_at) FROM costs WHERE subscription_id = ? AND period = 'current'", subID).Scan(&fetchedAt)
+	if err != nil || fetchedAt.IsZero() {
+		return true
+	}
+	return time.Since(fetchedAt) > 6*time.Hour
 }
 
 func recordResourceChanges(db *sql.DB, newResources []AzureResource) {

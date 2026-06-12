@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, AreaChart, Area, Brush, ReferenceArea } from 'recharts';
 import { jsPDF } from 'jspdf';
 
@@ -13,6 +13,8 @@ import {
   Portal,
   useDebounce,
   useKeyboardShortcuts,
+  useCachedFetch,
+  invalidateCache,
   type ShortcutConfig,
   EmptyState,
   friendlyType,
@@ -230,6 +232,8 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-costSearchQuery', costSearchQuery); }, [costSearchQuery]);
   const [history, setHistory] = useState<ResourceChange[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyFetched, setHistoryFetched] = useState(false);
+  const [historyDays, setHistoryDays] = useState<1 | 7 | 30 | 90>(7);
   const [dailyImpact, setDailyImpact] = useState<Array<{date: string; totalDailyCost: number; addedCost: number; removedCost: number; createdCount: number; deletedCount: number}>>([]);
   const [rgTrends, setRGTrends] = useState<any>(null);
   const [rgTrendsPeriod, setRGTrendsPeriod] = useState<7 | 14 | 30>(7);
@@ -2460,22 +2464,40 @@ export default function App() {
       .catch(err => console.error('Failed to fetch subscriptions:', err));
   }, []);
 
-  // ── Fetch filter options and true total resource count
-  useEffect(() => {
-    fetch('http://localhost:8080/api/filters')
-      .then(r => r.json())
-      .then(data => {
-        // Check for Azure authentication errors
-        if (data.error && typeof data.error === 'string') {
-          const errorLower = data.error.toLowerCase();
-          if (errorLower.includes('defaultazurecredential') || errorLower.includes('aadsts') || errorLower.includes('authentication') || errorLower.includes('unauthorized') || errorLower.includes('token') || errorLower.includes('mfa')) {
-            setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
-          }
-          return;
+  // ── Fetch filter options with caching
+  const {
+    data: filtersDataCached,
+    refetch: refetchFilters
+  } = useCachedFetch(
+    async () => {
+      const res = await fetch('http://localhost:8080/api/filters');
+      const data = await res.json();
+      // Check for Azure authentication errors
+      if (data.error && typeof data.error === 'string') {
+        const errorLower = data.error.toLowerCase();
+        if (errorLower.includes('defaultazurecredential') || errorLower.includes('aadsts') || errorLower.includes('authentication') || errorLower.includes('unauthorized') || errorLower.includes('token') || errorLower.includes('mfa')) {
+          setAzureAuthError('Azure authentication token expired or invalid. Please run "az login" to refresh your credentials.');
         }
-        setAllPossibleFilters(data);
-      })
-      .catch(console.error);
+        throw new Error(data.error);
+      }
+      return data;
+    },
+    {
+      key: 'filters-data',
+      ttl: 5 * 60 * 1000, // 5 minutes cache
+      enabled: true
+    }
+  );
+
+  useEffect(() => {
+    if (filtersDataCached) {
+      setAllPossibleFilters(filtersDataCached);
+    }
+  }, [filtersDataCached]);
+
+  // ── Fetch true total resource count
+  useEffect(() => {
+    fetch('http://localhost:8080/api/resources?limit=1')
 
     fetch('http://localhost:8080/api/resources?limit=1')
       .then(r => r.json())
@@ -2629,18 +2651,34 @@ export default function App() {
       .catch(() => {});
   }, [activeSubs, costPeriod]);
 
-  // Fetch waste detection data
-  const fetchWaste = () => {
-    setWasteLoading(true);
-    fetch('http://localhost:8080/api/waste/detect')
-      .then(r => r.json())
-      .then(data => { if (!data.error) setWasteData(data); })
-      .catch(() => {})
-      .finally(() => setWasteLoading(false));
-  };
+  // Fetch waste detection data with caching
+  const {
+    data: wasteDataCached,
+    isLoading: wasteLoadingCached,
+    refetch: refetchWaste
+  } = useCachedFetch(
+    async () => {
+      const res = await fetch('http://localhost:8080/api/waste/detect');
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      return data;
+    },
+    {
+      key: 'waste-data',
+      ttl: 10 * 60 * 1000, // 10 minutes cache
+      enabled: activeTab === 'waste'
+    }
+  );
+
+  // Sync cached waste data with state
   useEffect(() => {
-    if (activeTab === 'waste' && !wasteData) fetchWaste();
-  }, [activeTab]);
+    if (wasteDataCached) {
+      setWasteData(wasteDataCached);
+    }
+  }, [wasteDataCached]);
+  useEffect(() => {
+    setWasteLoading(wasteLoadingCached);
+  }, [wasteLoadingCached]);
 
   // Fetch period-over-period cost comparison
   useEffect(() => {
@@ -2669,8 +2707,8 @@ export default function App() {
       .catch(() => {});
   }, [activeSubs, costPeriod]);
 
-  // Fetch Azure AI-powered forecast
-  useEffect(() => {
+  // Function to fetch forecast data - called during refresh/sync for real-time updates
+  const fetchForecastData = useCallback(() => {
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
@@ -2679,6 +2717,11 @@ export default function App() {
       .then(data => { if (!data.error && data.actualCost !== undefined) setForecastData(data); })
       .catch(() => {});
   }, [activeSubs, costPeriod]);
+
+  // Fetch Azure AI-powered forecast on deps change
+  useEffect(() => {
+    fetchForecastData();
+  }, [fetchForecastData]);
 
   // Marketplace data state
   const [marketplaceData, setMarketplaceData] = useState<any>(null);
@@ -2694,59 +2737,89 @@ export default function App() {
   const [commitmentsPeriod, setCommitmentsPeriod] = useState(() => parseInt(localStorage.getItem('cloudviz-commitmentsPeriod') || '90', 10));
   useEffect(() => { localStorage.setItem('cloudviz-commitmentsPeriod', String(commitmentsPeriod)); }, [commitmentsPeriod]);
 
-  // Fetch marketplace data
-  const fetchMarketplaceData = () => {
-    if (activeSubs.length === 0) return;
-    setMarketplaceLoading(true);
-    setMarketplaceError(null);
-    const params = new URLSearchParams();
-    activeSubs.forEach(s => params.append('subscriptionId', s));
-    params.append('period', String(marketplacePeriod));
-    fetch(`/api/costs/marketplace?${params}`)
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
-        return r.json();
-      })
-      .then(data => { setMarketplaceData(data); })
-      .catch(err => {
-        console.error('Failed to fetch marketplace data:', err);
-        setMarketplaceError('Failed to load marketplace data. Please try again.');
-      })
-      .finally(() => setMarketplaceLoading(false));
-  };
+  // Fetch marketplace data with caching
+  const marketplaceCacheKey = useMemo(() => {
+    return `marketplace-${marketplacePeriod}-${Array.from(activeSubs).sort().join(',')}`;
+  }, [marketplacePeriod, activeSubs]);
 
-  useEffect(() => {
-    if (activeTab === 'marketplace') {
-      fetchMarketplaceData();
+  const {
+    data: marketplaceDataCached,
+    isLoading: marketplaceLoadingCached,
+    error: marketplaceErrorCached,
+    refetch: refetchMarketplace
+  } = useCachedFetch(
+    async () => {
+      if (activeSubs.length === 0) return null;
+      const params = new URLSearchParams();
+      activeSubs.forEach(s => params.append('subscriptionId', s));
+      params.append('period', String(marketplacePeriod));
+      const res = await fetch(`/api/costs/marketplace?${params}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      return res.json();
+    },
+    {
+      key: marketplaceCacheKey,
+      ttl: 15 * 60 * 1000, // 15 minutes cache
+      enabled: activeTab === 'marketplace' && activeSubs.length > 0
     }
-  }, [activeTab, marketplacePeriod, activeSubs]);
+  );
 
-  // Fetch commitments data
-  const fetchCommitmentsData = () => {
-    if (activeSubs.length === 0) return;
-    setCommitmentsLoading(true);
-    setCommitmentsError(null);
-    const params = new URLSearchParams();
-    activeSubs.forEach(s => params.append('subscriptionId', s));
-    params.append('period', String(commitmentsPeriod));
-    fetch(`/api/costs/commitments?${params}`)
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
-        return r.json();
-      })
-      .then(data => { setCommitmentsData(data); })
-      .catch(err => {
-        console.error('Failed to fetch commitments data:', err);
-        setCommitmentsError('Failed to load commitments data. Please try again.');
-      })
-      .finally(() => setCommitmentsLoading(false));
-  };
-
+  // Sync cached marketplace data with state
   useEffect(() => {
-    if (activeTab === 'commitments') {
-      fetchCommitmentsData();
+    if (marketplaceDataCached) {
+      setMarketplaceData(marketplaceDataCached);
     }
-  }, [activeTab, commitmentsPeriod, activeSubs]);
+  }, [marketplaceDataCached]);
+  useEffect(() => {
+    setMarketplaceLoading(marketplaceLoadingCached);
+  }, [marketplaceLoadingCached]);
+  useEffect(() => {
+    if (marketplaceErrorCached) {
+      setMarketplaceError('Failed to load marketplace data. Please try again.');
+    }
+  }, [marketplaceErrorCached]);
+
+  // Fetch commitments data with caching
+  const commitmentsCacheKey = useMemo(() => {
+    return `commitments-${commitmentsPeriod}-${Array.from(activeSubs).sort().join(',')}`;
+  }, [commitmentsPeriod, activeSubs]);
+
+  const {
+    data: commitmentsDataCached,
+    isLoading: commitmentsLoadingCached,
+    error: commitmentsErrorCached,
+    refetch: refetchCommitments
+  } = useCachedFetch(
+    async () => {
+      if (activeSubs.length === 0) return null;
+      const params = new URLSearchParams();
+      activeSubs.forEach(s => params.append('subscriptionId', s));
+      params.append('period', String(commitmentsPeriod));
+      const res = await fetch(`/api/costs/commitments?${params}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      return res.json();
+    },
+    {
+      key: commitmentsCacheKey,
+      ttl: 15 * 60 * 1000, // 15 minutes cache
+      enabled: activeTab === 'commitments' && activeSubs.length > 0
+    }
+  );
+
+  // Sync cached commitments data with state
+  useEffect(() => {
+    if (commitmentsDataCached) {
+      setCommitmentsData(commitmentsDataCached);
+    }
+  }, [commitmentsDataCached]);
+  useEffect(() => {
+    setCommitmentsLoading(commitmentsLoadingCached);
+  }, [commitmentsLoadingCached]);
+  useEffect(() => {
+    if (commitmentsErrorCached) {
+      setCommitmentsError('Failed to load commitments data. Please try again.');
+    }
+  }, [commitmentsErrorCached]);
 
   // Fetch cost anomalies from backend
   useEffect(() => {
@@ -2852,11 +2925,23 @@ export default function App() {
       }
     }, estimatedMaxTime);
 
+    // Throttled forecast refresh - max once per 5 seconds during sync
+    let lastForecastRefresh = 0;
+    const throttledForecastRefresh = () => {
+      const now = Date.now();
+      if (now - lastForecastRefresh > 5000) {
+        lastForecastRefresh = now;
+        fetchForecastData();
+      }
+    };
+
     es.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'data') {
           const subId = msg.subId;
+          // Update forecast periodically during sync for real-time feedback
+          throttledForecastRefresh();
           const currentItems = msg.data.current || [];
           const previousItems = msg.data.previous || [];
           const prevMap = new Map<string, number>();
@@ -2933,6 +3018,8 @@ export default function App() {
               }
               setCostsLoading(false);
               setIsRefreshing(false);
+              // Refresh forecast data after cost sync completes
+              fetchForecastData();
             }
             return next;
           });
@@ -3025,6 +3112,8 @@ export default function App() {
                 }
                 setCostsLoading(false);
                 setIsRefreshing(false);
+                // Refresh forecast data after cost sync completes
+                fetchForecastData();
               }
               return next;
             });
@@ -3068,6 +3157,8 @@ export default function App() {
           }
           setCostsLoading(false);
           setIsRefreshing(false);
+          // Refresh forecast data after cost sync completes
+          fetchForecastData();
         }
       } catch (err) {
         console.error('SSE parse error', err);
@@ -3102,16 +3193,16 @@ export default function App() {
     } catch (err) {
       console.error('Failed to clear cost cache', err);
     }
-    
+
+    // Invalidate related caches to ensure fresh data
+    invalidateCache('waste-data');
+    invalidateCache('filters-data');
+    invalidateCache(/^marketplace-/);
+    invalidateCache(/^commitments-/);
+
     // Also refresh filters so that uniqueSubs gets populated if it failed on initial load
-    try {
-      const fRes = await fetch('http://localhost:8080/api/filters');
-      const fData = await fRes.json();
-      setAllPossibleFilters(fData);
-    } catch (err) {
-      console.error('Failed to fetch filters', err);
-    }
-    
+    refetchFilters();
+
     // We intentionally don't call fetchCosts(true) immediately here because setAllPossibleFilters
     // is async. The useEffect observing uniqueSubs will automatically trigger fetchCosts()
     // once uniqueSubs populates. If it's already populated correctly, we can enforce a
@@ -3160,13 +3251,11 @@ export default function App() {
   }, [costsLoading, activeEventSourceRef.current, dataSubIds.size, uniqueSubs.length]);
 
   // Fetch resource change history since start of day (browser timezone)
-  const fetchHistory = async () => {
+  const fetchHistory = async (days?: 1 | 7 | 30 | 90) => {
     setHistoryLoading(true);
     try {
-      const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const since = startOfDay.toISOString();
-      const res = await fetch(`http://localhost:8080/api/history?since=${encodeURIComponent(since)}`);
+      const sinceParam = days ? `days=${days}` : '';
+      const res = await fetch(`http://localhost:8080/api/history?${sinceParam}`);
       const data = await res.json();
       if (Array.isArray(data)) {
         // Legacy flat array response
@@ -3179,6 +3268,7 @@ export default function App() {
         setHistory([]);
         setDailyImpact([]);
       }
+      setHistoryFetched(true);
     } catch (err) {
       console.error('Failed to fetch history', err);
     } finally {
@@ -5001,10 +5091,6 @@ export default function App() {
                       )}
                     </div>
                   )}
-                  <button className="btn" onClick={() => setShowSettings(true)} title="Settings (⌘S / Ctrl+S)">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
-                    Settings
-                  </button>
                   <button className="btn" onClick={() => setShowShortcutsHelp(true)} title="Keyboard shortcuts (?)" style={{ padding: '8px 10px' }}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M6 8h.01M6 12h.01M6 16h.01" /></svg>
                     <kbd style={{ fontSize: 11, fontFamily: 'monospace', background: 'var(--bg-surface)', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)' }}>?</kbd>
@@ -5440,7 +5526,10 @@ export default function App() {
             <HistoryView
               history={history}
               historyLoading={historyLoading}
+              historyFetched={historyFetched}
               fetchHistory={fetchHistory}
+              historyDays={historyDays}
+              setHistoryDays={setHistoryDays}
               resources={resources}
               setSelectedResource={setSelectedResource}
               setCurrentPage={setCurrentPage}
@@ -5451,7 +5540,7 @@ export default function App() {
             <WasteView
               wasteData={wasteData}
               wasteLoading={wasteLoading}
-              fetchWaste={fetchWaste}
+              fetchWaste={refetchWaste}
               setSearchQuery={setSearchQuery}
               setActiveTab={setActiveTab}
               setCurrentPage={setCurrentPage}
@@ -5500,7 +5589,7 @@ export default function App() {
                   </div>
                   <button
                     className="btn"
-                    onClick={fetchMarketplaceData}
+                    onClick={refetchMarketplace}
                     disabled={marketplaceLoading}
                     style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                   >
@@ -5523,7 +5612,7 @@ export default function App() {
                 <div className="card" style={{ padding: 24, textAlign: 'center', background: 'rgba(239,68,68,0.05)', border: '1px solid var(--danger)' }}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" style={{ marginBottom: 8 }}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
                   <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger)', marginBottom: 8 }}>{marketplaceError}</div>
-                  <button className="btn" onClick={fetchMarketplaceData}>Try Again</button>
+                  <button className="btn" onClick={refetchMarketplace}>Try Again</button>
                 </div>
               )}
 
@@ -5656,7 +5745,7 @@ export default function App() {
                   </div>
                   <button
                     className="btn"
-                    onClick={fetchCommitmentsData}
+                    onClick={refetchCommitments}
                     disabled={commitmentsLoading}
                     style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                   >
@@ -5679,7 +5768,7 @@ export default function App() {
                 <div className="card" style={{ padding: 24, textAlign: 'center', background: 'rgba(239,68,68,0.05)', border: '1px solid var(--danger)' }}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" style={{ marginBottom: 8 }}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
                   <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger)', marginBottom: 8 }}>{commitmentsError}</div>
-                  <button className="btn" onClick={fetchCommitmentsData}>Try Again</button>
+                  <button className="btn" onClick={refetchCommitments}>Try Again</button>
                 </div>
               )}
 
