@@ -83,7 +83,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "2.0.1"
+var Version = "2.1.0"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -4409,11 +4409,11 @@ func sseHandler(c *gin.Context) {
 
 		log.Printf("SSE: %d cached, %d uncached subscriptions - starting uncached fetch", cachedCount, len(uncached))
 
-		// Fetch uncached subs in parallel.
-		// Batch size 3: each sub makes 3 API calls (daily + current + previous), so max 9 concurrent
-		// requests per batch. This keeps us under the global costLimiter and avoids 429s.
+		// Fetch uncached subs in parallel, but serialize the three cost calls inside each sub
+		// to avoid bursting Azure Cost Management. Batch size 2 with 8s pacing keeps the
+		// request rate low enough to dodge tenant-level 429s for 78+ subscriptions.
 		if len(uncached) > 0 {
-			const batchSize = 3
+			const batchSize = 2
 			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
 				// Check if client disconnected before starting batch
 				select {
@@ -4436,45 +4436,28 @@ func sseHandler(c *gin.Context) {
 						log.Printf("SSE: fetching sub %d/%d: %s", idx+1, len(uncached), sid)
 						now := time.Now()
 
-						// Fetch daily costs in parallel — stored in cost_daily for trend charts only.
-						// populateCostsFromDaily (DailyAggregate fallback) is only used if the
-						// main resource-group fetch fails, to avoid double-counting.
+						// 3-minute context covers worst-case retry chain: 10+20+40+80+jitter ≈ 166s.
+						subCtx, subCancel := context.WithTimeout(clientCtx, 3*time.Minute)
+						defer subCancel()
+
+						// Fetch current period first (required for dashboard totals)
+						_, currErr := fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), subCtx)
+
+						// Fetch previous period next (for MoM comparisons)
+						var prevErr error
+						if currErr == nil {
+							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), subCtx)
+						}
+
+						// Fetch daily costs last (used for trend charts and fallback)
 						var dailyData []map[string]any
 						var dailyErr error
-						var dailyWg sync.WaitGroup
-						dailyWg.Add(1)
-						go func() {
-							defer dailyWg.Done()
-							dailyCtx, dailyCancel := context.WithTimeout(clientCtx, 2*time.Minute)
-							defer dailyCancel()
-							start := now.AddDate(0, 0, -60)
-							dailyData, dailyErr = fetchDailyCosts(costClient, sid, start, now, dailyCtx)
-							if dailyErr == nil && len(dailyData) > 0 {
-								cache.setDailyCosts(sid, dailyData)
-								log.Printf("SSE: cached %d daily cost entries for %s", len(dailyData), sid)
-							}
-						}()
-
-						// Fetch current and previous periods in parallel — each with its own
-						// 3-minute context so retries on one period don't starve the other.
-						// 3 min covers worst-case retry chain: 10+20+40+80+jitter ≈ 166s.
-						var currErr, prevErr error
-						var periodWg sync.WaitGroup
-						periodWg.Add(2)
-						go func() {
-							defer periodWg.Done()
-							currCtx, currCancel := context.WithTimeout(clientCtx, 3*time.Minute)
-							defer currCancel()
-							_, currErr = fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), currCtx)
-						}()
-						go func() {
-							defer periodWg.Done()
-							prevCtx, prevCancel := context.WithTimeout(clientCtx, 3*time.Minute)
-							defer prevCancel()
-							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), prevCtx)
-						}()
-						periodWg.Wait()
-						dailyWg.Wait()
+						start := now.AddDate(0, 0, -60)
+						dailyData, dailyErr = fetchDailyCosts(costClient, sid, start, now, subCtx)
+						if dailyErr == nil && len(dailyData) > 0 {
+							cache.setDailyCosts(sid, dailyData)
+							log.Printf("SSE: cached %d daily cost entries for %s", len(dailyData), sid)
+						}
 
 						// If main fetch failed, use daily aggregate as fallback so the sub
 						// still contributes to the total rather than showing as missing.
@@ -4549,8 +4532,8 @@ func sseHandler(c *gin.Context) {
 					}(subID, batchStart+i)
 				}
 				wg.Wait()
-				// Delay between batches to let rate limiter recover and avoid 429s
-				time.Sleep(5 * time.Second)
+				// Longer delay between batches to stay well below Azure Cost Management limits
+				time.Sleep(8 * time.Second)
 			}
 		}
 		log.Printf("SSE: sending done message")

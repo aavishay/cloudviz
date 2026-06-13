@@ -44,6 +44,8 @@ export default function App() {
   const [dataSubIds, setDataSubIds] = useState<Set<string>>(new Set());
   const dataSubIdsRef = useRef(dataSubIds);
   const activeEventSourceRef = useRef<EventSource | null>(null);
+  // Track retry counts per subscription to prevent infinite refetch loops
+  const [costRetryCount, setCostRetryCount] = useState<Record<string, number>>({});
   useEffect(() => { dataSubIdsRef.current = dataSubIds; }, [dataSubIds]);
 
   // Cleanup EventSource on unmount
@@ -243,6 +245,7 @@ export default function App() {
   const [alertModal, setAlertModal] = useState<{open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info'} | null>(null);
   const [dragItem, setDragItem] = useState<string | null>(null);
   const [dragOverItem, setDragOverItem] = useState<string | null>(null);
+  // Drag and drop for dashboard panels removed
   const [commitmentSavings, setCommitmentSavings] = useState<any>(null);
   const [typeTrendData, setTypeTrendData] = useState<any>(null);
   const [envFilter, setEnvFilter] = useState(() => localStorage.getItem('cloudviz-envFilter') || '');
@@ -463,7 +466,8 @@ export default function App() {
 
   const renderSummary = () => (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
-      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('costs')}>
+      {/* Total Cost Panel */}
+      <div className="card card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer', minWidth: 200 }} onClick={() => setActiveTab('costs')}>
         <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -478,10 +482,10 @@ export default function App() {
           {(() => { const c = formatCost(totalCostsSum); return `$${c.formatted}${c.suffix}`; })()}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span>{costsLoading ? `Loading... (${costs.length} entries so far)` : `${costs.length} entries · last ${costPeriod}d`}</span>
-          {budgetStatus && !costsLoading && <span style={{ padding: '2px 8px', borderRadius: 12, background: budgetStatus.color === 'var(--accent)' ? 'var(--accent-dim)' : budgetStatus.color === 'var(--warning)' ? 'var(--warning-dim)' : 'var(--danger-dim)', color: budgetStatus.color, fontSize: 10, fontWeight: 600 }}>{budgetStatus.message}</span>}
+          <span>{`${costs.length} entries · last ${costPeriod}d`}</span>
+          {budgetStatus && <span style={{ padding: '2px 8px', borderRadius: 12, background: budgetStatus.color === 'var(--accent)' ? 'var(--accent-dim)' : budgetStatus.color === 'var(--warning)' ? 'var(--warning-dim)' : 'var(--danger-dim)', color: budgetStatus.color, fontSize: 10, fontWeight: 600 }}>{budgetStatus.message}</span>}
         </div>
-        {!costsLoading && costComparison && (
+        {costComparison && (
           <div style={{ fontSize: 11, color: costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
             {costComparison.isIncrease ? '↑' : '↓'} {Math.abs(costComparison.percentChange).toFixed(1)}% vs prior {costPeriod}d period
             <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>
@@ -492,7 +496,7 @@ export default function App() {
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: budgetStatus?.status === 'over' || budgetStatus?.status === 'critical' ? 'var(--danger)' : budgetStatus?.status === 'warning' ? 'var(--warning)' : 'var(--accent)', opacity: 0.6 }} />
       </div>
 
-      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('resources')}>
+      <div className="card card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('resources')}>
         <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(59 130 246 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -507,7 +511,7 @@ export default function App() {
         <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{resourcesCountLoading ? 'loading…' : (trueTotalResources === 1 ? 'resource' : 'resources')}</div>
       </div>
 
-      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
+      <div className="card card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setCurrentPage(1); }}>
         <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(245 158 11 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -524,7 +528,7 @@ export default function App() {
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: lowScoreCount > 0 ? 'var(--warning)' : 'var(--accent)', opacity: 0.6 }} />
       </div>
 
-      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setShowOrphanedOnly(true); setCurrentPage(1); }}>
+      <div className="card card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { setActiveTab('resources'); setShowOrphanedOnly(true); setCurrentPage(1); }}>
         <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, var(--danger-dim) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -541,7 +545,7 @@ export default function App() {
         <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, background: orphanedCount > 0 ? 'var(--danger)' : 'var(--accent)', opacity: 0.6 }} />
       </div>
 
-      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('costs')}>
+      <div className="card card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => setActiveTab('costs')}>
         <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'radial-gradient(circle at top right, rgba(139 92 246 / 0.1) 0%, transparent 70%)', borderRadius: '0 14px 0 100%' }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -561,7 +565,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="card card-animate card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { if (lowScoreCount + orphanedCount + costAnomalies.length > 0) { setActiveTab('resources'); if (orphanedCount > 0) setShowOrphanedOnly(true); } }}>
+      <div className="card card-interactive" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer' }} onClick={() => { if (lowScoreCount + orphanedCount + costAnomalies.length > 0) { setActiveTab('resources'); if (orphanedCount > 0) setShowOrphanedOnly(true); } }}>
         <div style={{ position: 'absolute', top: 0, right: 0, width: 120, height: 120, background: 'var(--accent-dim)', borderRadius: '0 14px 0 100%' }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1560,84 +1564,17 @@ export default function App() {
     </div>
   );
 
-  // ── DraggablePanel wrapper ────────────────────────────────────────────────────
-  const [dndDragId, setDndDragId] = useState<string | null>(null);
-  const [dndOverId, setDndOverId] = useState<string | null>(null);
-
-  const handleDragStart = (id: string) => setDndDragId(id);
-  const handleDragOver = (e: React.DragEvent, id: string) => { e.preventDefault(); setDndOverId(id); };
-  const handleDrop = (e: React.DragEvent, id: string) => {
-    e.preventDefault();
-    if (dndDragId && dndDragId !== id) {
-      setDashboardOrder(prev => {
-        const next = [...prev];
-        const from = next.indexOf(dndDragId);
-        const to = next.indexOf(id);
-        next.splice(from, 1);
-        next.splice(to, 0, dndDragId);
-        return next;
-      });
-    }
-    setDndDragId(null);
-    setDndOverId(null);
-  };
-  const handleDragEnd = () => { setDndDragId(null); setDndOverId(null); };
-
-  const PanelWrapper = ({ id, children }: { id: string; children: React.ReactNode }) => {
-    const [isHovered, setIsHovered] = useState(false);
-
+  // ── Panel wrapper ───────────────────────────────────────────────────────────────
+  const PanelWrapper = ({ children }: { children: React.ReactNode }) => {
     return (
       <div
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        className="panel-drag"
+        className="panel-wrapper"
         style={{
           position: 'relative',
-          opacity: dndDragId && dndDragId !== id ? 0.5 : 1,
-          border: dndOverId === id ? '2px solid var(--accent)' : '2px solid transparent',
           borderRadius: 16,
-          transition: 'opacity 0.2s, border-color 0.15s',
           overflow: 'visible',
         }}
       >
-        <div
-          className="panel-drag-handle"
-          draggable
-          onDragStart={(e) => {
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', id);
-            handleDragStart(id);
-          }}
-          onDragOver={(e) => handleDragOver(e, id)}
-          onDrop={(e) => handleDrop(e, id)}
-          onDragEnd={handleDragEnd}
-          style={{
-            position: 'absolute',
-            top: 10,
-            left: 10,
-            zIndex: 100,
-            cursor: 'move',
-            opacity: isHovered ? 1 : 0,
-            pointerEvents: isHovered ? 'auto' : 'none',
-            transition: 'opacity 0.15s',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '4px 8px',
-            background: 'var(--bg-surface)',
-            borderRadius: 6,
-            border: '1px solid var(--border)',
-            fontSize: 10,
-            color: 'var(--text-3)',
-            fontWeight: 600,
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-          }}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M8 6h12M4 6h.01M8 12h12M4 12h.01M8 18h12M4 18h.01"/>
-          </svg>
-          Drag
-        </div>
         <div style={{ overflow: 'auto', height: '100%' }}>{children}</div>
       </div>
     );
@@ -2925,11 +2862,11 @@ export default function App() {
       }
     }, estimatedMaxTime);
 
-    // Throttled forecast refresh - max once per 5 seconds during sync
+    // Throttled forecast refresh - max once per 2 seconds during sync for real-time feel
     let lastForecastRefresh = 0;
     const throttledForecastRefresh = () => {
       const now = Date.now();
-      if (now - lastForecastRefresh > 5000) {
+      if (now - lastForecastRefresh > 2000) {
         lastForecastRefresh = now;
         fetchForecastData();
       }
@@ -2969,7 +2906,12 @@ export default function App() {
               resourceLocation: item.resourceLocation || '',
               subscriptionId: subId
             };
-          }).filter((item: AggregatedCost) => isFinite(item.cost) && isFinite(item.previousCost));
+          }).filter((item: AggregatedCost) => isFinite(item.cost));
+
+          // Debug logging for cost data
+          if (newItems.length === 0 && currentItems.length > 0) {
+            console.warn(`Subscription ${subId}: All ${currentItems.length} cost items filtered out (non-finite costs)`);
+          }
 
           // Ghost entries for resource groups that existed only in the previous period
           // (deleted/stopped resources). Without these, previousTotal is undercounted
@@ -3005,7 +2947,12 @@ export default function App() {
 
           setCosts(prev => {
             const filtered = prev.filter(c => c.subscriptionId !== subId);
-            return [...filtered, ...allItems];
+            const newCosts = [...filtered, ...allItems];
+            // Debug: log cost update
+            if (allItems.length === 0) {
+              console.log(`Subscription ${subId}: No cost entries added (dataSubIds: ${dataSubIds.size + 1}/${uniqueSubs.length})`);
+            }
+            return newCosts;
           });
           setDataSubIds(prev => {
             const next = new Set(prev).add(subId);
@@ -3024,6 +2971,8 @@ export default function App() {
             return next;
           });
         } else if (msg.type === 'batch') {
+          // Update forecast as cached batches arrive
+          throttledForecastRefresh();
           // Handle batch update with cached subscription data
           if (msg.data?.subscriptions) {
             const subIds = Object.keys(msg.data.subscriptions);
@@ -3059,7 +3008,12 @@ export default function App() {
                   resourceLocation: item.resourceLocation || '',
                   subscriptionId: subId
                 };
-              }).filter((item: AggregatedCost) => isFinite(item.cost) && isFinite(item.previousCost));
+              }).filter((item: AggregatedCost) => isFinite(item.cost));
+
+              // Debug logging for batch cost data
+              if (newItems.length === 0 && currentItems.length > 0) {
+                console.warn(`Batch subscription ${subId}: All ${currentItems.length} cost items filtered out (non-finite costs)`);
+              }
 
               const batchCurrentKeys = new Set(currentItems.map((item: CostItem) => `${item.resourceGroup}-${item.resourceType}-${item.resourceLocation}`));
               const batchGhostItems: AggregatedCost[] = previousItems
@@ -3100,6 +3054,8 @@ export default function App() {
             });
           }
         } else if (msg.type === 'status') {
+          // Refresh forecast on any status message (synced/error) so the panel stays live
+          throttledForecastRefresh();
           if (msg.message === 'synced' && msg.subId) {
             // Update counter when a subscription is marked as synced
             setDataSubIds(prev => {
@@ -3188,6 +3144,7 @@ export default function App() {
     setIsRefreshing(true);
     setCosts([]);
     setDataSubIds(new Set());
+    setCostRetryCount({}); // Reset retry counts on manual refresh
     try {
       await fetch('http://localhost:8080/api/costs/cache', { method: 'DELETE' });
     } catch (err) {
@@ -3225,6 +3182,31 @@ export default function App() {
       setIsRefreshing(false);
     }
   }, [dataSubIds, uniqueSubs, costsLoading]);
+
+  // Note: Auto-resume removed to prevent flickering. Manual refresh available via UI.
+
+  // Ensure cost data is fetched when subscriptions sync but have no entries
+  // Includes retry limit (max 3 attempts) to prevent infinite loops
+  useEffect(() => {
+    const subsWithCostData = new Set(costs.map(c => c.subscriptionId));
+    const syncedWithoutCost = Array.from(dataSubIds).filter(
+      id => !subsWithCostData.has(id) && (costRetryCount[id] || 0) < 3
+    );
+
+    // If we have synced subscriptions but some have no cost data (within retry limit), trigger a refetch
+    if (syncedWithoutCost.length > 0 && dataSubIds.size > 0 && !costsLoading && !isRefreshing) {
+      console.log(`Subscriptions synced without cost data: ${syncedWithoutCost.length}, triggering refetch (attempts: ${syncedWithoutCost.map(id => costRetryCount[id] || 0).join(',')})`);
+      // Increment retry counts for subscriptions being refetched
+      setCostRetryCount(prev => {
+        const next = { ...prev };
+        syncedWithoutCost.forEach(id => {
+          next[id] = (next[id] || 0) + 1;
+        });
+        return next;
+      });
+      fetchCosts(true);
+    }
+  }, [dataSubIds, costs, costsLoading, isRefreshing, costRetryCount]);
 
   // Note: fetchCosts is only triggered by the useEffect above when uniqueSubs/allPossibleFilters.subs changes.
   // The fetchCosts function now prevents concurrent calls and handles incremental fetching.
@@ -3286,7 +3268,13 @@ export default function App() {
     }
   };
 
+  // Fetch history automatically on mount and when tab changes to history
   useEffect(() => {
+    // Load history automatically on initial mount
+    if (!historyFetched) {
+      fetchHistory();
+    }
+    // Also fetch when switching to history tab
     if (activeTab === 'history') {
       fetchHistory();
       fetchRGTrends(rgTrendsPeriod);
@@ -5132,7 +5120,7 @@ export default function App() {
 
               {/* Dashboard panels */}
               {dashboardPanels.map(({ id, render }) => (
-                <PanelWrapper key={id} id={id}>
+                <PanelWrapper key={id}>
                   {render()}
                 </PanelWrapper>
               ))}
