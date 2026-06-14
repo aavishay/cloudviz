@@ -55,9 +55,11 @@ var (
 	argClient      *armresourcegraph.Client
 	lastSync       time.Time
 	syncMutex      sync.Mutex
-	// Azure Cost Management is very sensitive to 429s (100/min per scope).
-	// Limit globally to ~2 req/s with burst 5 to prevent 429 stampedes.
-	costLimiter    = rate.NewLimiter(rate.Limit(2.0), 5)
+	// Azure Cost Management tenant-level hard limit: 20 calls/min across all scopes.
+	// Burst of 3 absorbs brief spikes without violating the per-minute ceiling.
+	costLimiter = rate.NewLimiter(rate.Limit(20.0/60.0), 3)
+	// QPU limiter: 60 QPU/min sustained (1 token/s), burst 12 covers the 12 QPU/10s window.
+	qpuLimiter = rate.NewLimiter(rate.Limit(1.0), 12)
 	// HTTP client with connection pooling for reuse
 	httpClient     = &http.Client{
 		Timeout: 60 * time.Second,
@@ -74,6 +76,16 @@ var (
 	activeSubsTTL       = 10 * time.Minute
 )
 
+// clientTypePolicy injects a unique ClientType header on every Cost Management request.
+// Without this, requests are pooled with all other anonymous callers and share their
+// collective 2,000 req/min ClientType quota, making us vulnerable to other tenants' traffic.
+type clientTypePolicy struct{}
+
+func (p *clientTypePolicy) Do(req *policy.Request) (*http.Response, error) {
+	req.Raw().Header.Set("ClientType", "cloudviz")
+	return req.Next()
+}
+
 // toAnySlice converts a string slice to []any for SQL query arguments
 func toAnySlice(ss []string) []any {
 	result := make([]any, len(ss))
@@ -83,7 +95,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "2.1.0"
+var Version = "2.1.1"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -98,7 +110,8 @@ func main() {
 
 			clientOpts := &arm.ClientOptions{
 				ClientOptions: policy.ClientOptions{
-					Transport: httpClient,
+					Transport:       httpClient,
+					PerCallPolicies: []policy.Policy{&clientTypePolicy{}},
 				},
 			}
 
@@ -3051,17 +3064,88 @@ func startServer(port string) {
 			fmt.Sscanf(t, "%f", &threshold)
 		}
 
-		// Get all VMs from the resources cache
-		res, _, err := FetchResourcesWithCosts(c.Request.Context(), nil, nil, nil, nil, "", false, false, false, false, "", "")
+		ctx := c.Request.Context()
+
+		// Query 1: running VMs only (power state = "VM running")
+		runningQuery := `Resources
+| where type =~ 'microsoft.compute/virtualmachines'
+| extend powerState = properties.extended.instanceView.powerState.displayStatus
+| where powerState =~ 'VM running'
+| project id, name, type, location, subscriptionId, resourceGroup, tags`
+
+		ptrStr := func(s string) *string { return &s }
+		ptrI32 := func(i int32) *int32 { return &i }
+		fmtObj := armresourcegraph.ResultFormatObjectArray
+
+		runningResp, err := argClient.Resources(ctx, armresourcegraph.QueryRequest{
+			Query: ptrStr(runningQuery),
+			Options: &armresourcegraph.QueryRequestOptions{
+				ResultFormat: &fmtObj,
+				Top:          ptrI32(1000),
+			},
+		}, nil)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 
+		// Query 2: VMs with auto-shutdown schedule enabled (DevTestLab schedules)
+		shutdownQuery := `Resources
+| where type =~ 'microsoft.devtestlab/schedules'
+| where name startswith 'shutdown-computevm-'
+| where properties.status =~ 'Enabled'
+| extend vmName = tolower(substring(name, strlen('shutdown-computevm-')))
+| project subscriptionId, resourceGroup=tolower(resourceGroup), vmName`
+
+		shutdownResp, _ := argClient.Resources(ctx, armresourcegraph.QueryRequest{
+			Query: ptrStr(shutdownQuery),
+			Options: &armresourcegraph.QueryRequestOptions{
+				ResultFormat: &fmtObj,
+				Top:          ptrI32(1000),
+			},
+		}, nil)
+
+		// Build set of rg+vmName keys that have auto-shutdown enabled
+		autoShutdown := make(map[string]bool)
+		if shutdownResp.Data != nil {
+			if rows, ok := shutdownResp.Data.([]interface{}); ok {
+				for _, row := range rows {
+					if m, ok := row.(map[string]interface{}); ok {
+						key := strings.ToLower(safeStr(m["resourceGroup"])) + "/" + strings.ToLower(safeStr(m["vmName"]))
+						autoShutdown[key] = true
+					}
+				}
+			}
+		}
+
+		// Collect running VMs that do not have auto-shutdown
 		var vms []AzureResource
-		for _, r := range res {
-			if strings.EqualFold(r.Type, "microsoft.compute/virtualmachines") {
-				vms = append(vms, r)
+		if rows, ok := runningResp.Data.([]interface{}); ok {
+			for _, row := range rows {
+				m, ok := row.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				name := safeStr(m["name"])
+				rg := strings.ToLower(safeStr(m["resourceGroup"]))
+				if autoShutdown[rg+"/"+strings.ToLower(name)] {
+					continue
+				}
+				tags := make(map[string]string)
+				if t, ok := m["tags"].(map[string]interface{}); ok {
+					for k, v := range t {
+						tags[k] = safeStr(v)
+					}
+				}
+				vms = append(vms, AzureResource{
+					ID:             safeStr(m["id"]),
+					Name:           name,
+					Type:           "microsoft.compute/virtualmachines",
+					Location:       safeStr(m["location"]),
+					SubscriptionID: safeStr(m["subscriptionId"]),
+					ResourceGroup:  safeStr(m["resourceGroup"]),
+					Tags:           tags,
+				})
 			}
 		}
 
@@ -3077,7 +3161,7 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				uptime, downtime, err := fetchVMAvailability(c.Request.Context(), vm.ID, periodDays)
+				uptime, downtime, err := fetchVMAvailability(ctx, vm.ID, periodDays)
 				status := "healthy"
 				if uptime < threshold {
 					status = "critical"
@@ -3102,7 +3186,6 @@ func startServer(port string) {
 			}(vm)
 		}
 
-		// Wait for all goroutines to finish
 		wg.Wait()
 
 		// Sort by uptime asc (worst first)
