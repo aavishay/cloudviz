@@ -60,6 +60,9 @@ var (
 	costLimiter = rate.NewLimiter(rate.Limit(20.0/60.0), 3)
 	// QPU limiter: 60 QPU/min sustained (1 token/s), burst 12 covers the 12 QPU/10s window.
 	qpuLimiter = rate.NewLimiter(rate.Limit(1.0), 12)
+	// forecastLimiter caps background forecast fetches to 6/min so they cannot consume
+	// more than ~30% of the 20/min tenant budget, leaving the rest for cost sync calls.
+	forecastLimiter = rate.NewLimiter(rate.Limit(6.0/60.0), 2)
 	// HTTP client with connection pooling for reuse
 	httpClient     = &http.Client{
 		Timeout: 60 * time.Second,
@@ -95,7 +98,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "2.1.1"
+var Version = "2.1.2"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -555,18 +558,9 @@ func startServer(port string) {
 			})
 		}
 
-		// 6. Launch background fetch for missing subs (will improve cache for next time)
-		if len(missingSubs) > 0 {
-			go func(subsToFetch []string) {
-				for _, sid := range subsToFetch {
-					daily, err := fetchDailyCosts(costClient, sid, start, now, context.Background())
-					if err == nil {
-						cache.setDailyCosts(sid, daily)
-					}
-					time.Sleep(1 * time.Second)
-				}
-			}(missingSubs)
-		}
+		// Daily cost backfill is handled exclusively by the SSE sync stream.
+		// Removed background fetch here — it made concurrent Azure calls for all
+		// missing subs on every dashboard load, causing Retry-After=2876s bans.
 
 		c.JSON(200, results)
 		return
@@ -903,30 +897,16 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				// Try cached data first, fall back to API
-				var current, previous []map[string]any
-				var err1, err2 error
-
+				// Cache-only: never make live Azure calls from anomaly endpoints.
+				// Live data is fetched exclusively by the SSE sync stream to avoid
+				// competing for the Azure Cost Management rate limit (20 calls/min).
 				current, ok1 := cache.getDailyCosts(subID, currentStart, now)
 				if !ok1 {
-					current, err1 = fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
-					if err1 == nil && len(current) > 0 {
-						cache.setDailyCosts(subID, current)
-					}
+					return
 				}
-
-				// Small delay between consecutive calls to same sub
-				time.Sleep(100 * time.Millisecond)
 
 				previous, ok2 := cache.getDailyCosts(subID, previousStart, previousEnd)
 				if !ok2 {
-					previous, err2 = fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
-					if err2 == nil && len(previous) > 0 {
-						cache.setDailyCosts(subID, previous)
-					}
-				}
-
-				if (err1 != nil && !ok1) || (err2 != nil && !ok2) {
 					return
 				}
 
@@ -1129,30 +1109,15 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				// Try cached data first, fall back to API
-				var current, previous []map[string]any
-				var err1, err2 error
-
+				// Cache-only: never make live Azure calls from anomaly endpoints.
+				// Live data is fetched exclusively by the SSE sync stream.
 				current, ok1 := cache.getDailyCosts(subID, currentStart, now)
 				if !ok1 {
-					current, err1 = fetchDailyCosts(costClient, subID, currentStart, now, c.Request.Context())
-					if err1 == nil && len(current) > 0 {
-						cache.setDailyCosts(subID, current)
-					}
+					return
 				}
-
-				// Small delay between consecutive calls to same sub
-				time.Sleep(100 * time.Millisecond)
 
 				previous, ok2 := cache.getDailyCosts(subID, previousStart, previousEnd)
 				if !ok2 {
-					previous, err2 = fetchDailyCosts(costClient, subID, previousStart, previousEnd, c.Request.Context())
-					if err2 == nil && len(previous) > 0 {
-						cache.setDailyCosts(subID, previous)
-					}
-				}
-
-				if (err1 != nil && !ok1) || (err2 != nil && !ok2) {
 					return
 				}
 
@@ -1790,8 +1755,9 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				daily, err := fetchDailyCostsByType(costClient, subID, start, now, c.Request.Context())
-				if err != nil {
+				// Cache-only: live fetches happen exclusively via the SSE sync.
+				daily, ok := cache.getDailyCosts(subID, start, now)
+				if !ok {
 					return
 				}
 				mu.Lock()
@@ -2342,8 +2308,9 @@ func startServer(port string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				daily, err := fetchDailyCosts(costClient, subID, start, now, c.Request.Context())
-				if err != nil {
+				// Cache-only: live fetches happen exclusively via the SSE sync.
+				daily, ok := cache.getDailyCosts(subID, start, now)
+				if !ok {
 					return
 				}
 
@@ -2424,7 +2391,7 @@ func startServer(port string) {
 		if len(missingSubs) > 0 {
 			go func(subsToFetch []string) {
 				var wg sync.WaitGroup
-				sem := make(chan struct{}, 3)
+				sem := make(chan struct{}, 2)
 				for i, sid := range subsToFetch {
 					if i > 0 {
 						time.Sleep(2 * time.Second)
@@ -2434,7 +2401,10 @@ func startServer(port string) {
 						defer wg.Done()
 						sem <- struct{}{}
 						defer func() { <-sem }()
-						actual, forecast, err := fetchForecast(forecastClient, subID, monthStart, monthEnd, context.Background())
+						// Cap each forecast fetch so retry chains don't run indefinitely.
+						fctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+						defer cancel()
+						actual, forecast, err := fetchForecast(forecastClient, subID, monthStart, monthEnd, fctx)
 						if err == nil {
 							cache.setForecast(subID, days, actual, forecast)
 						}
@@ -4476,10 +4446,11 @@ func sseHandler(c *gin.Context) {
 					log.Printf("SSE: timeout sending batch cached data chunk %d", chunkStart/batchChunkSize)
 				}
 
-				// Send synced status for each sub in this chunk
+				// Send "cached" (not "synced") for stale-cache serves so the frontend
+				// counter only increments on actual live-fetch completions.
 				for _, sid := range chunk {
 					select {
-					case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
+					case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "cached"}:
 					case <-clientCtx.Done():
 						log.Printf("SSE: client disconnected while sending cached statuses")
 						return
@@ -4492,11 +4463,11 @@ func sseHandler(c *gin.Context) {
 
 		log.Printf("SSE: %d cached, %d uncached subscriptions - starting uncached fetch", cachedCount, len(uncached))
 
-		// Fetch uncached subs in parallel, but serialize the three cost calls inside each sub
-		// to avoid bursting Azure Cost Management. Batch size 2 with 8s pacing keeps the
-		// request rate low enough to dodge tenant-level 429s for 78+ subscriptions.
+		// Fetch one subscription at a time with 15s pacing. Sequential processing ensures
+		// the 3 API calls per sub always fit within the costLimiter burst and never
+		// contend with forecast goroutines, which use a separate forecastLimiter.
 		if len(uncached) > 0 {
-			const batchSize = 2
+			const batchSize = 1
 			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
 				// Check if client disconnected before starting batch
 				select {
@@ -4519,8 +4490,10 @@ func sseHandler(c *gin.Context) {
 						log.Printf("SSE: fetching sub %d/%d: %s", idx+1, len(uncached), sid)
 						now := time.Now()
 
-						// 3-minute context covers worst-case retry chain: 10+20+40+80+jitter ≈ 166s.
-						subCtx, subCancel := context.WithTimeout(clientCtx, 3*time.Minute)
+						// 90s context: covers 1 retry at worst-case 49s Retry-After + API
+						// overhead. Subs that stay throttled beyond that fall back to stale
+						// cache and are skipped so the queue keeps moving.
+						subCtx, subCancel := context.WithTimeout(clientCtx, 90*time.Second)
 						defer subCancel()
 
 						// Fetch current period first (required for dashboard totals)
@@ -4532,20 +4505,20 @@ func sseHandler(c *gin.Context) {
 							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), subCtx)
 						}
 
-						// Fetch daily costs last (used for trend charts and fallback)
+						// Daily costs: only fetch as fallback when the main fetch failed.
+						// On the happy path this saves a 3rd Azure API call per subscription,
+						// keeping the effective rate at 2 calls/sub and well under the
+						// 4/min scope limit that triggers entity-level 429s.
 						var dailyData []map[string]any
 						var dailyErr error
-						start := now.AddDate(0, 0, -60)
-						dailyData, dailyErr = fetchDailyCosts(costClient, sid, start, now, subCtx)
-						if dailyErr == nil && len(dailyData) > 0 {
-							cache.setDailyCosts(sid, dailyData)
-							log.Printf("SSE: cached %d daily cost entries for %s", len(dailyData), sid)
-						}
-
-						// If main fetch failed, use daily aggregate as fallback so the sub
-						// still contributes to the total rather than showing as missing.
-						if currErr != nil && dailyErr == nil && len(dailyData) > 0 {
-							cache.populateCostsFromDaily(sid, dailyData, "current")
+						if currErr != nil {
+							start := now.AddDate(0, 0, -60)
+							dailyData, dailyErr = fetchDailyCosts(costClient, sid, start, now, subCtx)
+							if dailyErr == nil && len(dailyData) > 0 {
+								cache.setDailyCosts(sid, dailyData)
+								log.Printf("SSE: cached %d daily cost entries for %s (fallback)", len(dailyData), sid)
+								cache.populateCostsFromDaily(sid, dailyData, "current")
+							}
 						}
 
 						if currErr != nil {
@@ -4615,8 +4588,9 @@ func sseHandler(c *gin.Context) {
 					}(subID, batchStart+i)
 				}
 				wg.Wait()
-				// Longer delay between batches to stay well below Azure Cost Management limits
-				time.Sleep(8 * time.Second)
+				// 5s between subscriptions. The 90s subCtx already enforces pacing
+				// on throttled subs; fast subs need only a short gap.
+				time.Sleep(5 * time.Second)
 			}
 		}
 		log.Printf("SSE: sending done message")
