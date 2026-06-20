@@ -98,7 +98,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "2.1.2"
+var Version = "2.1.3"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -3041,6 +3041,7 @@ func startServer(port string) {
 | where type =~ 'microsoft.compute/virtualmachines'
 | extend powerState = properties.extended.instanceView.powerState.displayStatus
 | where powerState =~ 'VM running'
+| where tolower(resourceGroup) !startswith 'mc_'
 | project id, name, type, location, subscriptionId, resourceGroup, tags`
 
 		ptrStr := func(s string) *string { return &s }
