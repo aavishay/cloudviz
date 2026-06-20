@@ -92,9 +92,10 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_timestamp ON resource_history(timestamp)`); err != nil {
 		log.Printf("Warning: failed to create index: %v", err)
 	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_history_date_change ON resource_history(date(datetime(timestamp,'localtime')), change_type)`); err != nil {
-		log.Printf("Warning: failed to create date index: %v", err)
-	}
+	// Drop the old expression index that used datetime(...,'localtime') — newer SQLite
+	// rejects INSERTs when that non-deterministic modifier appears in an index expression.
+	// idx_history_timestamp covers the same query patterns without breaking writes.
+	db.Exec(`DROP INDEX IF EXISTS idx_history_date_change`)
 	// Add resource_type column if it doesn't already exist (SQLite has no IF NOT EXISTS for ADD COLUMN)
 	var hasResourceType bool
 	if rows, err := db.Query("PRAGMA table_info(resource_history)"); err == nil {

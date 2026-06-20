@@ -328,17 +328,31 @@ func getMetricsClient(subID string) (*armmonitor.MetricsClient, error) {
 	return client, nil
 }
 
-// getRetryAfterSeconds extracts the Retry-After header value from Azure HTTP error responses.
+// getRetryAfterSeconds extracts the longest wait time from Azure 429 response headers.
+// Cost Management returns granular headers per limit type; we take the max so we respect
+// whichever bucket is most exhausted.
 func getRetryAfterSeconds(err error) int {
 	var httpErr *azcore.ResponseError
-	if errors.As(err, &httpErr) && httpErr.RawResponse != nil {
-		if ra := httpErr.RawResponse.Header.Get("Retry-After"); ra != "" {
-			if secs, parseErr := strconv.Atoi(strings.TrimSpace(ra)); parseErr == nil && secs > 0 {
-				return secs
+	if !errors.As(err, &httpErr) || httpErr.RawResponse == nil {
+		return 0
+	}
+	h := httpErr.RawResponse.Header
+	headers := []string{
+		"x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after",
+		"x-ms-ratelimit-microsoft.costmanagement-entity-retry-after",
+		"x-ms-ratelimit-microsoft.costmanagement-tenant-retry-after",
+		"x-ms-ratelimit-microsoft.costmanagement-client-retry-after",
+		"Retry-After",
+	}
+	max := 0
+	for _, name := range headers {
+		if v := h.Get(name); v != "" {
+			if secs, e := strconv.Atoi(strings.TrimSpace(v)); e == nil && secs > max {
+				max = secs
 			}
 		}
 	}
-	return 0
+	return max
 }
 
 // retryAfter429 calls fn with up to 6 retries. On 429 responses it backs off
@@ -346,16 +360,17 @@ func getRetryAfterSeconds(err error) int {
 func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, error)) (T, error) {
 	var zero T
 
-	// Per-subscription rate limiter: Azure allows ~10 req/s per subscription
-	// Use 5 req/s with burst of 3 to handle consecutive calls gracefully
+	// Per-scope limit: 4 calls/min per subscription scope (Azure hard limit).
+	// Burst of 4 lets a sync cycle's 3 calls go through immediately (spending the
+	// full minute's quota upfront), then enforces the 4/min ceiling for sustained use.
+	// Burst of 1 caused each call to wait 15 s, stalling 78-sub syncs for 30+ minutes.
 	subID := extractSubID(logCtx)
 	if subID != "" {
 		var lim *rate.Limiter
 		if l, ok := subCostLimiters.Load(subID); ok {
 			lim = l.(*rate.Limiter)
 		} else {
-			// Azure Cost Management API limit is 100 per minute per sub scope (1.66 req/s)
-			lim = rate.NewLimiter(rate.Limit(1.5), 2)
+			lim = rate.NewLimiter(rate.Limit(4.0/60.0), 4)
 			if actual, loaded := subCostLimiters.LoadOrStore(subID, lim); loaded {
 				lim = actual.(*rate.Limiter)
 			}
@@ -371,8 +386,13 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 				return zero, err
 			}
 		}
+		// Tenant-level limit (20/min) — must not exceed across all concurrent sub calls.
 		if err := costLimiter.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Rate limiter error for %s: %v", logCtx, err)
+		}
+		// QPU limit: 60 QPU/min, 12 QPU/10s burst. Each query counts as 1 QPU.
+		if err := qpuLimiter.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("QPU rate limiter error for %s: %v", logCtx, err)
 		}
 
 		result, err := fn()
@@ -407,6 +427,46 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 		return zero, err
 	}
 	return zero, fmt.Errorf("max retries (6) exceeded for %s", logCtx)
+}
+
+// retryAfterForecast is the forecast-specific retry helper. It uses forecastLimiter
+// exclusively and never touches costLimiter or qpuLimiter, so forecast calls cannot
+// queue up on the shared tenant limiter and cause "would exceed context deadline" errors
+// for cost sync goroutines. Max backoff is capped at 60s (vs 120s for cost calls) because
+// forecast data is non-critical and a 90s context is used by the caller.
+func retryAfterForecast[T any](ctx context.Context, logCtx string, fn func() (T, error)) (T, error) {
+	var zero T
+	for retry := 0; retry < 4; retry++ {
+		if err := forecastLimiter.Wait(ctx); err != nil {
+			return zero, err
+		}
+		result, err := fn()
+		if err == nil {
+			return result, nil
+		}
+		if strings.Contains(err.Error(), "429") {
+			waitSecs := getRetryAfterSeconds(err)
+			if waitSecs > 0 {
+				log.Printf("Rate limit (429) hit for %s, Retry-After=%ds, retry %d", logCtx, waitSecs, retry)
+				waitSecs += rand.Intn(5)
+			} else {
+				waitSecs = 10 * (1 << retry)
+				if waitSecs > 60 {
+					waitSecs = 60
+				}
+				waitSecs += rand.Intn(10)
+				log.Printf("Rate limit (429) hit for %s, retry %d in %ds", logCtx, retry, waitSecs)
+			}
+			select {
+			case <-time.After(time.Duration(waitSecs) * time.Second):
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			}
+			continue
+		}
+		return zero, err
+	}
+	return zero, fmt.Errorf("max retries exceeded for %s", logCtx)
 }
 
 func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, period CostPeriod, start time.Time, ctx context.Context) (*armcostmanagement.QueryClientUsageResponse, error) {
@@ -1058,7 +1118,7 @@ func fetchForecast(client *armcostmanagement.ForecastClient, sid string, start, 
 	}
 
 	logCtx := fmt.Sprintf("forecast %s", sid)
-	res, err := retryAfter429(ctx, logCtx, func() (armcostmanagement.ForecastClientUsageResponse, error) {
+	res, err := retryAfterForecast(ctx, logCtx, func() (armcostmanagement.ForecastClientUsageResponse, error) {
 		return client.Usage(ctx, scope, props, nil)
 	})
 	if err != nil {

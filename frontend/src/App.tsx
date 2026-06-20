@@ -43,6 +43,7 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dataSubIds, setDataSubIds] = useState<Set<string>>(new Set());
   const dataSubIdsRef = useRef(dataSubIds);
+  const [liveCompletedCount, setLiveCompletedCount] = useState<number>(0);
   const activeEventSourceRef = useRef<EventSource | null>(null);
   // Track retry counts per subscription to prevent infinite refetch loops
   const [costRetryCount, setCostRetryCount] = useState<Record<string, number>>({});
@@ -597,7 +598,7 @@ export default function App() {
             </div>
             <div>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>VM Uptime (SLA)</span>
-              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Last {slaData.periodDays} days · {slaData.totalVMs} VMs</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Last {slaData.periodDays} days · {slaData.totalVMs} running VMs · no auto-shutdown</span>
             </div>
           </div>
         </div>
@@ -2844,6 +2845,7 @@ export default function App() {
     // Only reset dataSubIds on forceAll (refresh), otherwise keep existing for incremental fetch
     if (forceAll) {
       setDataSubIds(new Set());
+      setLiveCompletedCount(0);
     }
     const params = new URLSearchParams();
     toFetch.forEach(s => params.append('subscriptionId', s));
@@ -3054,10 +3056,14 @@ export default function App() {
             });
           }
         } else if (msg.type === 'status') {
-          // Refresh forecast on any status message (synced/error) so the panel stays live
+          // Refresh forecast on any status message (synced/cached/error) so the panel stays live
           throttledForecastRefresh();
-          if (msg.message === 'synced' && msg.subId) {
-            // Update counter when a subscription is marked as synced
+          if (msg.message === 'cached' && msg.subId) {
+            // Stale-cache serve: data already added by the batch event; no counter increment.
+            // dataSubIds is already updated by the batch handler above.
+          } else if (msg.message === 'synced' && msg.subId) {
+            // Live-fetch completion: increment the live counter and update the Set.
+            setLiveCompletedCount(prev => prev + 1);
             setDataSubIds(prev => {
               const next = new Set(prev).add(msg.subId);
               if (next.size === activeSubs.length) {
@@ -4803,7 +4809,7 @@ export default function App() {
         {costsLoading && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 8, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', marginRight: 8 }}>
             <div className="sync-spinner" style={{ width: 14, height: 14, border: '2px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--accent)' }}>Syncing ({dataSubIds.size}/{uniqueSubs.length} subs)...</span>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--accent)' }}>Syncing ({liveCompletedCount}/{uniqueSubs.length} subs)...</span>
           </div>
         )}
 
@@ -5899,7 +5905,7 @@ export default function App() {
               {costsLoading && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 12, color: 'var(--text-2)', fontSize: 13 }}>
                   <div className="spinner" />
-                  Syncing financial data ({dataSubIds.size}/{uniqueSubs.length} subscriptions)...
+                  Syncing financial data ({liveCompletedCount}/{uniqueSubs.length} subscriptions)...
 
                 </div>
               )}
