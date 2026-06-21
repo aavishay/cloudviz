@@ -98,7 +98,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "2.1.6"
+var Version = "2.1.7"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -2351,79 +2351,87 @@ func startServer(port string) {
 		c.JSON(200, result)
 	})
 
-	// Cost forecast using Azure's AI-powered forecast API
-	r.GET("/api/costs/forecast", func(c *gin.Context) {
-		subs := c.QueryArray("subscriptionId")
-		if len(subs) == 0 {
-			c.JSON(400, gin.H{"error": "at least one subscriptionId is required"})
-			return
-		}
-
-		now := time.Now()
-		days := 30
-		if d := c.Query("days"); d != "" {
-			fmt.Sscanf(d, "%d", &days)
-		}
-		start := now.AddDate(0, 0, -days)
-		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		monthEnd := monthStart.AddDate(0, 1, -1)
-
-		// 1. Sum cached forecast data
-		var totalActual, totalForecast float64
-		var cachedSubs []string
-		var missingSubs []string
-		for _, sid := range subs {
-			actual, forecast, ok := cache.getForecast(sid, days)
-			if ok {
-				totalActual += actual
-				totalForecast += forecast
-				cachedSubs = append(cachedSubs, sid)
-			} else {
-				missingSubs = append(missingSubs, sid)
+		// Cost forecast using Azure's AI-powered forecast API, with a run-rate fallback
+		// for subscriptions where Azure returns no forecast (common at subscription scope).
+		r.GET("/api/costs/forecast", func(c *gin.Context) {
+			subs := c.QueryArray("subscriptionId")
+			if len(subs) == 0 {
+				c.JSON(400, gin.H{"error": "at least one subscriptionId is required"})
+				return
 			}
-		}
 
-		// Note: We don't estimate missing subs from the costs table because
-		// the costs table contains raw cost data while cost_forecast contains
-		// Azure AI forecast data. Mixing these would double-count.
+			now := time.Now()
+			days := 30
+			if d := c.Query("days"); d != "" {
+				fmt.Sscanf(d, "%d", &days)
+			}
+			start := now.AddDate(0, 0, -days)
+			monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+			monthEnd := monthStart.AddDate(0, 1, -1)
 
-		// 4. Launch background fetch for missing subs with increased concurrency
-		if len(missingSubs) > 0 {
-			go func(subsToFetch []string) {
-				var wg sync.WaitGroup
-				sem := make(chan struct{}, 2)
-				for i, sid := range subsToFetch {
-					if i > 0 {
-						time.Sleep(2 * time.Second)
+			// Sum cached forecast data and compute run-rate fallback for missing/empty ones.
+			var totalActual, totalForecast float64
+			var totalRunRateForecast float64
+			var cachedSubs, missingSubs []string
+			for _, sid := range subs {
+				actual, forecast, ok := cache.getForecast(sid, days)
+				if ok {
+					totalActual += actual
+					totalForecast += forecast
+					cachedSubs = append(cachedSubs, sid)
+					// If Azure returned actual spend but no forecast remainder, fall back to a
+					// linear run-rate projection for the rest of the month.
+					if forecast <= 0 {
+						runRate := computeRunRateForecast(sid, now, monthStart, monthEnd)
+						totalRunRateForecast += runRate
+					} else {
+						totalRunRateForecast += actual + forecast
 					}
-					wg.Add(1)
-					go func(subID string) {
-						defer wg.Done()
-						sem <- struct{}{}
-						defer func() { <-sem }()
-						// Cap each forecast fetch so retry chains don't run indefinitely.
-						fctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-						defer cancel()
-						actual, forecast, err := fetchForecast(forecastClient, subID, monthStart, monthEnd, fctx)
-						if err == nil {
-							cache.setForecast(subID, days, actual, forecast)
-						}
-					}(sid)
+				} else {
+					missingSubs = append(missingSubs, sid)
+					// Even without cached Azure forecast, use daily cost run-rate if available.
+					if runRate := computeRunRateForecast(sid, now, monthStart, monthEnd); runRate > 0 {
+						totalRunRateForecast += runRate
+					}
 				}
-				wg.Wait()
-			}(missingSubs)
-		}
+			}
 
-		c.JSON(200, map[string]any{
-			"actualCost":   totalActual,
-			"forecastCost": totalForecast,
-			"periodDays":   days,
-			"start":        start.Format("2006-01-02"),
-			"end":          now.Format("2006-01-02"),
-			"errors":       nil,
+			// Launch background fetch for missing subs so the next request has Azure data.
+			if len(missingSubs) > 0 {
+				go func(subsToFetch []string) {
+					var wg sync.WaitGroup
+					sem := make(chan struct{}, 2)
+					for i, sid := range subsToFetch {
+						if i > 0 {
+							time.Sleep(2 * time.Second)
+						}
+						wg.Add(1)
+						go func(subID string) {
+							defer wg.Done()
+							sem <- struct{}{}
+							defer func() { <-sem }()
+							fctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+							defer cancel()
+							actual, forecast, err := fetchForecast(forecastClient, subID, monthStart, monthEnd, fctx)
+							if err == nil {
+								cache.setForecast(subID, days, actual, forecast)
+							}
+						}(sid)
+					}
+					wg.Wait()
+				}(missingSubs)
+			}
+
+			c.JSON(200, map[string]any{
+				"actualCost":      totalActual,
+				"forecastCost":    totalForecast,
+				"runRateForecast": totalRunRateForecast,
+				"periodDays":      days,
+				"start":           start.Format("2006-01-02"),
+				"end":             now.Format("2006-01-02"),
+				"errors":          nil,
+			})
 		})
-	})
-
 	r.GET("/api/costs", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
 		rows, err := cache.db.Query("SELECT resource_group, resource_type, resource_location, cost, subscription_id FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", toAnySlice(subs)...)
@@ -4885,6 +4893,35 @@ func daysInCurrentMonth() int {
 	firstOfNextMonth := time.Date(nextMonth.Year(), nextMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
 	firstOfCurrentMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	return int(firstOfNextMonth.Sub(firstOfCurrentMonth).Hours() / 24)
+}
+
+// computeRunRateForecast extrapolates a subscription's current-month daily cost to a
+// full-month projection. It uses cached cost_daily rows for the current month and
+// applies a linear run-rate: actual_spend_so_far / elapsed_days * days_in_month.
+// This matches Azure Cost Management's "forecast" behavior when Azure AI forecast is
+// unavailable at subscription scope, and avoids the tiny/zero forecasts that made the
+// dashboard show incorrect month-end estimates.
+func computeRunRateForecast(subID string, now, monthStart, monthEnd time.Time) float64 {
+	rows, err := cache.db.Query(
+		"SELECT COALESCE(SUM(cost), 0), COUNT(DISTINCT date) FROM cost_daily WHERE subscription_id = ? AND date >= ? AND date <= ?",
+		subID, monthStart.Format("2006-01-02"), now.Format("2006-01-02"))
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+
+	var spentSoFar float64
+	var daysWithData int
+	if !rows.Next() || rows.Scan(&spentSoFar, &daysWithData) != nil {
+		return 0
+	}
+	if spentSoFar <= 0 || daysWithData <= 0 {
+		return 0
+	}
+
+	daysInMonth := int(monthEnd.Sub(monthStart).Hours()/24) + 1
+	avgDaily := spentSoFar / float64(daysWithData)
+	return avgDaily * float64(daysInMonth)
 }
 
 // Helper functions for enhanced reporting

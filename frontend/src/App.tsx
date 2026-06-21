@@ -260,7 +260,7 @@ export default function App() {
   const [wasteData, setWasteData] = useState<any>(null);
   const [wasteLoading, setWasteLoading] = useState(false);
   const [periodComparison, setPeriodComparison] = useState<any>(null);
-  const [forecastData, setForecastData] = useState<{actualCost: number; forecastCost: number; periodDays: number} | null>(null);
+  const [forecastData, setForecastData] = useState<{actualCost: number; forecastCost: number; runRateForecast?: number; periodDays: number} | null>(null);
   const [anomalyData, setAnomalyData] = useState<{anomalies: Array<{subscriptionId: string; date: string; currentCost: number; previousCost: number; ratio: number; change: number}>; threshold: number; minAmount: number; minNewSpend: number; periodStart: string; periodEnd: string} | null>(null);
   const [anomalyThreshold, setAnomalyThreshold] = useState(2.0);
   const [anomalyMinAmount, setAnomalyMinAmount] = useState(0.0);
@@ -1955,7 +1955,9 @@ export default function App() {
             {(() => {
               const currentTotal = forecastData ? forecastData.actualCost : (periodComparison.currentPeriod?.totalCost || 0);
               const forecastTotal = forecastData ? forecastData.forecastCost : 0;
-              const projectedMonthly = currentTotal + forecastTotal;
+              const projectedMonthly = forecastData?.runRateForecast && forecastData.runRateForecast > 0
+                ? forecastData.runRateForecast
+                : currentTotal + forecastTotal;
               const dayOfMonth = new Date().getDate();
               return (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
@@ -4503,9 +4505,14 @@ export default function App() {
       .slice(0, 6);
   }, [resources]);
 
-  // Azure AI-powered forecast (actual + projected remainder)
+  // Azure AI-powered forecast with run-rate fallback. Azure's subscription-scoped
+  // forecast often returns 0 or tiny remainders, so we prefer the backend's
+  // runRateForecast (linear extrapolation from actual daily spend) when available.
   const forecastedMonthlyCost = useMemo(() => {
     if (!forecastData || forecastData.actualCost === undefined) return null;
+    if (forecastData.runRateForecast && forecastData.runRateForecast > 0) {
+      return forecastData.runRateForecast;
+    }
     return forecastData.actualCost + forecastData.forecastCost;
   }, [forecastData]);
 
