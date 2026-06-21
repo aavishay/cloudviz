@@ -44,8 +44,9 @@ export default function App() {
   const [dataSubIds, setDataSubIds] = useState<Set<string>>(new Set());
   const dataSubIdsRef = useRef(dataSubIds);
   const [liveCompletedCount, setLiveCompletedCount] = useState<number>(0);
+  const [errorSubIds, setErrorSubIds] = useState<Set<string>>(new Set());
   const activeEventSourceRef = useRef<EventSource | null>(null);
-  // Track retry counts per subscription to prevent infinite refetch loops
+  // Track retry counts per subscription for explicit SSE errors only
   const [costRetryCount, setCostRetryCount] = useState<Record<string, number>>({});
   useEffect(() => { dataSubIdsRef.current = dataSubIds; }, [dataSubIds]);
 
@@ -2822,10 +2823,10 @@ export default function App() {
     }
   };
 
-  const fetchCosts = (forceAll = false) => {
+  const fetchCosts = (forceAll = false, targetSubIds?: string[]) => {
     if (uniqueSubs.length === 0) return;
-    // Prevent concurrent fetches - if already loading, skip
-    if (costsLoading && !forceAll) return;
+    // Prevent concurrent fetches - if already loading, skip unless we have explicit targets
+    if (costsLoading && !forceAll && !targetSubIds) return;
 
     // Close any existing active connection
     if (activeEventSourceRef.current) {
@@ -2834,7 +2835,8 @@ export default function App() {
     }
 
     const existing = forceAll ? new Set<string>() : new Set(costs.map(c => c.subscriptionId));
-    const toFetch = activeSubs.filter(s => !existing.has(s));
+    const candidateSubs = targetSubIds && targetSubIds.length > 0 ? targetSubIds : activeSubs;
+    const toFetch = candidateSubs.filter(s => !existing.has(s));
     if (toFetch.length === 0) {
       setCostsLoading(false);
       setIsRefreshing(false);
@@ -2842,10 +2844,11 @@ export default function App() {
     }
 
     setCostsLoading(true);
-    // Only reset dataSubIds on forceAll (refresh), otherwise keep existing for incremental fetch
-    if (forceAll) {
+    // Only reset dataSubIds on full refresh; targeted retries keep progress.
+    if (forceAll && !targetSubIds) {
       setDataSubIds(new Set());
       setLiveCompletedCount(0);
+      setErrorSubIds(new Set());
     }
     const params = new URLSearchParams();
     toFetch.forEach(s => params.append('subscriptionId', s));
@@ -3094,8 +3097,9 @@ export default function App() {
             if (errorMsg.includes('subscriptionnotfound') || errorMsg.includes('401') || errorMsg.includes('403') || errorMsg.includes('authentication') || errorMsg.includes('unauthorized') || errorMsg.includes('defaultazurecredential') || errorMsg.includes('aadsts')) {
               setAzureAuthError('not-logged-in');
             }
-            // Add failed subscriptions to synced count so loading doesn't get stuck permanently
+            // Record explicitly failed subscriptions so we can retry them later.
             if (msg.subId) {
+              setErrorSubIds(prev => new Set(prev).add(msg.subId));
               setDataSubIds(prev => {
                 const next = new Set(prev).add(msg.subId);
                 if (next.size === activeSubs.length) {
@@ -3170,7 +3174,7 @@ export default function App() {
     // is async. The useEffect observing uniqueSubs will automatically trigger fetchCosts()
     // once uniqueSubs populates. If it's already populated correctly, we can enforce a
     // fetchCosts call right now, but wait for state to settle.
-    fetchCosts(true);
+    fetchCosts(true); // full refresh: reset counters
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3191,28 +3195,33 @@ export default function App() {
 
   // Note: Auto-resume removed to prevent flickering. Manual refresh available via UI.
 
-  // Ensure cost data is fetched when subscriptions sync but have no entries
-  // Includes retry limit (max 3 attempts) to prevent infinite loops
+  // Re-fetch only subscriptions that explicitly failed. A subscription with zero
+  // cost entries is valid (no spend), so it should not trigger an endless refetch
+  // loop that resets the live sync counter to 0.
   useEffect(() => {
-    const subsWithCostData = new Set(costs.map(c => c.subscriptionId));
-    const syncedWithoutCost = Array.from(dataSubIds).filter(
-      id => !subsWithCostData.has(id) && (costRetryCount[id] || 0) < 3
+    const erroredSubs = Array.from(errorSubIds).filter(
+      id => (costRetryCount[id] || 0) < 3 && !costsLoading && !isRefreshing
     );
 
-    // If we have synced subscriptions but some have no cost data (within retry limit), trigger a refetch
-    if (syncedWithoutCost.length > 0 && dataSubIds.size > 0 && !costsLoading && !isRefreshing) {
-      console.log(`Subscriptions synced without cost data: ${syncedWithoutCost.length}, triggering refetch (attempts: ${syncedWithoutCost.map(id => costRetryCount[id] || 0).join(',')})`);
-      // Increment retry counts for subscriptions being refetched
+    if (erroredSubs.length > 0 && dataSubIds.size > 0 && !costsLoading && !isRefreshing) {
+      console.log(`Subscriptions with explicit SSE errors: ${erroredSubs.length}, triggering refetch`);
+      // Mark these errored subs as being retried so they don't loop endlessly
       setCostRetryCount(prev => {
         const next = { ...prev };
-        syncedWithoutCost.forEach(id => {
+        erroredSubs.forEach(id => {
           next[id] = (next[id] || 0) + 1;
         });
         return next;
       });
-      fetchCosts(true);
+      // Remove them from the error set so this effect won't fire again until a new error occurs
+      setErrorSubIds(prev => {
+        const next = new Set(prev);
+        erroredSubs.forEach(id => next.delete(id));
+        return next;
+      });
+      fetchCosts(false, erroredSubs);
     }
-  }, [dataSubIds, costs, costsLoading, isRefreshing, costRetryCount]);
+  }, [errorSubIds, dataSubIds, costsLoading, isRefreshing, costRetryCount]);
 
   // Note: fetchCosts is only triggered by the useEffect above when uniqueSubs/allPossibleFilters.subs changes.
   // The fetchCosts function now prevents concurrent calls and handles incremental fetching.
@@ -3225,9 +3234,8 @@ export default function App() {
         // and we haven't received data for all subscriptions yet
         if (costsLoading && activeEventSourceRef.current === null && dataSubIds.size < uniqueSubs.length && uniqueSubs.length > 0) {
           console.log('Tab regained focus, resuming SSE connection...');
-          // Use true to fetch all subscriptions, not just missing ones
-          // This ensures we get complete cost data even for subs that had partial data
-          fetchCosts(true);
+          // Resume by fetching only missing subscriptions so the live counter doesn't reset.
+          fetchCosts(false, activeSubs.filter(s => !dataSubIds.has(s)));
         }
       }
     };
