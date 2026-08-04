@@ -4,7 +4,7 @@
 
 **Self-hosted Azure infrastructure visualization and cost management — in a single binary.**
 
-[![Version](https://img.shields.io/badge/version-v2.1.7-brightgreen)](https://github.com/aavishay/cloudviz/releases)
+[![Version](https://img.shields.io/badge/version-v2.1.8-brightgreen)](https://github.com/aavishay/cloudviz/releases)
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://react.dev)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)

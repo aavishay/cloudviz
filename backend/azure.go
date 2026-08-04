@@ -556,11 +556,12 @@ func parseDailyCostResults(res armcostmanagement.QueryResult) []map[string]any {
 				colCost = i
 			}
 		}
+		log.Printf("parseDailyCostResults: columns=%v, rows=%d", colNames, len(res.Properties.Rows))
 	}
 
 	// Validate column indices
 	if colCost < 0 || colDate < 0 {
-		log.Printf("Warning: Could not detect cost/date columns, returning empty results")
+		log.Printf("Warning: Could not detect cost/date columns (cost=%d, date=%d), returning empty results", colCost, colDate)
 		return nil
 	}
 
@@ -581,6 +582,22 @@ func parseDailyCostResults(res armcostmanagement.QueryResult) []map[string]any {
 			"date": parseAzureDate(dateVal),
 			"cost": parsedCost,
 		})
+	}
+
+	if len(results) > 0 {
+		firstCost := results[0]["cost"].(float64)
+		lastCost := results[len(results)-1]["cost"].(float64)
+		flat := true
+		for _, r := range results {
+			if c, ok := r["cost"].(float64); ok && c != 0 {
+				if math.Abs(c-firstCost) > 0.01 && math.Abs(c-firstCost) > 0.005*math.Abs(firstCost) {
+					flat = false
+					break
+				}
+			}
+		}
+		log.Printf("parseDailyCostResults: parsed %d rows, date range %s..%s, first=%.2f last=%.2f flat=%v",
+			len(results), results[0]["date"], results[len(results)-1]["date"], firstCost, lastCost, flat)
 	}
 	return results
 }

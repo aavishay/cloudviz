@@ -77,6 +77,11 @@ var (
 	activeSubsMu        sync.RWMutex
 	activeSubsFetchedAt time.Time
 	activeSubsTTL       = 10 * time.Minute
+
+	// Track when we last forced a refresh of suspiciously flat daily costs so we
+	// don't loop on subs whose Azure data is genuinely uniform.
+	flatDailyRefreshMu sync.Mutex
+	flatDailyRefreshAt = make(map[string]time.Time)
 )
 
 // clientTypePolicy injects a unique ClientType header on every Cost Management request.
@@ -98,7 +103,7 @@ func toAnySlice(ss []string) []any {
 	return result
 }
 
-var Version = "2.1.7"
+var Version = "2.1.8"
 
 func main() {
 	var rootCmd = &cobra.Command{
@@ -283,6 +288,53 @@ func getActiveSubscriptions(ctx context.Context) ([]Subscription, error) {
 
 	log.Printf("Active subscriptions refreshed: %d subscriptions cached", len(subs))
 	return subs, nil
+}
+
+// dailyCostsLookFlat reports whether all non-zero daily costs are identical.
+// A perfectly flat line usually indicates stale fallback data or a sync bug.
+func dailyCostsLookFlat(items []map[string]any) bool {
+	if len(items) == 0 {
+		return false
+	}
+	var first float64
+	found := false
+	for _, item := range items {
+		cost, ok := item["cost"].(float64)
+		if !ok {
+			continue
+		}
+		if cost == 0 {
+			continue
+		}
+		if !found {
+			first = cost
+			found = true
+			continue
+		}
+		// Allow tiny floating point noise but flag anything that is visually flat.
+		relative := 0.005 * math.Abs(first)
+		if relative < 0.01 {
+			relative = 0.01
+		}
+		if math.Abs(cost-first) > relative {
+			return false
+		}
+	}
+	return found
+}
+
+// shouldRefreshFlatDailyCosts returns true only once every 5 minutes per
+// subscription so that genuinely uniform Azure data does not cause an endless
+// refresh loop.
+func shouldRefreshFlatDailyCosts(subID string) bool {
+	flatDailyRefreshMu.Lock()
+	defer flatDailyRefreshMu.Unlock()
+	last := flatDailyRefreshAt[subID]
+	if time.Since(last) > 5*time.Minute {
+		flatDailyRefreshAt[subID] = time.Now()
+		return true
+	}
+	return false
 }
 
 // ─── Web Server Implementation ──────────────────────────────────────────────
@@ -496,59 +548,83 @@ func startServer(port string) {
 		now := time.Now()
 		start := now.AddDate(0, 0, -days)
 
-		// 1. Get cached daily data and identify missing subs
-		var allDaily []map[string]any
-		var cachedSubs []string
-		var missingSubs []string
+		// Aggregate real daily cost data from the cache per subscription.
+		// We no longer spread the monthly total evenly across missing days;
+		// that fallback produced a misleading flat line when daily rows had not
+		// yet been synced. Days without cached daily data simply report 0
+		// until the SSE sync populates real daily costs.
+		byDate := make(map[string]float64)
+		flatSubs := make(map[string][]map[string]any)
 		for _, sid := range subs {
 			daily, ok := cache.getDailyCosts(sid, start, now)
-			if ok {
-				allDaily = append(allDaily, daily...)
-				cachedSubs = append(cachedSubs, sid)
-			} else {
-				missingSubs = append(missingSubs, sid)
+			if !ok {
+				continue
+			}
+			// If the cached rows are suspiciously flat, hold them as a fallback
+			// and force a live refresh below. Otherwise the flat line persists
+			// until the 24-hour cache expires.
+			if dailyCostsLookFlat(daily) {
+				log.Printf("/api/costs/daily: cached daily costs for %s look flat, forcing refresh", sid)
+				flatSubs[sid] = daily
+				continue
+			}
+			for _, d := range daily {
+				if date, ok := d["date"].(string); ok {
+					byDate[date] += d["cost"].(float64)
+				}
 			}
 		}
 
-		// 2. Compute monthly totals: all subs vs cached subs
-		totalMonthly := 0.0
-		cachedMonthly := 0.0
-		rowsAll, err := cache.db.Query("SELECT subscription_id, COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+") GROUP BY subscription_id", toAnySlice(subs)...)
-		if err == nil {
-			defer rowsAll.Close()
-			for rowsAll.Next() {
-				var subID string
-				var subCost float64
-				rowsAll.Scan(&subID, &subCost)
-				totalMonthly += subCost
-				for _, cs := range cachedSubs {
-					if cs == subID {
-						cachedMonthly += subCost
-						break
+		// Refresh any subscriptions whose cached daily costs are flat. This is
+		// a targeted escape hatch: it only makes live Azure calls when the
+		// cached data is clearly wrong, so it does not reintroduce the ban-causing
+		// background fetch that ran for every missing sub on every page load.
+		// Rate-limit the refresh to once per 5 minutes per sub so a genuinely
+		// uniform Azure response does not loop forever. If the refresh fails or
+		// still returns flat data, fall back to the cached flat rows so the
+		// chart never shows an unexplained gap.
+		if len(flatSubs) > 0 && costClient != nil {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+			defer cancel()
+			for sid, cachedDaily := range flatSubs {
+				if !shouldRefreshFlatDailyCosts(sid) {
+					log.Printf("/api/costs/daily: flat-cost refresh for %s throttled, using cached flat data", sid)
+					for _, d := range cachedDaily {
+						if date, ok := d["date"].(string); ok {
+							byDate[date] += d["cost"].(float64)
+						}
+					}
+					continue
+				}
+				daily, err := fetchDailyCosts(costClient, sid, start, now, ctx)
+				if err != nil || len(daily) == 0 {
+					log.Printf("/api/costs/daily: failed to refresh flat daily costs for %s: %v", sid, err)
+					for _, d := range cachedDaily {
+						if date, ok := d["date"].(string); ok {
+							byDate[date] += d["cost"].(float64)
+						}
+					}
+					continue
+				}
+				// Don't replace the cache with another flat set.
+				if dailyCostsLookFlat(daily) {
+					log.Printf("/api/costs/daily: refreshed daily costs for %s are still flat, not caching", sid)
+					for _, d := range cachedDaily {
+						if date, ok := d["date"].(string); ok {
+							byDate[date] += d["cost"].(float64)
+						}
+					}
+					continue
+				}
+				cache.setDailyCosts(sid, daily)
+				for _, d := range daily {
+					if date, ok := d["date"].(string); ok {
+						byDate[date] += d["cost"].(float64)
 					}
 				}
 			}
 		}
 
-		// 3. Build day-by-day map from cached real data
-		byDate := make(map[string]float64)
-		for _, d := range allDaily {
-			if date, ok := d["date"].(string); ok {
-				byDate[date] += d["cost"].(float64)
-			}
-		}
-
-		// 4. Blend: add fallback estimate for missing subs spread evenly
-		if len(missingSubs) > 0 && totalMonthly > cachedMonthly {
-			missingMonthly := totalMonthly - cachedMonthly
-			dailyMissingAvg := missingMonthly / float64(days)
-			for i := days - 1; i >= 0; i-- {
-				dateStr := now.AddDate(0, 0, -i).Format("2006-01-02")
-				byDate[dateStr] += dailyMissingAvg
-			}
-		}
-
-		// 5. Build results
 		var results []map[string]any
 		for i := days - 1; i >= 0; i-- {
 			dateStr := now.AddDate(0, 0, -i).Format("2006-01-02")
@@ -557,10 +633,6 @@ func startServer(port string) {
 				"cost": byDate[dateStr],
 			})
 		}
-
-		// Daily cost backfill is handled exclusively by the SSE sync stream.
-		// Removed background fetch here — it made concurrent Azure calls for all
-		// missing subs on every dashboard load, causing Retry-After=2876s bans.
 
 		c.JSON(200, results)
 		return
@@ -3050,6 +3122,7 @@ func startServer(port string) {
 | extend powerState = properties.extended.instanceView.powerState.displayStatus
 | where powerState =~ 'VM running'
 | where tolower(resourceGroup) !startswith 'mc_'
+| where isnull(tags['karpenter.azure.com_cluster']) and isnull(tags['karpenter.sh_nodepool'])
 | project id, name, type, location, subscriptionId, resourceGroup, tags`
 
 		ptrStr := func(s string) *string { return &s }
@@ -4514,18 +4587,29 @@ func sseHandler(c *gin.Context) {
 							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), subCtx)
 						}
 
-						// Daily costs: only fetch as fallback when the main fetch failed.
-						// On the happy path this saves a 3rd Azure API call per subscription,
-						// keeping the effective rate at 2 calls/sub and well under the
-						// 4/min scope limit that triggers entity-level 429s.
-						var dailyData []map[string]any
-						var dailyErr error
-						if currErr != nil {
-							start := now.AddDate(0, 0, -60)
-							dailyData, dailyErr = fetchDailyCosts(costClient, sid, start, now, subCtx)
-							if dailyErr == nil && len(dailyData) > 0 {
+						// Daily costs: fetch real daily trend data when cached rows are missing,
+						// stale, or suspiciously flat. A flat line almost always means stale
+						// fallback data got stuck in the cache; refreshing prevents it from
+						// persisting until the 24-hour TTL expires. We request 90 days to cover
+						// all UI period options (7/30/90).
+						dailyStart := now.AddDate(0, 0, -90)
+						cachedDaily, cachedOk := cache.getDailyCosts(sid, dailyStart, now)
+						if !cachedOk || dailyCostsLookFlat(cachedDaily) {
+							if cachedOk && dailyCostsLookFlat(cachedDaily) {
+								log.Printf("SSE: cached daily costs for %s look flat, refreshing", sid)
+							}
+							dailyData, dailyErr := fetchDailyCosts(costClient, sid, dailyStart, now, subCtx)
+							if dailyErr != nil {
+								log.Printf("SSE: failed to fetch daily costs for %s: %v", sid, dailyErr)
+							} else if len(dailyData) > 0 && !dailyCostsLookFlat(dailyData) {
 								cache.setDailyCosts(sid, dailyData)
-								log.Printf("SSE: cached %d daily cost entries for %s (fallback)", len(dailyData), sid)
+								log.Printf("SSE: cached %d daily cost entries for %s", len(dailyData), sid)
+							} else if len(dailyData) > 0 && dailyCostsLookFlat(dailyData) {
+								log.Printf("SSE: fetched daily costs for %s are still flat, not caching", sid)
+							}
+							// Only overwrite resource-level cost cache with daily aggregates when
+							// the normal fetch failed; otherwise keep the better-granularity data.
+							if currErr != nil && dailyErr == nil && len(dailyData) > 0 {
 								cache.populateCostsFromDaily(sid, dailyData, "current")
 							}
 						}

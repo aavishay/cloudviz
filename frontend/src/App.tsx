@@ -41,6 +41,7 @@ export default function App() {
   const [costs, setCosts] = useState<CostPrediction[]>([]);
   const [costsLoading, setCostsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [costSyncVersion, setCostSyncVersion] = useState(0);
   const [dataSubIds, setDataSubIds] = useState<Set<string>>(new Set());
   const dataSubIdsRef = useRef(dataSubIds);
   const [liveCompletedCount, setLiveCompletedCount] = useState<number>(0);
@@ -599,7 +600,7 @@ export default function App() {
             </div>
             <div>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>VM Uptime (SLA)</span>
-              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Last {slaData.periodDays} days · {slaData.totalVMs} running VMs · no auto-shutdown</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Last {slaData.periodDays} days · {slaData.totalVMs} running VMs · no auto-shutdown · AKS/Karpenter nodes excluded</span>
             </div>
           </div>
         </div>
@@ -2572,7 +2573,7 @@ export default function App() {
         console.error('Failed to fetch daily costs', err);
         setDailyCosts([]);
       });
-  }, [activeSubs, costPeriod]);
+  }, [activeSubs, costPeriod, costSyncVersion]);
 
   // Fetch commitment savings data
   useEffect(() => {
@@ -3056,6 +3057,7 @@ export default function App() {
                 }
                 setCostsLoading(false);
                 setIsRefreshing(false);
+                setCostSyncVersion(v => v + 1);
               }
               return next;
             });
@@ -3079,8 +3081,9 @@ export default function App() {
                 }
                 setCostsLoading(false);
                 setIsRefreshing(false);
-                // Refresh forecast data after cost sync completes
+                // Refresh forecast and daily cost trend data after cost sync completes
                 fetchForecastData();
+                setCostSyncVersion(v => v + 1);
               }
               return next;
             });
@@ -3125,8 +3128,9 @@ export default function App() {
           }
           setCostsLoading(false);
           setIsRefreshing(false);
-          // Refresh forecast data after cost sync completes
+          // Refresh forecast and daily cost trend data after cost sync completes
           fetchForecastData();
+          setCostSyncVersion(v => v + 1);
         }
       } catch (err) {
         console.error('SSE parse error', err);
