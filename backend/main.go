@@ -3093,6 +3093,7 @@ func startServer(port string) {
 		cache.db.Exec("DELETE FROM cost_type_daily")
 		cache.db.Exec("DELETE FROM cost_forecast")
 		cache.db.Exec("DELETE FROM cost_daily")
+		cache.db.Exec("DELETE FROM cost_aggregates")
 		cache.db.Exec("DELETE FROM metrics_cache")
 		cache.db.Exec("DELETE FROM advisor_cache")
 		cache.db.Exec("DELETE FROM vm_metrics_cache")

@@ -784,6 +784,9 @@ func TestDBCache_ClearCostCache(t *testing.T) {
 	// Insert daily costs
 	cache.setDailyCosts(subID, []map[string]any{{"date": "2024-01-01", "cost": 100.0}})
 
+	// Insert aggregates
+	cache.setAggregate(subID, "current", 1000.0, 10)
+
 	// Insert metrics
 	cache.setMetrics("/test/res", "vm", map[string][]float64{"cpu": {10.0}})
 
@@ -798,6 +801,7 @@ func TestDBCache_ClearCostCache(t *testing.T) {
 	cache.db.Exec("DELETE FROM cost_type_daily")
 	cache.db.Exec("DELETE FROM cost_forecast")
 	cache.db.Exec("DELETE FROM cost_daily")
+	cache.db.Exec("DELETE FROM cost_aggregates")
 	cache.db.Exec("DELETE FROM metrics_cache")
 	cache.db.Exec("DELETE FROM advisor_cache")
 	cache.db.Exec("DELETE FROM vm_metrics_cache")
@@ -817,6 +821,10 @@ func TestDBCache_ClearCostCache(t *testing.T) {
 	// Verify daily costs cleared
 	_, ok3 := cache.getDailyCosts(subID, time.Now().AddDate(0, 0, -7), time.Now())
 	assert.False(t, ok3, "Daily costs should be cleared")
+
+	// Verify aggregates cleared
+	_, _, ok4 := cache.getAggregate(subID, "current")
+	assert.False(t, ok4, "Aggregates should be cleared")
 
 	// Verify metrics cleared
 	_, ok5 := cache.getMetrics("/test/res")
@@ -1284,12 +1292,12 @@ func TestDBCache_ClearCostCacheFixed(t *testing.T) {
 	// Insert daily costs
 	cache.setDailyCosts(subID, []map[string]any{{"date": "2024-01-01", "cost": 100.0}})
 
-	// Clear only the cost cache tables that are actually cleared by the API endpoint
-	// (Based on main.go lines 3029-3035)
+	// Clear the cost cache tables that the DELETE /api/costs/cache endpoint clears
 	cache.db.Exec("DELETE FROM costs")
 	cache.db.Exec("DELETE FROM cost_type_daily")
 	cache.db.Exec("DELETE FROM cost_forecast")
 	cache.db.Exec("DELETE FROM cost_daily")
+	cache.db.Exec("DELETE FROM cost_aggregates")
 	cache.db.Exec("DELETE FROM metrics_cache")
 	cache.db.Exec("DELETE FROM advisor_cache")
 	cache.db.Exec("DELETE FROM vm_metrics_cache")
