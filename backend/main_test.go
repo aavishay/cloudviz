@@ -387,3 +387,18 @@ func TestForecastCacheKey(t *testing.T) {
 	assert.NotEqual(t, forecastCacheKey("sub", 7), forecastCacheKey("sub", 30), "Different days must not share an in-flight key")
 	assert.Equal(t, forecastCacheKey("sub", 30), forecastCacheKey("sub", 30))
 }
+
+func TestFilterActiveSubscriptions(t *testing.T) {
+	subs := []Subscription{
+		{ID: "a", State: "Enabled"},
+		{ID: "b", State: "Disabled"},
+		{ID: "c", State: "Warned"},
+		{ID: "d", State: "PastDue"},
+		{ID: "e", State: "disabled"},
+	}
+	var ids []string
+	for _, s := range filterActiveSubscriptions(subs) {
+		ids = append(ids, s.ID)
+	}
+	assert.Equal(t, []string{"a", "c", "d"}, ids)
+}

@@ -2384,7 +2384,7 @@ export default function App() {
 
   // ── Fetch subscriptions first for immediate dropdown availability
   useEffect(() => {
-    fetch('http://localhost:8080/api/subscriptions')
+    fetch('http://localhost:8080/api/subscriptions?includeDisabled=true')
       .then(r => r.json())
       .then(data => {
         // Dedicated auth_error flag from backend
@@ -2400,7 +2400,7 @@ export default function App() {
           }
           return;
         }
-        const subs = (data.subscriptions || []).map((s: any) => ({ id: s.id, name: s.name }));
+        const subs = (data.subscriptions || []).map((s: any) => ({ id: s.id, name: s.name, state: s.state }));
         setAllPossibleFilters(prev => ({ ...prev, subs }));
       })
       .catch(err => console.error('Failed to fetch subscriptions:', err));
@@ -2506,14 +2506,24 @@ export default function App() {
   };
 
   const uniqueRegions = useMemo(() => [...(allPossibleFilters.locations || [])].sort(), [allPossibleFilters.locations]);
-  // Handle both old format (string[]) and new format (Array<{id, name}>)
-  const uniqueSubs = useMemo(() => {
+  // Handle both old format (string[]) and new format (Array<{id, name, state}>).
+  // allSubIds includes disabled subscriptions (shown in resource filters/table);
+  // uniqueSubs excludes them because they can't incur costs and drive all cost queries.
+  const allSubIds = useMemo(() => {
     const subs = allPossibleFilters.subs || [];
     if (subs.length > 0 && typeof subs[0] === 'object') {
       return (subs as Array<{id: string; name: string}>).map(s => s.id);
     }
     return subs as string[];
   }, [allPossibleFilters.subs]);
+  const disabledSubs = useMemo(() => {
+    const subs = allPossibleFilters.subs || [];
+    if (subs.length > 0 && typeof subs[0] === 'object') {
+      return new Set((subs as Array<{id: string; state?: string}>).filter(s => s.state?.toLowerCase() === 'disabled').map(s => s.id));
+    }
+    return new Set<string>();
+  }, [allPossibleFilters.subs]);
+  const uniqueSubs = useMemo(() => allSubIds.filter(id => !disabledSubs.has(id)), [allSubIds, disabledSubs]);
   // Build subscription ID to name mapping
   const subNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -2542,15 +2552,24 @@ export default function App() {
     return uniqueSubs.filter(s => selectedSubs.has(s));
   }, [uniqueSubs, selectedSubs]);
 
-  // Sync subFilter with available uniqueSubs to remove invalid/stale subscription IDs
+  // Sync subFilter with available subscriptions (including disabled) to remove stale IDs
   useEffect(() => {
-    if (uniqueSubs.length > 0) {
+    if (allSubIds.length > 0) {
       setSubFilter(prev => {
-        const valid = prev.filter(id => uniqueSubs.includes(id));
-        return valid;
+        const valid = prev.filter(id => allSubIds.includes(id));
+        // Keep the same array when nothing was removed, so reloading the subscription
+        // list doesn't retrigger the (slow) resource query.
+        return valid.length === prev.length ? prev : valid;
       });
     }
-  }, [uniqueSubs]);
+  }, [allSubIds]);
+
+  // Sidebar labels mark disabled subscriptions so their leftover resources stand out
+  const subFilterNameMap = useMemo(() => {
+    const map = new Map(subNameMap);
+    disabledSubs.forEach(id => map.set(id, `${subNameMap.get(id) || id} (disabled)`));
+    return map;
+  }, [subNameMap, disabledSubs]);
 
 
   // Fetch daily costs for dashboard trends - aggregate across all active subscriptions
@@ -4896,7 +4915,7 @@ export default function App() {
         <Sidebar
           open={sidebarOpen} onClose={() => setSidebarOpen(false)}
           collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(v => !v)}
-          uniqueRegions={uniqueRegions} uniqueSubs={uniqueSubs} uniqueRGs={uniqueRGs} uniqueTypes={uniqueTypes} uniqueCreators={uniqueCreators}
+          uniqueRegions={uniqueRegions} uniqueSubs={allSubIds} uniqueRGs={uniqueRGs} uniqueTypes={uniqueTypes} uniqueCreators={uniqueCreators}
           regionFilter={regionFilter} subFilter={subFilter} rgFilter={rgFilter} typeFilter={typeFilter} creatorFilter={creatorFilter}
           showOrphanedOnly={showOrphanedOnly} showUnattachedDiskOnly={showUnattachedDiskOnly} showUnassignedPIPOnly={showUnassignedPIPOnly} showUnattachedNICOnly={showUnattachedNICOnly} showFavoritesOnly={showFavoritesOnly}
           setRegionFilter={setRegionFilter} setSubFilter={setSubFilter} setRgFilter={setRgFilter} setTypeFilter={setTypeFilter} setCreatorFilter={setCreatorFilter}
@@ -4904,7 +4923,7 @@ export default function App() {
           setShowUnassignedPIPOnly={setShowUnassignedPIPOnly} setShowUnattachedNICOnly={setShowUnattachedNICOnly} setShowFavoritesOnly={setShowFavoritesOnly}
           setCurrentPage={setCurrentPage}
           favorites={favorites}
-          subNameMap={subNameMap}
+          subNameMap={subFilterNameMap}
         />
 
         {/* ── Main ── */}
@@ -5218,6 +5237,7 @@ export default function App() {
                   onLocationClick={loc => { setRegionFilter([loc]); setCurrentPage(1); }}
                   onRgClick={rg => { setRgFilter([rg]); setCurrentPage(1); }}
                   onSubClick={sub => { setSubFilter([sub]); setCurrentPage(1); }}
+                  disabledSubs={disabledSubs}
                   onTypeClick={type => { setTypeFilter(type); setCurrentPage(1); }}
                   onResourceClick={r => { setSelectedResource(r); fetchAIInsights(r); clearSelection(); }}
                   favorites={favorites}
