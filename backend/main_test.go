@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -341,4 +342,48 @@ func TestExtractSubscriptionFromID(t *testing.T) {
 			assert.Equal(t, tt.wantSubID, testExtractSubscriptionFromID(tt.resourceID))
 		})
 	}
+}
+
+func TestComputeRunRateForecast(t *testing.T) {
+	testCache, cleanup := setupTestDB(t)
+	defer cleanup()
+	origCache := cache
+	cache = testCache
+	defer func() { cache = origCache }()
+
+	// $100/day for Oct 1-10, plus a partial $5 for today (Oct 11).
+	var daily []map[string]any
+	for d := 1; d <= 10; d++ {
+		daily = append(daily, map[string]any{"date": fmt.Sprintf("2026-10-%02d", d), "cost": 100.0})
+	}
+	daily = append(daily, map[string]any{"date": "2026-10-11", "cost": 5.0})
+	cache.setDailyCosts("sub-mid", daily)
+	// Only today's partial data exists on the 1st of the month.
+	cache.setDailyCosts("sub-first", []map[string]any{{"date": "2026-11-01", "cost": 40.0}})
+
+	oct := time.Date(2026, 10, 1, 0, 0, 0, 0, time.Local)
+	nov := time.Date(2026, 11, 1, 0, 0, 0, 0, time.Local)
+	tests := []struct {
+		name       string
+		subID      string
+		now        time.Time
+		monthStart time.Time
+		expected   float64
+	}{
+		{"mid-month excludes today's partial day", "sub-mid", time.Date(2026, 10, 11, 12, 0, 0, 0, time.Local), oct, 100.0 * 31},
+		{"first of month falls back to today", "sub-first", time.Date(2026, 11, 1, 12, 0, 0, 0, time.Local), nov, 40.0 * 30},
+		{"no data returns zero", "sub-none", time.Date(2026, 10, 11, 12, 0, 0, 0, time.Local), oct, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			monthEnd := tt.monthStart.AddDate(0, 1, -1)
+			got := computeRunRateForecast(tt.subID, tt.now, tt.monthStart, monthEnd)
+			assert.InDelta(t, tt.expected, got, 0.01)
+		})
+	}
+}
+
+func TestForecastCacheKey(t *testing.T) {
+	assert.NotEqual(t, forecastCacheKey("sub", 7), forecastCacheKey("sub", 30), "Different days must not share an in-flight key")
+	assert.Equal(t, forecastCacheKey("sub", 30), forecastCacheKey("sub", 30))
 }
