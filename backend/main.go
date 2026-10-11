@@ -82,6 +82,11 @@ var (
 	// don't loop on subs whose Azure data is genuinely uniform.
 	flatDailyRefreshMu sync.Mutex
 	flatDailyRefreshAt = make(map[string]time.Time)
+
+	// Subscriptions with a forecast fetch in flight, so repeated dashboard loads
+	// don't queue duplicate fetches behind forecastLimiter.
+	forecastInFlightMu sync.Mutex
+	forecastInFlight   = make(map[string]bool)
 )
 
 // clientTypePolicy injects a unique ClientType header on every Cost Management request.
@@ -2441,57 +2446,74 @@ func startServer(port string) {
 			monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 			monthEnd := monthStart.AddDate(0, 1, -1)
 
-			// Sum cached forecast data and compute run-rate fallback for missing/empty ones.
+			// Sum cached Azure forecasts and compute a run-rate fallback for missing/empty ones.
+			// A forecast fetched earlier this month is still used while a refresh runs:
+			// it is far closer to Azure's number than a linear run-rate, which inflates
+			// one-off charges across the whole month.
 			var totalActual, totalForecast float64
 			var totalRunRateForecast float64
-			var cachedSubs, missingSubs []string
+			var refreshSubs []string
 			for _, sid := range subs {
-				actual, forecast, ok := cache.getForecast(sid, days)
-				if ok {
+				actual, forecast, fetchedAt, ok := cache.getForecastAnyAge(sid, days)
+				usable := ok && !fetchedAt.Before(monthStart)
+				if !usable || time.Since(fetchedAt) > 24*time.Hour {
+					refreshSubs = append(refreshSubs, sid)
+				}
+				if usable {
 					totalActual += actual
 					totalForecast += forecast
-					cachedSubs = append(cachedSubs, sid)
 					// If Azure returned actual spend but no forecast remainder, fall back to a
 					// linear run-rate projection for the rest of the month.
 					if forecast <= 0 {
-						runRate := computeRunRateForecast(sid, now, monthStart, monthEnd)
-						totalRunRateForecast += runRate
+						totalRunRateForecast += computeRunRateForecast(sid, now, monthStart, monthEnd)
 					} else {
 						totalRunRateForecast += actual + forecast
 					}
-				} else {
-					missingSubs = append(missingSubs, sid)
-					// Even without cached Azure forecast, use daily cost run-rate if available.
-					if runRate := computeRunRateForecast(sid, now, monthStart, monthEnd); runRate > 0 {
-						totalRunRateForecast += runRate
-					}
+				} else if runRate := computeRunRateForecast(sid, now, monthStart, monthEnd); runRate > 0 {
+					// No Azure forecast for this month yet; use the daily cost run-rate.
+					totalRunRateForecast += runRate
 				}
 			}
 
-			// Launch background fetch for missing subs so the next request has Azure data.
-			if len(missingSubs) > 0 {
+			// Refresh missing/stale forecasts in the background, skipping any already in flight.
+			forecastInFlightMu.Lock()
+			var subsToFetch []string
+			for _, sid := range refreshSubs {
+				if !forecastInFlight[sid] {
+					forecastInFlight[sid] = true
+					subsToFetch = append(subsToFetch, sid)
+				}
+			}
+			forecastInFlightMu.Unlock()
+			if len(subsToFetch) > 0 {
 				go func(subsToFetch []string) {
 					var wg sync.WaitGroup
 					sem := make(chan struct{}, 2)
-					for i, sid := range subsToFetch {
-						if i > 0 {
-							time.Sleep(2 * time.Second)
-						}
+					for _, sid := range subsToFetch {
 						wg.Add(1)
 						go func(subID string) {
 							defer wg.Done()
+							defer func() {
+								forecastInFlightMu.Lock()
+								delete(forecastInFlight, subID)
+								forecastInFlightMu.Unlock()
+							}()
 							sem <- struct{}{}
 							defer func() { <-sem }()
-							fctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+							// The timeout covers forecastLimiter queueing inside fetchForecast too.
+							fctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 							defer cancel()
 							actual, forecast, err := fetchForecast(forecastClient, subID, monthStart, monthEnd, fctx)
-							if err == nil {
-								cache.setForecast(subID, days, actual, forecast)
+							if err != nil {
+								log.Printf("Forecast fetch failed for %s: %v", subID, err)
+								return
 							}
+							cache.setForecast(subID, days, actual, forecast)
 						}(sid)
 					}
 					wg.Wait()
-				}(missingSubs)
+					log.Printf("Forecast refresh finished for %d subscriptions", len(subsToFetch))
+				}(subsToFetch)
 			}
 
 			c.JSON(200, map[string]any{
@@ -4987,9 +5009,15 @@ func daysInCurrentMonth() int {
 // unavailable at subscription scope, and avoids the tiny/zero forecasts that made the
 // dashboard show incorrect month-end estimates.
 func computeRunRateForecast(subID string, now, monthStart, monthEnd time.Time) float64 {
+	// Only use complete days: today's partial spend would drag the daily average down.
+	// On the 1st there is no complete day yet, so fall back to including today.
+	lastDay := now.AddDate(0, 0, -1)
+	if lastDay.Before(monthStart) {
+		lastDay = now
+	}
 	rows, err := cache.db.Query(
 		"SELECT COALESCE(SUM(cost), 0), COUNT(DISTINCT date) FROM cost_daily WHERE subscription_id = ? AND date >= ? AND date <= ?",
-		subID, monthStart.Format("2006-01-02"), now.Format("2006-01-02"))
+		subID, monthStart.Format("2006-01-02"), lastDay.Format("2006-01-02"))
 	if err != nil {
 		return 0
 	}

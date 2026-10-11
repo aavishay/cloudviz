@@ -1414,3 +1414,24 @@ func TestDBCache_CacheTTLBehavior(t *testing.T) {
 		assert.False(t, ok, "Expired VM metrics should not be found")
 	})
 }
+
+func TestDBCache_GetForecastAnyAge(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	_, _, _, ok := cache.getForecastAnyAge("test-sub", 30)
+	assert.False(t, ok, "Missing forecast should not be found")
+
+	cache.setForecast("test-sub", 30, 1000.0, 2000.0)
+	_, err := cache.db.Exec("UPDATE cost_forecast SET fetched_at = ? WHERE subscription_id = 'test-sub'", time.Now().Add(-48*time.Hour))
+	require.NoError(t, err)
+
+	_, _, ok = cache.getForecast("test-sub", 30)
+	assert.False(t, ok, "getForecast should treat a 48h-old forecast as expired")
+
+	actual, forecast, fetchedAt, ok := cache.getForecastAnyAge("test-sub", 30)
+	assert.True(t, ok, "getForecastAnyAge should return an expired forecast")
+	assert.Equal(t, 1000.0, actual)
+	assert.Equal(t, 2000.0, forecast)
+	assert.WithinDuration(t, time.Now().Add(-48*time.Hour), fetchedAt, time.Minute)
+}

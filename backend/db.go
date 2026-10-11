@@ -559,6 +559,16 @@ func (dc *dbCache) getForecast(subID string, days int) (actualCost, forecastCost
 	return actualCost, forecastCost, true
 }
 
+// getForecastAnyAge returns the cached forecast regardless of age, with its fetch time,
+// so callers can keep showing it while a refresh is in progress.
+func (dc *dbCache) getForecastAnyAge(subID string, days int) (actualCost, forecastCost float64, fetchedAt time.Time, ok bool) {
+	err := dc.db.QueryRow("SELECT actual_cost, forecast_cost, fetched_at FROM cost_forecast WHERE subscription_id = ? AND days = ?", subID, days).Scan(&actualCost, &forecastCost, &fetchedAt)
+	if err != nil {
+		return 0, 0, time.Time{}, false
+	}
+	return actualCost, forecastCost, fetchedAt, true
+}
+
 func (dc *dbCache) setForecast(subID string, days int, actualCost, forecastCost float64) {
 	tx, err := dc.db.Begin()
 	if err != nil {
