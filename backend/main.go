@@ -269,8 +269,9 @@ func main() {
 	}
 }
 
-// getActiveSubscriptions returns discovered active subscriptions, using a 10-minute in-memory cache.
-func getActiveSubscriptions(ctx context.Context) ([]Subscription, error) {
+// getAllSubscriptions returns all discovered subscriptions, including disabled ones,
+// using a 10-minute in-memory cache.
+func getAllSubscriptions(ctx context.Context) ([]Subscription, error) {
 	activeSubsMu.RLock()
 	cacheLen := len(activeSubsCache)
 	elapsed := time.Since(activeSubsFetchedAt)
@@ -292,8 +293,28 @@ func getActiveSubscriptions(ctx context.Context) ([]Subscription, error) {
 	activeSubsFetchedAt = time.Now()
 	activeSubsMu.Unlock()
 
-	log.Printf("Active subscriptions refreshed: %d subscriptions cached", len(subs))
+	log.Printf("Subscriptions refreshed: %d active, %d total cached", len(filterActiveSubscriptions(subs)), len(subs))
 	return subs, nil
+}
+
+// getActiveSubscriptions returns discovered subscriptions that can incur costs (not disabled).
+func getActiveSubscriptions(ctx context.Context) ([]Subscription, error) {
+	subs, err := getAllSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return filterActiveSubscriptions(subs), nil
+}
+
+// filterActiveSubscriptions drops disabled subscriptions.
+func filterActiveSubscriptions(subs []Subscription) []Subscription {
+	active := make([]Subscription, 0, len(subs))
+	for _, sub := range subs {
+		if isActiveSubscriptionState(sub.State) {
+			active = append(active, sub)
+		}
+	}
+	return active
 }
 
 // dailyCostsLookFlat reports whether all non-zero daily costs are identical.
@@ -503,17 +524,18 @@ func startServer(port string) {
 			return ks
 		}
 
-		// Get subscriptions from dedicated discovery endpoint for full list
-		subscriptions, err := getActiveSubscriptions(c.Request.Context())
+		// Get subscriptions from dedicated discovery endpoint for full list, including
+		// disabled ones so their leftover resources can be filtered on.
+		subscriptions, err := getAllSubscriptions(c.Request.Context())
 		if err != nil {
 			// Fallback to empty if discovery fails
 			subscriptions = []Subscription{}
 		}
 
-		// Build subscription entries with id and name
+		// Build subscription entries with id, name, and state
 		subEntries := make([]map[string]string, 0, len(subscriptions))
 		for _, sub := range subscriptions {
-			subEntries = append(subEntries, map[string]string{"id": sub.ID, "name": sub.Name})
+			subEntries = append(subEntries, map[string]string{"id": sub.ID, "name": sub.Name, "state": sub.State})
 		}
 
 		c.JSON(200, gin.H{
@@ -525,9 +547,13 @@ func startServer(port string) {
 		})
 	})
 
-	// DiscoverSubscriptions returns all Azure subscriptions the user has access to
+	// Returns active Azure subscriptions; ?includeDisabled=true also returns disabled ones.
 	r.GET("/api/subscriptions", func(c *gin.Context) {
-		subs, err := getActiveSubscriptions(c.Request.Context())
+		getSubs := getActiveSubscriptions
+		if c.Query("includeDisabled") == "true" {
+			getSubs = getAllSubscriptions
+		}
+		subs, err := getSubs(c.Request.Context())
 		if err != nil {
 			if isAuthError(err) {
 				c.JSON(401, gin.H{"error": err.Error(), "auth_error": true})

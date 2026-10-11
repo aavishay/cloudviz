@@ -19,6 +19,7 @@ interface ResourceTableProps {
   onSelect?: (id: string, selected: boolean) => void;
   onSelectAll?: (selected: boolean) => void;
   onBulkExport?: (ids: string[]) => void;
+  disabledSubs?: Set<string>;
 }
 
 const COLUMNS = [
@@ -34,7 +35,7 @@ const COLUMNS = [
   { key: 'cost',           label: 'Cost',          defaultW: 80, minWidth: 60 },
 ];
 
-export function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgClick, onSubClick, onTypeClick, onResourceClick, favorites, onToggleFavorite, selected, onSelect, onSelectAll, onBulkExport }: ResourceTableProps) {
+export function ResourceTable({ resources, sortConfig, onSort, onLocationClick, onRgClick, onSubClick, onTypeClick, onResourceClick, favorites, onToggleFavorite, selected, onSelect, onSelectAll, onBulkExport, disabledSubs }: ResourceTableProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [widths, setWidths] = useState<Record<string, number>>(
     Object.fromEntries(COLUMNS.map(c => [c.key, c.defaultW]))
@@ -88,7 +89,7 @@ export function ResourceTable({ resources, sortConfig, onSort, onLocationClick, 
   const someSelected = resources.some(r => selected?.has(r.id)) && !allSelected;
 
   const Row = ({ index, style, data }: ListChildComponentProps) => {
-    const { resources, widths, selected, favorites, onSelect, onToggleFavorite, onResourceClick, onLocationClick, onRgClick, onSubClick, onTypeClick } = data as any;
+    const { resources, widths, selected, favorites, onSelect, onToggleFavorite, onResourceClick, onLocationClick, onRgClick, onSubClick, onTypeClick, disabledSubs } = data as any;
     const r = resources[index] as AzureResource;
     return (
       <div style={{ ...style, display: 'flex', alignItems: 'center' }} className="resource-table-virtual-row">
@@ -152,6 +153,9 @@ export function ResourceTable({ resources, sortConfig, onSort, onLocationClick, 
         <div style={{ width: widths.subscriptionId, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
           <button onClick={() => onSubClick(r.subscriptionId)} title={`${r.subscriptionName || r.subscriptionId}\n(ID: ${r.subscriptionId})`} className="cell-truncate" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, color: 'var(--text-2)', width: '100%', textAlign: 'left' }}>
             {r.subscriptionName || r.subscriptionId}
+            {disabledSubs?.has(r.subscriptionId) && (
+              <span title="This subscription is disabled" style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 4, fontSize: 10, fontWeight: 600, color: 'var(--text-3)', border: '1px solid var(--border)' }}>disabled</span>
+            )}
           </button>
         </div>
         <div style={{ width: widths.optimization, flexShrink: 0, padding: '0 14px', minWidth: 0 }}>
@@ -185,8 +189,8 @@ export function ResourceTable({ resources, sortConfig, onSort, onLocationClick, 
   const itemData = useMemo(() => ({
     resources, widths, selected, favorites,
     onSelect, onToggleFavorite, onResourceClick,
-    onLocationClick, onRgClick, onSubClick, onTypeClick
-  }), [resources, widths, selected, favorites, onSelect, onToggleFavorite, onResourceClick, onLocationClick, onRgClick, onSubClick, onTypeClick]);
+    onLocationClick, onRgClick, onSubClick, onTypeClick, disabledSubs
+  }), [resources, widths, selected, favorites, onSelect, onToggleFavorite, onResourceClick, onLocationClick, onRgClick, onSubClick, onTypeClick, disabledSubs]);
 
   const HEADER_HEIGHT = 40;
   const MIN_LIST_HEIGHT = 300;

@@ -619,11 +619,13 @@ func placeholders(n int) string {
 }
 
 // DiscoverSubscriptions queries Azure Resource Graph for all subscriptions the user has access to.
-// Returns subscriptions that are Enabled, Warned, or PastDue (excludes Disabled and Deleted).
+// Returns subscriptions that are Enabled, Warned, PastDue, or Disabled (excludes Deleted).
+// Disabled subscriptions are returned so their leftover resources can be shown; callers
+// that query costs should use isActiveSubscriptionState to skip them.
 func DiscoverSubscriptions(ctx context.Context) ([]Subscription, error) {
 	query := `resourcecontainers
 		| where type == "microsoft.resources/subscriptions"
-		| where properties.state in ("Enabled", "Warned", "PastDue")
+		| where properties.state in ("Enabled", "Warned", "PastDue", "Disabled")
 		| project id, name, state=properties.state, tenantId=tenantId, tags`
 
 	request := armresourcegraph.QueryRequest{
@@ -677,6 +679,12 @@ func DiscoverSubscriptions(ctx context.Context) ([]Subscription, error) {
 	})
 
 	return subscriptions, nil
+}
+
+// isActiveSubscriptionState reports whether a subscription in this state can incur new
+// usage. Disabled subscriptions can't, so cost sync and forecasts skip them.
+func isActiveSubscriptionState(state string) bool {
+	return !strings.EqualFold(state, "Disabled")
 }
 
 // safeStr safely extracts a string value from an interface{}
