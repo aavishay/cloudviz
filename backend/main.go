@@ -83,8 +83,9 @@ var (
 	flatDailyRefreshMu sync.Mutex
 	flatDailyRefreshAt = make(map[string]time.Time)
 
-	// Subscriptions with a forecast fetch in flight, so repeated dashboard loads
-	// don't queue duplicate fetches behind forecastLimiter.
+	// Forecast fetches in flight, keyed by forecastCacheKey to match the
+	// (subscription_id, days) cache rows, so repeated dashboard loads don't
+	// queue duplicate fetches behind forecastLimiter.
 	forecastInFlightMu sync.Mutex
 	forecastInFlight   = make(map[string]bool)
 )
@@ -2479,8 +2480,8 @@ func startServer(port string) {
 			forecastInFlightMu.Lock()
 			var subsToFetch []string
 			for _, sid := range refreshSubs {
-				if !forecastInFlight[sid] {
-					forecastInFlight[sid] = true
+				if key := forecastCacheKey(sid, days); !forecastInFlight[key] {
+					forecastInFlight[key] = true
 					subsToFetch = append(subsToFetch, sid)
 				}
 			}
@@ -2495,7 +2496,7 @@ func startServer(port string) {
 							defer wg.Done()
 							defer func() {
 								forecastInFlightMu.Lock()
-								delete(forecastInFlight, subID)
+								delete(forecastInFlight, forecastCacheKey(subID, days))
 								forecastInFlightMu.Unlock()
 							}()
 							sem <- struct{}{}
@@ -5038,6 +5039,11 @@ func computeRunRateForecast(subID string, now, monthStart, monthEnd time.Time) f
 }
 
 // Helper functions for enhanced reporting
+
+// forecastCacheKey identifies a forecast fetch the same way cost_forecast rows are keyed.
+func forecastCacheKey(subID string, days int) string {
+	return fmt.Sprintf("%s|%d", subID, days)
+}
 
 // detectAnomalySeverity determines the severity level based on change percentage
 func detectAnomalySeverity(changePercent float64) string {
