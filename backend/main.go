@@ -370,14 +370,16 @@ func filterActiveSubscriptions(subs []Subscription) []Subscription {
 }
 
 const (
-	inventorySnapshotDelay    = 2 * time.Minute
-	inventorySnapshotInterval = 30 * time.Minute
+	// Requests are served from the stored inventory meanwhile; the short delay lets
+	// startup's other Azure calls (subscription discovery, cost sync) go first.
+	inventorySnapshotDelay    = 30 * time.Second
+	inventorySnapshotInterval = 15 * time.Minute
 )
 
-// runInventorySnapshots periodically records resource changes from a full, unfiltered
-// inventory, which is the only input that can tell a deleted resource from a filtered one.
+// runInventorySnapshots periodically rescans the full inventory, publishes it for requests
+// and records resource changes from it. A full, unfiltered scan is the only input that can
+// tell a deleted resource from a filtered one.
 func runInventorySnapshots(ctx context.Context) {
-	// Let startup traffic (filters, first resource load) through ARG before the first scan.
 	select {
 	case <-time.After(inventorySnapshotDelay):
 	case <-ctx.Done():
@@ -400,7 +402,7 @@ func runInventorySnapshots(ctx context.Context) {
 func snapshotInventory(ctx context.Context, pendingDropCount int) int {
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	res, _, err := FetchResourcesWithCosts(sctx, nil, nil, nil, nil, "", false, false, false, false, "", "")
+	res, err := refreshInventory(sctx)
 	if err != nil {
 		log.Printf("Inventory snapshot skipped: %v", err)
 		return pendingDropCount
@@ -617,7 +619,7 @@ func startServer(port string) {
 		// Change history is recorded only by runInventorySnapshots from a full, unfiltered
 		// inventory. Recording here would log every resource outside the filter (or every
 		// masked rename) as a change.
-		resp := gin.H{"data": res, "totalCost": totalCost, "total": len(res)}
+		resp := gin.H{"data": res, "totalCost": totalCost, "total": len(res), "inventoryAt": inventoryFetchedAt()}
 		// Only an unfiltered list (subscriptions aside) can say how much billed cost matches
 		// no listed resource; with other filters the remainder is just filtered out.
 		if len(rgs) == 0 && len(types) == 0 && len(locs) == 0 && len(creators) == 0 && search == "" &&
@@ -4124,6 +4126,9 @@ func startServer(port string) {
 
 	// Background sync disabled - fetch costs on-demand via SSE only
 	// go backgroundSync(costClient)
+	if n := loadInventoryFromDB(cache); n > 0 {
+		log.Printf("Loaded %d resources from the stored inventory", n)
+	}
 	go runInventorySnapshots(context.Background())
 	go cache.runWALCheckpoints(context.Background(), 10*time.Minute)
 	go openBrowser(fmt.Sprintf("http://localhost:%s", port))

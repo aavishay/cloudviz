@@ -789,80 +789,167 @@ func orphanKind(resType, managedBy, vmID, privateEndpointID, privateLinkServiceI
 	return ""
 }
 
-// FetchResourcesWithCosts encapsulates the logic to get resources from ARG and match them with costs from SQLite
+// ─── Resource inventory ─────────────────────────────────────────────────────
+
+// The resource inventory is held in memory and refreshed in the background
+// (runInventorySnapshots), so requests filter it in milliseconds instead of each paging
+// through every resource in Resource Graph (40-60s, and concurrent scans hit ARG's
+// throttling limit). Costs are attached per request from the SQLite cost cache, so they
+// stay as fresh as the cost sync.
+var (
+	inventoryMu      sync.RWMutex
+	inventoryCurrent []AzureResource // immutable once published; copy before modifying
+	inventoryAt      time.Time
+	inventoryRefresh sync.Mutex // serializes ARG scans
+)
+
+// resourceFilters mirrors the filter parameters of /api/resources.
+type resourceFilters struct {
+	Subs, RGs, Types, Locs                                     []string
+	Search                                                     string
+	Orphaned, UnattachedDiskOnly, UnassignedPIPOnly, UnattachedNICOnly bool
+	TagKey, TagValue                                           string
+}
+
+// FetchResourcesWithCosts returns the inventory resources matching the filters, with
+// costs attached, and their total cost.
 func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []string, search string, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly bool, tagKey, tagValue string) ([]AzureResource, float64, error) {
-	var clauses []string
-	if len(subs) > 0 {
-		clauses = append(clauses, fmt.Sprintf("subscriptionId in~ (%s)", strings.Join(quoteAll(subs), ",")))
+	inv, err := getInventory(ctx)
+	if err != nil {
+		return nil, 0, err
 	}
-	if len(rgs) > 0 {
-		clauses = append(clauses, fmt.Sprintf("resourceGroup in~ (%s)", strings.Join(quoteAll(rgs), ",")))
+	withCosts := attachCosts(inv)
+	filtered := filterResources(withCosts, resourceFilters{
+		Subs: subs, RGs: rgs, Types: types, Locs: locs, Search: search,
+		Orphaned: orphaned, UnattachedDiskOnly: unattachedDiskOnly, UnassignedPIPOnly: unassignedPIPOnly, UnattachedNICOnly: unattachedNICOnly,
+		TagKey: tagKey, TagValue: tagValue,
+	})
+	totalCost := 0.0
+	for _, r := range filtered {
+		totalCost += r.Cost
 	}
-	if len(types) > 0 {
-		clauses = append(clauses, fmt.Sprintf("type in~ (%s)", strings.Join(quoteAll(types), ",")))
+	return filtered, totalCost, nil
+}
+
+// getInventory returns the in-memory inventory, scanning Resource Graph first if there is
+// none yet (first run with an empty database).
+func getInventory(ctx context.Context) ([]AzureResource, error) {
+	inventoryMu.RLock()
+	inv := inventoryCurrent
+	inventoryMu.RUnlock()
+	if inv != nil {
+		return inv, nil
 	}
-	if len(locs) > 0 {
-		clauses = append(clauses, fmt.Sprintf("location in~ (%s)", strings.Join(quoteAll(locs), ",")))
+	return refreshInventory(ctx)
+}
+
+// inventoryFetchedAt reports when the in-memory inventory was last scanned or loaded.
+func inventoryFetchedAt() time.Time {
+	inventoryMu.RLock()
+	defer inventoryMu.RUnlock()
+	return inventoryAt
+}
+
+func publishInventory(inv []AzureResource, at time.Time) {
+	inventoryMu.Lock()
+	inventoryCurrent, inventoryAt = inv, at
+	inventoryMu.Unlock()
+}
+
+// refreshInventory scans Resource Graph and publishes the result. Concurrent callers wait
+// for one scan instead of each starting their own.
+func refreshInventory(ctx context.Context) ([]AzureResource, error) {
+	started := time.Now()
+	inventoryRefresh.Lock()
+	defer inventoryRefresh.Unlock()
+	// Another caller finished a scan while this one waited: use it.
+	inventoryMu.RLock()
+	if inventoryCurrent != nil && inventoryAt.After(started) {
+		inv := inventoryCurrent
+		inventoryMu.RUnlock()
+		return inv, nil
 	}
-	if search != "" {
-		sanitizedSearch := sanitizeKQL(search)
-		clauses = append(clauses, fmt.Sprintf("name contains '%s' or resourceGroup contains '%s' or type contains '%s'", sanitizedSearch, sanitizedSearch, sanitizedSearch))
+	inventoryMu.RUnlock()
+
+	inv, err := scanInventory(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if tagKey != "" && tagValue != "" {
-		// Sanitize tag key and value to prevent injection
-		sanitizedTagKey := sanitizeKQL(tagKey)
-		sanitizedTagValue := sanitizeKQL(tagValue)
-		if tagValue == "Untagged" {
-			clauses = append(clauses, fmt.Sprintf("isempty(tags['%s']) or isnull(tags['%s'])", sanitizedTagKey, sanitizedTagKey))
-		} else {
-			clauses = append(clauses, fmt.Sprintf("tags['%s'] =~ '%s'", sanitizedTagKey, sanitizedTagValue))
+	publishInventory(inv, time.Now())
+	return inv, nil
+}
+
+// loadInventoryFromDB publishes the inventory stored by the last snapshot, so the first
+// requests after startup don't wait for a Resource Graph scan.
+func loadInventoryFromDB(dc *dbCache) int {
+	rows, err := dc.db.Query("SELECT id, name, type, location, subscription_id, resource_group, COALESCE(tags, '{}'), COALESCE(status, ''), COALESCE(managed_by, ''), COALESCE(orphan_kind, ''), fetched_at FROM resources")
+	if err != nil {
+		log.Printf("Warning: failed to load stored inventory: %v", err)
+		return 0
+	}
+	defer rows.Close()
+	names := subscriptionNamesFromCache()
+	var inv []AzureResource
+	var newest time.Time
+	for rows.Next() {
+		var r AzureResource
+		var tagsJSON, orphan string
+		var fetchedAt time.Time
+		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.Location, &r.SubscriptionID, &r.ResourceGroup, &tagsJSON, &r.Status, &r.ManagedBy, &orphan, &fetchedAt); err != nil {
+			continue
+		}
+		_ = json.Unmarshal([]byte(tagsJSON), &r.Tags)
+		if r.Tags == nil {
+			r.Tags = map[string]string{}
+		}
+		classifyResource(&r, orphan)
+		r.SubscriptionName = names[r.SubscriptionID]
+		inv = append(inv, r)
+		if fetchedAt.After(newest) {
+			newest = fetchedAt
 		}
 	}
-	if orphaned {
-		clauses = append(clauses, "("+kqlUnattachedDisk+" or "+kqlUnattachedNIC+" or "+kqlUnassignedPIP+")")
+	if len(inv) > 0 {
+		publishInventory(inv, newest)
 	}
-	if unattachedDiskOnly {
-		clauses = append(clauses, kqlUnattachedDisk)
-	}
-	if unassignedPIPOnly {
-		clauses = append(clauses, kqlUnassignedPIP)
-	}
-	if unattachedNICOnly {
-		clauses = append(clauses, kqlUnattachedNIC)
-	}
+	return len(inv)
+}
 
-	whereClause := ""
-	if len(clauses) > 0 {
-		whereClause = "| where " + strings.Join(clauses, " and ")
+// subscriptionNamesFromCache returns the subscription names already known without
+// calling Azure (discovery cache and name cache).
+func subscriptionNamesFromCache() map[string]string {
+	names := make(map[string]string)
+	subscriptionNameCache.Range(func(k, v any) bool {
+		names[k.(string)] = v.(string)
+		return true
+	})
+	activeSubsMu.RLock()
+	for _, sub := range activeSubsCache {
+		names[sub.ID] = sub.Name
 	}
+	activeSubsMu.RUnlock()
+	return names
+}
 
-	fullQuery := fmt.Sprintf("Resources %s | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState, managedBy, vmId=properties.virtualMachine.id, peId=properties.privateEndpoint.id, plsId=properties.privateLinkService.id, ipConfig=properties.ipConfiguration, natId=properties.natGateway.id", whereClause)
+// scanInventory pages through every resource in Resource Graph.
+func scanInventory(ctx context.Context) ([]AzureResource, error) {
+	query := "Resources | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState, managedBy, vmId=properties.virtualMachine.id, peId=properties.privateEndpoint.id, plsId=properties.privateLinkService.id, ipConfig=properties.ipConfiguration, natId=properties.natGateway.id"
 
-	var allResources []AzureResource
+	var inv []AzureResource
 	var skipToken *string
-
 	for {
 		request := armresourcegraph.QueryRequest{
-			Query: to.Ptr(fullQuery),
+			Query: to.Ptr(query),
 			Options: &armresourcegraph.QueryRequestOptions{
 				ResultFormat: to.Ptr(armresourcegraph.ResultFormatObjectArray),
 				Top:          to.Ptr(int32(1000)),
 				SkipToken:    skipToken,
 			},
 		}
-
 		results, err := argClient.Resources(ctx, request, nil)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
-
-		safeStr := func(v any) string {
-			if v == nil {
-				return ""
-			}
-			return fmt.Sprint(v)
-		}
-
 		rows, _ := results.Data.([]interface{})
 		for _, row := range rows {
 			m, _ := row.(map[string]interface{})
@@ -872,59 +959,7 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 					tags[k] = safeStr(v)
 				}
 			}
-
-			opt := ""
-			score := 100
-			resType := strings.ToLower(safeStr(m["type"]))
-			resName := strings.ToLower(safeStr(m["name"]))
-
-			if strings.Contains(resType, "virtualmachines") && (strings.Contains(resName, "dev") || strings.Contains(resName, "test")) {
-				opt = "Dev Resource"
-				score = 45
-			} else if strings.Contains(resType, "virtualmachines") && strings.Contains(resType, "scalesets") {
-				opt = "Scale-set"
-				score = 75
-			}
-
-			isOrphaned := false
-			switch orphanKind(resType, safeStr(m["managedBy"]), safeStr(m["vmId"]), safeStr(m["peId"]), safeStr(m["plsId"]), safeStr(m["ipConfig"]), safeStr(m["natId"])) {
-			case orphanUnattachedDisk:
-				isOrphaned = true
-				opt = orphanUnattachedDisk
-				score = 20
-			case orphanUnattachedNIC:
-				isOrphaned = true
-				opt = orphanUnattachedNIC
-				score = 25
-			case orphanUnassignedPIP:
-				isOrphaned = true
-				opt = orphanUnassignedPIP
-				score = 30
-			}
-
-			// Extract creator information from tags or properties
-			createdBy := extractCreatorFromTags(tags)
-			createdByType := "user"
-			if strings.Contains(createdBy, "@") {
-				// It's an email, keep as is
-			} else if createdBy != "" {
-				// Check if it looks like a service principal
-				if strings.Contains(strings.ToLower(createdBy), "spn") || strings.Contains(strings.ToLower(createdBy), "service") {
-					createdByType = "service_principal"
-				} else if strings.HasPrefix(createdBy, "mi-") || strings.Contains(strings.ToLower(createdBy), "managedidentity") {
-					createdByType = "managed_identity"
-				}
-			}
-
-			// Try to get creation time from tags or properties
-			createdAt := time.Time{}
-			if tStr := safeStr(m["createdTime"]); tStr != "" {
-				if t, err := time.Parse(time.RFC3339, tStr); err == nil {
-					createdAt = t
-				}
-			}
-
-			allResources = append(allResources, AzureResource{
+			r := AzureResource{
 				ID:             safeStr(m["id"]),
 				Name:           safeStr(m["name"]),
 				Type:           safeStr(m["type"]),
@@ -933,110 +968,173 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 				ResourceGroup:  safeStr(m["resourceGroup"]),
 				Status:         safeStr(m["status"]),
 				Tags:           tags,
-				Optimization:   opt,
-				Score:          score,
-				IsOrphaned:     isOrphaned,
-				CreatedBy:      createdBy,
-				CreatedByType:  createdByType,
-				CreatedAt:      createdAt,
 				ManagedBy:      safeStr(m["managedBy"]),
-			})
+			}
+			classifyResource(&r, orphanKind(r.Type, r.ManagedBy, safeStr(m["vmId"]), safeStr(m["peId"]), safeStr(m["plsId"]), safeStr(m["ipConfig"]), safeStr(m["natId"])))
+			inv = append(inv, r)
 		}
-
 		if results.SkipToken == nil || *results.SkipToken == "" {
 			break
 		}
 		skipToken = results.SkipToken
 	}
 
-	// Match costs
+	// Resolve subscription names. Resources are kept even when a name can't be resolved
+	// (e.g. the name lookup was throttled): dropping them made a throttled scan look like
+	// mass deletion.
 	uniqueSubs := make(map[string]bool)
-	for _, r := range allResources {
+	for _, r := range inv {
 		uniqueSubs[r.SubscriptionID] = true
 	}
-
-	totalCost := 0.0
-	if len(allResources) > 0 {
-		subList := []string{}
-		for s := range uniqueSubs {
-			subList = append(subList, s)
+	subList := make([]string, 0, len(uniqueSubs))
+	for sid := range uniqueSubs {
+		subList = append(subList, sid)
+	}
+	names := fetchSubscriptionNames(ctx, subList)
+	for sid, name := range subscriptionNamesFromCache() {
+		if _, ok := names[sid]; !ok {
+			names[sid] = name
 		}
+	}
+	for i := range inv {
+		inv[i].SubscriptionName = names[inv[i].SubscriptionID]
+	}
+	return inv, nil
+}
 
-		costRows, err := cache.db.Query("SELECT subscription_id, resource_id, resource_group, resource_type, resource_location, cost FROM costs WHERE subscription_id IN ("+placeholders(len(subList))+") AND period = 'current'", (func() []any {
-			args := []any{}
-			for _, s := range subList {
-				args = append(args, s)
-			}
-			return args
-		})()...)
+// classifyResource sets the optimization label, efficiency score, orphan flag and
+// creator, given the resource's orphan kind (see orphanKind; "" when attached).
+func classifyResource(r *AzureResource, orphan string) {
+	resType := strings.ToLower(r.Type)
+	resName := strings.ToLower(r.Name)
+	r.Optimization, r.Score, r.IsOrphaned = "", 100, false
+	if strings.Contains(resType, "virtualmachines") && (strings.Contains(resName, "dev") || strings.Contains(resName, "test")) {
+		r.Optimization, r.Score = "Dev Resource", 45
+	} else if strings.Contains(resType, "virtualmachines") && strings.Contains(resType, "scalesets") {
+		r.Optimization, r.Score = "Scale-set", 75
+	}
+	switch orphan {
+	case orphanUnattachedDisk:
+		r.Optimization, r.Score, r.IsOrphaned = orphan, 20, true
+	case orphanUnattachedNIC:
+		r.Optimization, r.Score, r.IsOrphaned = orphan, 25, true
+	case orphanUnassignedPIP:
+		r.Optimization, r.Score, r.IsOrphaned = orphan, 30, true
+	}
 
-		if err == nil {
-			defer costRows.Close()
-			costMapByID := make(map[string]float64)
-			costMapByGroup := make(map[string]float64)
+	r.CreatedBy = extractCreatorFromTags(r.Tags)
+	r.CreatedByType = "user"
+	if r.CreatedBy != "" && !strings.Contains(r.CreatedBy, "@") {
+		lower := strings.ToLower(r.CreatedBy)
+		if strings.Contains(lower, "spn") || strings.Contains(lower, "service") {
+			r.CreatedByType = "service_principal"
+		} else if strings.HasPrefix(r.CreatedBy, "mi-") || strings.Contains(lower, "managedidentity") {
+			r.CreatedByType = "managed_identity"
+		}
+	}
+}
 
-			for costRows.Next() {
-				var s, rid, rg, rt, rl string
-				var cost float64
-				if err := costRows.Scan(&s, &rid, &rg, &rt, &rl, &cost); err == nil {
-					if cost == 0 {
-						continue
-					}
-					if rid != "" {
-						costMapByID[strings.ToLower(rid)] += cost
-					} else {
-						key := strings.ToLower(fmt.Sprintf("%s|%s|%s|%s", s, rg, rt, normalizeLocation(rl)))
-						costMapByGroup[key] += cost
-					}
+// filterResources returns the resources matching f, with the same semantics as the
+// Resource Graph filters it replaces: case-insensitive matches, and search over name,
+// resource group and type.
+func filterResources(inv []AzureResource, f resourceFilters) []AzureResource {
+	set := func(vals []string) map[string]bool {
+		if len(vals) == 0 {
+			return nil
+		}
+		m := make(map[string]bool, len(vals))
+		for _, v := range vals {
+			m[strings.ToLower(v)] = true
+		}
+		return m
+	}
+	subs, rgs, types, locs := set(f.Subs), set(f.RGs), set(f.Types), set(f.Locs)
+	search := strings.ToLower(f.Search)
+
+	out := make([]AzureResource, 0, len(inv))
+	for _, r := range inv {
+		if subs != nil && !subs[strings.ToLower(r.SubscriptionID)] ||
+			rgs != nil && !rgs[strings.ToLower(r.ResourceGroup)] ||
+			types != nil && !types[strings.ToLower(r.Type)] ||
+			locs != nil && !locs[strings.ToLower(r.Location)] {
+			continue
+		}
+		if search != "" && !strings.Contains(strings.ToLower(r.Name), search) &&
+			!strings.Contains(strings.ToLower(r.ResourceGroup), search) &&
+			!strings.Contains(strings.ToLower(r.Type), search) {
+			continue
+		}
+		if f.TagKey != "" && f.TagValue != "" {
+			v, ok := r.Tags[f.TagKey]
+			if f.TagValue == "Untagged" {
+				if ok && v != "" {
+					continue
 				}
+			} else if !ok || !strings.EqualFold(v, f.TagValue) {
+				continue
 			}
+		}
+		if f.Orphaned && !r.IsOrphaned ||
+			f.UnattachedDiskOnly && r.Optimization != orphanUnattachedDisk ||
+			f.UnassignedPIPOnly && r.Optimization != orphanUnassignedPIP ||
+			f.UnattachedNICOnly && r.Optimization != orphanUnattachedNIC {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
 
-			groupCounts := make(map[string]int)
-			for i := range allResources {
-				r := &allResources[i]
-				if costMapByID[strings.ToLower(r.ID)] == 0 {
-					key := strings.ToLower(fmt.Sprintf("%s|%s|%s|%s", r.SubscriptionID, r.ResourceGroup, r.Type, normalizeLocation(r.Location)))
-					groupCounts[key]++
-				}
-			}
-
-			for i := range allResources {
-				r := &allResources[i]
-				r.Cost = costMapByID[strings.ToLower(r.ID)]
-				if r.Cost == 0 {
-					key := strings.ToLower(fmt.Sprintf("%s|%s|%s|%s", r.SubscriptionID, r.ResourceGroup, r.Type, normalizeLocation(r.Location)))
-					if count := groupCounts[key]; count > 0 {
-						r.Cost = costMapByGroup[key] / float64(count)
-					}
-				}
-				totalCost += r.Cost
-			}
+// attachCosts returns a copy of inv with each resource's current-period cost: its own
+// cost rows, or else an even share of its subscription/RG/type/location aggregate.
+// Shares are computed over the whole inventory, so a resource's cost doesn't depend on
+// which filters are applied.
+func attachCosts(inv []AzureResource) []AzureResource {
+	out := make([]AzureResource, len(inv))
+	copy(out, inv)
+	if cache == nil || len(out) == 0 {
+		return out
+	}
+	costRows, err := cache.db.Query("SELECT subscription_id, resource_id, resource_group, resource_type, resource_location, cost FROM costs WHERE period = 'current' AND cost != 0")
+	if err != nil {
+		return out
+	}
+	defer costRows.Close()
+	costByID := make(map[string]float64)
+	costByGroup := make(map[string]float64)
+	groupKey := func(sub, rg, typ, loc string) string {
+		return strings.ToLower(sub + "|" + rg + "|" + typ + "|" + normalizeLocation(loc))
+	}
+	for costRows.Next() {
+		var sub, rid, rg, rt, rl string
+		var cost float64
+		if costRows.Scan(&sub, &rid, &rg, &rt, &rl, &cost) != nil {
+			continue
+		}
+		if rid != "" {
+			costByID[strings.ToLower(rid)] += cost
+		} else {
+			costByGroup[groupKey(sub, rg, rt, rl)] += cost
 		}
 	}
 
-	// Fetch subscription names and populate them in resources
-	// Filter out resources from subscriptions that couldn't be resolved
-	if len(allResources) > 0 {
-		subList := make([]string, 0, len(uniqueSubs))
-		for s := range uniqueSubs {
-			subList = append(subList, s)
+	groupCounts := make(map[string]int)
+	for i := range out {
+		if costByID[strings.ToLower(out[i].ID)] == 0 {
+			groupCounts[groupKey(out[i].SubscriptionID, out[i].ResourceGroup, out[i].Type, out[i].Location)]++
 		}
-		subNames := fetchSubscriptionNames(ctx, subList)
-
-		// Filter resources to only include those with valid subscription names
-		validResources := make([]AzureResource, 0, len(allResources))
-		for _, r := range allResources {
-			if name, ok := subNames[r.SubscriptionID]; ok {
-				r.SubscriptionName = name
-				validResources = append(validResources, r)
-			} else {
-				log.Printf("Filtering out resource %s from unknown subscription %s", r.Name, r.SubscriptionID)
+	}
+	for i := range out {
+		r := &out[i]
+		r.Cost = costByID[strings.ToLower(r.ID)]
+		if r.Cost == 0 {
+			key := groupKey(r.SubscriptionID, r.ResourceGroup, r.Type, r.Location)
+			if n := groupCounts[key]; n > 0 {
+				r.Cost = costByGroup[key] / float64(n)
 			}
 		}
-		allResources = validResources
 	}
-
-	return allResources, totalCost, nil
+	return out
 }
 
 func normalizeResults(res armcostmanagement.QueryResult) any {

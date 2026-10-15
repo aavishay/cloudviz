@@ -1570,3 +1570,95 @@ func TestDBCache_DailyHistoryCoverage(t *testing.T) {
 	covered = cache.subsWithDailyHistorySince([]string{"long"}, day(now.AddDate(0, 0, -59)))
 	assert.Empty(t, covered)
 }
+
+func testInventory() []AzureResource {
+	inv := []AzureResource{
+		{ID: "/subscriptions/s1/resourceGroups/RG-A/providers/Microsoft.Compute/disks/d1", Name: "storage-disk", Type: "microsoft.compute/disks", Location: "westeurope", SubscriptionID: "s1", ResourceGroup: "RG-A", Tags: map[string]string{"Environment": "Prod"}},
+		{ID: "/subscriptions/s1/resourceGroups/rg-a/providers/Microsoft.Network/networkInterfaces/n1", Name: "nic1", Type: "microsoft.network/networkinterfaces", Location: "westeurope", SubscriptionID: "s1", ResourceGroup: "rg-a", Tags: map[string]string{}},
+		{ID: "/subscriptions/s2/resourceGroups/rg-b/providers/Microsoft.Compute/virtualMachines/dev-vm", Name: "dev-vm", Type: "microsoft.compute/virtualmachines", Location: "eastus", SubscriptionID: "s2", ResourceGroup: "rg-b", Tags: map[string]string{"environment": "dev"}},
+	}
+	classifyResource(&inv[0], orphanUnattachedDisk)
+	classifyResource(&inv[1], "")
+	classifyResource(&inv[2], "")
+	return inv
+}
+
+func TestFilterResources(t *testing.T) {
+	inv := testInventory()
+	names := func(rs []AzureResource) []string {
+		var out []string
+		for _, r := range rs {
+			out = append(out, r.Name)
+		}
+		return out
+	}
+	assert.Len(t, filterResources(inv, resourceFilters{}), 3, "no filters returns everything")
+	assert.Equal(t, []string{"storage-disk", "nic1"}, names(filterResources(inv, resourceFilters{Subs: []string{"S1"}})), "subscription match is case-insensitive")
+	assert.Equal(t, []string{"storage-disk", "nic1"}, names(filterResources(inv, resourceFilters{RGs: []string{"rg-a"}})), "resource group match is case-insensitive")
+	assert.Equal(t, []string{"dev-vm"}, names(filterResources(inv, resourceFilters{Types: []string{"Microsoft.Compute/virtualMachines"}, Locs: []string{"EastUS"}})))
+	assert.Equal(t, []string{"storage-disk"}, names(filterResources(inv, resourceFilters{Search: "Storage"})), "search isn't mangled (KQL sanitizing turned 'storage' into 'stage')")
+	assert.Equal(t, []string{"storage-disk"}, names(filterResources(inv, resourceFilters{TagKey: "Environment", TagValue: "prod"})), "tag values match case-insensitively")
+	assert.Equal(t, []string{"nic1", "dev-vm"}, names(filterResources(inv, resourceFilters{TagKey: "Environment", TagValue: "Untagged"})))
+	assert.Equal(t, []string{"storage-disk"}, names(filterResources(inv, resourceFilters{Orphaned: true})))
+	assert.Equal(t, []string{"storage-disk"}, names(filterResources(inv, resourceFilters{UnattachedDiskOnly: true})))
+	assert.Empty(t, filterResources(inv, resourceFilters{UnattachedNICOnly: true}))
+}
+
+func TestAttachCostsIndependentOfFilters(t *testing.T) {
+	testCache, cleanup := setupTestDB(t)
+	defer cleanup()
+	origCache := cache
+	cache = testCache
+	defer func() { cache = origCache }()
+
+	inv := testInventory()
+	cols := []string{"Cost", "ResourceId", "ResourceGroup", "ResourceType", "ResourceLocation"}
+	var columns []*armcostmanagement.QueryColumn
+	for _, c := range cols {
+		name := c
+		columns = append(columns, &armcostmanagement.QueryColumn{Name: &name})
+	}
+	cache.set("s1", "current", armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{
+		Columns: columns,
+		Rows: [][]any{
+			{10.0, inv[0].ID, "rg-a", "microsoft.compute/disks", "westeurope"},
+			// An aggregate without a resource ID, split across matching resources.
+			{6.0, "", "rg-a", "microsoft.network/networkinterfaces", "westeurope"},
+		},
+	}})
+	cache.set("s1", "previous", armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{
+		Columns: columns,
+		Rows:    [][]any{{999.0, inv[0].ID, "rg-a", "microsoft.compute/disks", "westeurope"}},
+	}})
+
+	costed := attachCosts(inv)
+	assert.Equal(t, 10.0, costed[0].Cost, "own cost row, current period only")
+	assert.Equal(t, 6.0, costed[1].Cost, "aggregate share")
+	assert.Equal(t, 0.0, costed[2].Cost)
+	assert.Equal(t, 0.0, inv[0].Cost, "the published inventory is not modified")
+
+	filtered := filterResources(costed, resourceFilters{Search: "nic"})
+	require.Len(t, filtered, 1)
+	assert.Equal(t, 6.0, filtered[0].Cost, "filtering doesn't change a resource's cost")
+}
+
+func TestLoadInventoryFromDBRoundTrip(t *testing.T) {
+	testCache, cleanup := setupTestDB(t)
+	defer cleanup()
+	defer publishInventory(nil, time.Time{})
+
+	recordResourceChanges(testCache.db, testInventory())
+	require.Equal(t, 3, loadInventoryFromDB(testCache))
+
+	inv, err := getInventory(context.Background())
+	require.NoError(t, err)
+	byName := make(map[string]AzureResource)
+	for _, r := range inv {
+		byName[r.Name] = r
+	}
+	assert.True(t, byName["storage-disk"].IsOrphaned, "orphan kind survives the round trip")
+	assert.Equal(t, orphanUnattachedDisk, byName["storage-disk"].Optimization)
+	assert.Equal(t, "Dev Resource", byName["dev-vm"].Optimization, "classification is recomputed")
+	assert.Equal(t, "Prod", byName["storage-disk"].Tags["Environment"])
+	assert.False(t, inventoryFetchedAt().IsZero())
+}
