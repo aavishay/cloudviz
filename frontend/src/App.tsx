@@ -2020,7 +2020,7 @@ export default function App() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
                     <span style={{ color: 'var(--text-2)' }}>Break-even</span>
-                    <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{commitmentSavings.oneYearRI?.breakEvenMonths || 6} months</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{commitmentSavings.oneYearRI?.breakEvenMonths ?? '—'} months upfront</span>
                   </div>
                 </div>
               </div>
@@ -2044,7 +2044,7 @@ export default function App() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
                     <span style={{ color: 'var(--text-2)' }}>Break-even</span>
-                    <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{commitmentSavings.threeYearRI?.breakEvenMonths || 6} months</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-1)' }}>{commitmentSavings.threeYearRI?.breakEvenMonths ?? '—'} months upfront</span>
                   </div>
                 </div>
               </div>

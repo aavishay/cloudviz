@@ -753,6 +753,42 @@ func safeStr(v any) string {
 	return fmt.Sprint(v)
 }
 
+// Orphan kinds, also used as the resource's Optimization label.
+const (
+	orphanUnattachedDisk = "Unattached Disk"
+	orphanUnattachedNIC  = "Unattached NIC"
+	orphanUnassignedPIP  = "Unassigned PIP"
+)
+
+// KQL predicates matching orphanKind. A NIC belonging to a private endpoint or private
+// link service has no VM but is in use; so is a public IP on a NAT gateway. managedBy is
+// an empty string (not null) on unattached disks, so isempty, not isnull.
+const (
+	kqlUnattachedDisk = "(type =~ 'microsoft.compute/disks' and isempty(managedBy))"
+	kqlUnattachedNIC  = "(type =~ 'microsoft.network/networkinterfaces' and isempty(tostring(properties.virtualMachine.id)) and isempty(tostring(properties.privateEndpoint.id)) and isempty(tostring(properties.privateLinkService.id)))"
+	kqlUnassignedPIP  = "(type =~ 'microsoft.network/publicipaddresses' and isempty(tostring(properties.ipConfiguration.id)) and isempty(tostring(properties.natGateway.id)))"
+)
+
+// orphanKind classifies a resource as an orphan from its ARG attachment properties,
+// returning "" when it is attached (or not a disk, NIC or public IP).
+func orphanKind(resType, managedBy, vmID, privateEndpointID, privateLinkServiceID, ipConfig, natGatewayID string) string {
+	switch t := strings.ToLower(resType); {
+	case t == "microsoft.compute/disks":
+		if managedBy == "" {
+			return orphanUnattachedDisk
+		}
+	case t == "microsoft.network/networkinterfaces":
+		if vmID == "" && privateEndpointID == "" && privateLinkServiceID == "" {
+			return orphanUnattachedNIC
+		}
+	case t == "microsoft.network/publicipaddresses":
+		if ipConfig == "" && natGatewayID == "" {
+			return orphanUnassignedPIP
+		}
+	}
+	return ""
+}
+
 // FetchResourcesWithCosts encapsulates the logic to get resources from ARG and match them with costs from SQLite
 func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []string, search string, orphaned, unattachedDiskOnly, unassignedPIPOnly, unattachedNICOnly bool, tagKey, tagValue string) ([]AzureResource, float64, error) {
 	var clauses []string
@@ -783,16 +819,16 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 		}
 	}
 	if orphaned {
-		clauses = append(clauses, "((type has 'microsoft.compute/disks' and isnull(managedBy)) or (type has 'microsoft.network/networkinterfaces' and isnull(properties.virtualMachine)) or (type has 'microsoft.network/publicipaddresses' and isnull(properties.ipConfiguration)))")
+		clauses = append(clauses, "("+kqlUnattachedDisk+" or "+kqlUnattachedNIC+" or "+kqlUnassignedPIP+")")
 	}
 	if unattachedDiskOnly {
-		clauses = append(clauses, "(type has 'microsoft.compute/disks' and isnull(managedBy))")
+		clauses = append(clauses, kqlUnattachedDisk)
 	}
 	if unassignedPIPOnly {
-		clauses = append(clauses, "(type has 'microsoft.network/publicipaddresses' and isnull(properties.ipConfiguration))")
+		clauses = append(clauses, kqlUnassignedPIP)
 	}
 	if unattachedNICOnly {
-		clauses = append(clauses, "(type has 'microsoft.network/networkinterfaces' and isnull(properties.virtualMachine))")
+		clauses = append(clauses, kqlUnattachedNIC)
 	}
 
 	whereClause := ""
@@ -800,7 +836,7 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 		whereClause = "| where " + strings.Join(clauses, " and ")
 	}
 
-	fullQuery := fmt.Sprintf("Resources %s | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState, managedBy, vmId=properties.virtualMachine.id, ipConfig=properties.ipConfiguration", whereClause)
+	fullQuery := fmt.Sprintf("Resources %s | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState, managedBy, vmId=properties.virtualMachine.id, peId=properties.privateEndpoint.id, plsId=properties.privateLinkService.id, ipConfig=properties.ipConfiguration, natId=properties.natGateway.id", whereClause)
 
 	var allResources []AzureResource
 	var skipToken *string
@@ -851,17 +887,18 @@ func FetchResourcesWithCosts(ctx context.Context, subs, rgs, types, locs []strin
 			}
 
 			isOrphaned := false
-			if strings.Contains(resType, "microsoft.compute/disks") && safeStr(m["managedBy"]) == "" {
+			switch orphanKind(resType, safeStr(m["managedBy"]), safeStr(m["vmId"]), safeStr(m["peId"]), safeStr(m["plsId"]), safeStr(m["ipConfig"]), safeStr(m["natId"])) {
+			case orphanUnattachedDisk:
 				isOrphaned = true
-				opt = "Unattached Disk"
+				opt = orphanUnattachedDisk
 				score = 20
-			} else if strings.Contains(resType, "microsoft.network/networkinterfaces") && safeStr(m["vmId"]) == "" {
+			case orphanUnattachedNIC:
 				isOrphaned = true
-				opt = "Unattached NIC"
+				opt = orphanUnattachedNIC
 				score = 25
-			} else if strings.Contains(resType, "microsoft.network/publicipaddresses") && safeStr(m["ipConfig"]) == "" {
+			case orphanUnassignedPIP:
 				isOrphaned = true
-				opt = "Unassigned PIP"
+				opt = orphanUnassignedPIP
 				score = 30
 			}
 

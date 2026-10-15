@@ -483,3 +483,41 @@ func TestCostManagementLimitersStayWithinTenantLimit(t *testing.T) {
 	perMin := float64(costLimiter.Limit()+forecastLimiter.Limit()) * 60
 	assert.LessOrEqual(t, perMin, float64(costManagementCallsPerMin)+1e-9)
 }
+
+func TestOrphanKind(t *testing.T) {
+	tests := []struct {
+		name                                      string
+		resType, managedBy, vm, pe, pls, ipc, nat string
+		want                                      string
+	}{
+		{"unattached disk", "microsoft.compute/disks", "", "", "", "", "", "", orphanUnattachedDisk},
+		{"attached disk", "Microsoft.Compute/disks", "/vm/x", "", "", "", "", "", ""},
+		{"NIC on a VM", "microsoft.network/networkinterfaces", "", "/vm/x", "", "", "", "", ""},
+		{"NIC on a private endpoint", "microsoft.network/networkinterfaces", "", "", "/pe/x", "", "", "", ""},
+		{"NIC on a private link service", "microsoft.network/networkinterfaces", "", "", "", "/pls/x", "", "", ""},
+		{"unattached NIC", "microsoft.network/networkinterfaces", "", "", "", "", "", "", orphanUnattachedNIC},
+		{"IP on a load balancer or NIC", "microsoft.network/publicipaddresses", "", "", "", "", "map[id:/x]", "", ""},
+		{"IP on a NAT gateway", "microsoft.network/publicipaddresses", "", "", "", "", "", "/nat/x", ""},
+		{"unassigned IP", "microsoft.network/publicipaddresses", "", "", "", "", "", "", orphanUnassignedPIP},
+		{"other type", "microsoft.compute/virtualmachines", "", "", "", "", "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, orphanKind(tt.resType, tt.managedBy, tt.vm, tt.pe, tt.pls, tt.ipc, tt.nat))
+		})
+	}
+}
+
+func TestIsReservationCandidate(t *testing.T) {
+	assert.True(t, isReservationCandidate("Microsoft.Compute/virtualMachines", map[string]string{"env": "prod"}))
+	assert.True(t, isReservationCandidate("microsoft.compute/virtualmachinescalesets", nil))
+	assert.False(t, isReservationCandidate("microsoft.compute/virtualmachines/extensions", nil), "extensions aren't compute")
+	assert.False(t, isReservationCandidate("microsoft.compute/virtualmachines", map[string]string{"karpenter.sh_nodepool": "general"}))
+	assert.False(t, isReservationCandidate("microsoft.compute/virtualmachinescalesets", map[string]string{"aks-managed-poolName": "system"}))
+	assert.False(t, isReservationCandidate("microsoft.compute/disks", nil))
+}
+
+func TestReservationBreakEvenMonths(t *testing.T) {
+	assert.Equal(t, 8.4, reservationBreakEvenMonths(12, 0.70))
+	assert.Equal(t, 19.8, reservationBreakEvenMonths(36, 0.55))
+}

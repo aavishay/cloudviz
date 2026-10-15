@@ -182,6 +182,14 @@ func newDBCache(dbPath string) (*dbCache, error) {
 		}
 	}
 
+	// orphan_kind holds the inventory snapshot's orphan classification (see orphanKind),
+	// so the Waste view uses the same rules as the resource list.
+	if !tableHasColumn(db, "resources", "orphan_kind") {
+		if _, err := db.Exec(`ALTER TABLE resources ADD COLUMN orphan_kind TEXT NOT NULL DEFAULT ''`); err != nil {
+			log.Printf("Warning: failed to add orphan_kind column: %v", err)
+		}
+	}
+
 	// Retroactively fill changed_by from resource tags for 'Unknown' created events
 	go func() {
 		rows, err := db.Query(`SELECT DISTINCT h.resource_id, r.tags FROM resource_history h JOIN resources r ON LOWER(h.resource_id) = LOWER(r.id) WHERE (h.changed_by IS NULL OR h.changed_by = 'Unknown') AND h.change_type = 'created' AND r.tags IS NOT NULL AND r.tags != '{}'`)
@@ -430,6 +438,22 @@ func newDBCache(dbPath string) (*dbCache, error) {
 	}
 
 	return &dbCache{db: db}, nil
+}
+
+// tableHasColumn reports whether a table has the named column.
+func tableHasColumn(db *sql.DB, table, column string) bool {
+	rows, err := db.Query("SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil && name == column {
+			return true
+		}
+	}
+	return false
 }
 
 func (dc *dbCache) get(subID string, period string) (armcostmanagement.QueryResult, bool) {
@@ -1107,7 +1131,7 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 		log.Printf("Warning: failed to delete old resources: %v", err)
 	}
 
-	resourceStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, name, type, location, subscription_id, resource_group, tags, status, managed_by, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+	resourceStmt, err := tx.Prepare("INSERT OR REPLACE INTO resources (id, name, type, location, subscription_id, resource_group, tags, status, managed_by, orphan_kind, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		log.Printf("Error: failed to prepare resource statement: %v", err)
 		return
@@ -1120,7 +1144,11 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 			log.Printf("Warning: failed to marshal tags: %v", err)
 			tagsJSON = []byte("{}")
 		}
-		if _, err := resourceStmt.Exec(r.ID, r.Name, r.Type, r.Location, r.SubscriptionID, r.ResourceGroup, string(tagsJSON), r.Status, r.ManagedBy, now); err != nil {
+		orphan := ""
+		if r.IsOrphaned {
+			orphan = r.Optimization
+		}
+		if _, err := resourceStmt.Exec(r.ID, r.Name, r.Type, r.Location, r.SubscriptionID, r.ResourceGroup, string(tagsJSON), r.Status, r.ManagedBy, orphan, now); err != nil {
 			log.Printf("Warning: failed to insert resource: %v", err)
 		}
 	}

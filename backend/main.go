@@ -1869,34 +1869,28 @@ func startServer(port string) {
 			return
 		}
 
-		// Calculate monthly on-demand VM spend
+		// Calculate monthly on-demand spend for VMs and scale sets a reservation could
+		// cover. AKS/Karpenter nodes are excluded: they're autoscaled and often spot.
 		var totalMonthlyOnDemand float64
 		var vmCount int
 		var byType map[string]float64 = make(map[string]float64)
 
 		for _, r := range res {
-			if strings.Contains(strings.ToLower(r.Type), "virtualmachine") && r.Cost > 0 {
+			if r.Cost > 0 && isReservationCandidate(r.Type, r.Tags) {
 				totalMonthlyOnDemand += r.Cost
 				vmCount++
-				rt := "virtualmachine"
-				if idx := strings.LastIndex(strings.ToLower(r.Type), "/"); idx >= 0 {
-					rt = strings.ToLower(r.Type)[idx+1:]
+				rt := strings.ToLower(r.Type)
+				if idx := strings.LastIndex(rt, "/"); idx >= 0 {
+					rt = rt[idx+1:]
 				}
 				byType[rt] += r.Cost
 			}
-		}
-
-		if totalMonthlyOnDemand == 0 {
-			totalMonthlyOnDemand = 10000 // fallback for demo
-			vmCount = 50
-			byType = map[string]float64{"virtualmachine": 10000}
 		}
 
 		// RI pricing estimates (Azure published list prices, discounted)
 		// 1-year RI: ~30% savings, 3-year RI: ~45% savings
 		oneYearRate := 0.70  // 30% off on-demand
 		threeYearRate := 0.55 // 45% off on-demand
-		paybackMonths := 6    // typical payback period
 
 		oneYearMonthlyRI := totalMonthlyOnDemand * oneYearRate
 		threeYearMonthlyRI := totalMonthlyOnDemand * threeYearRate
@@ -1909,9 +1903,10 @@ func startServer(port string) {
 		oneYearTotalSavings := (totalMonthlyOnDemand * 12) - oneYearUpfront
 		threeYearTotalSavings := (totalMonthlyOnDemand * 36) - threeYearUpfront
 
-		// Break-even points
-		oneYearBreakEvenMonths := float64(paybackMonths)
-		threeYearBreakEvenMonths := float64(paybackMonths)
+		// Break-even when paid upfront: months of on-demand spend the upfront payment buys.
+		// (Paid monthly, a reservation saves from the first month.)
+		oneYearBreakEvenMonths := reservationBreakEvenMonths(12, oneYearRate)
+		threeYearBreakEvenMonths := reservationBreakEvenMonths(36, threeYearRate)
 
 		c.JSON(200, map[string]any{
 			"onDemandMonthly":      totalMonthlyOnDemand,
@@ -2174,12 +2169,12 @@ func startServer(port string) {
 			return
 		}
 
-		// Fetch cost map for latest period (resource_id -> cost)
+		// Fetch cost map for the current period (resource_id -> cost). Not MAX(period):
+		// "previous" sorts after "current", which priced every item from last period.
 		costMap := make(map[string]float64)
-		var maxPeriod string
-		if err := cache.db.QueryRow("SELECT MAX(period) FROM costs").Scan(&maxPeriod); err == nil && maxPeriod != "" {
+		{
 			costRows, cerr := cache.db.Query(
-				"SELECT resource_id, SUM(cost) FROM costs WHERE period = ? GROUP BY resource_id", maxPeriod)
+				"SELECT resource_id, SUM(cost) FROM costs WHERE period = 'current' GROUP BY resource_id")
 			if cerr == nil {
 				defer costRows.Close()
 				for costRows.Next() {
@@ -2194,7 +2189,7 @@ func startServer(port string) {
 
 		// Fetch all resources
 		rows, err := cache.db.Query(
-			"SELECT id, name, type, location, subscription_id, resource_group, COALESCE(tags, '{}'), COALESCE(managed_by, ''), COALESCE(status, '') FROM resources")
+			"SELECT id, name, type, location, subscription_id, resource_group, COALESCE(tags, '{}'), COALESCE(managed_by, ''), COALESCE(status, ''), COALESCE(orphan_kind, '') FROM resources")
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -2211,6 +2206,7 @@ func startServer(port string) {
 			Tags           string
 			ManagedBy      string
 			Status         string
+			OrphanKind     string
 			Cost           float64
 		}
 
@@ -2218,31 +2214,11 @@ func startServer(port string) {
 		for rows.Next() {
 			var it wasteItem
 			if err := rows.Scan(&it.ResourceID, &it.Name, &it.Type, &it.Location,
-				&it.SubscriptionID, &it.ResourceGroup, &it.Tags, &it.ManagedBy, &it.Status); err != nil {
+				&it.SubscriptionID, &it.ResourceGroup, &it.Tags, &it.ManagedBy, &it.Status, &it.OrphanKind); err != nil {
 				continue
 			}
 			it.Cost = costMap[strings.ToLower(it.ResourceID)]
 			items = append(items, it)
-		}
-
-		// Helper: parse tags JSON into a map
-		parseTags := func(tagsJSON string) map[string]string {
-			out := make(map[string]string)
-			if tagsJSON == "" || tagsJSON == "{}" {
-				return out
-			}
-			var raw map[string]interface{}
-			if err := json.Unmarshal([]byte(tagsJSON), &raw); err != nil {
-				return out
-			}
-			for k, v := range raw {
-				if v == nil {
-					out[strings.ToLower(k)] = ""
-				} else {
-					out[strings.ToLower(k)] = fmt.Sprint(v)
-				}
-			}
-			return out
 		}
 
 		// Category tracking
@@ -2295,12 +2271,12 @@ func startServer(port string) {
 			typeLow := strings.ToLower(it.Type)
 			nameLow := strings.ToLower(it.Name)
 			rgLow := strings.ToLower(it.ResourceGroup)
-			tags := parseTags(it.Tags)
 
 			// ── Category 1: orphaned_disk ──────────────────────────────────────
+			// Orphans use the inventory snapshot's classification (orphanKind), which checks
+			// attachment properties; tags don't say whether a NIC or IP is attached.
 			if strings.Contains(typeLow, "compute/disks") {
-				// Use ManagedBy field from Azure API - if empty, disk is unattached
-				if it.ManagedBy == "" {
+				if it.OrphanKind == orphanUnattachedDisk {
 					sev := "high"
 					if it.Cost == 0 {
 						sev = "medium"
@@ -2314,9 +2290,7 @@ func startServer(port string) {
 
 			// ── Category 2: orphaned_nic ───────────────────────────────────────
 			if strings.Contains(typeLow, "network/networkinterfaces") {
-				_, hasVM := tags["virtualmachine"]
-				_, hasIP := tags["ipconfigurations"]
-				if !hasVM && !hasIP {
+				if it.OrphanKind == orphanUnattachedNIC {
 					sev := "medium"
 					addItem("orphaned_nic", "Unattached NIC",
 						"Remove this unattached network interface to reduce clutter and potential costs",
@@ -2327,9 +2301,7 @@ func startServer(port string) {
 
 			// ── Category 3: orphaned_pip ───────────────────────────────────────
 			if strings.Contains(typeLow, "network/publicipaddresses") {
-				_, hasIPConf := tags["ipconfiguration"]
-				_, hasAssoc := tags["associatedresource"]
-				if !hasIPConf && !hasAssoc {
+				if it.OrphanKind == orphanUnassignedPIP {
 					sev := "medium"
 					if it.Cost > 0 {
 						sev = "high"
@@ -5272,6 +5244,29 @@ func computeRunRateForecast(subID string, now, monthStart, monthEnd time.Time) f
 }
 
 // Helper functions for enhanced reporting
+
+// isReservationCandidate reports whether a resource is a VM or scale set whose compute a
+// reserved instance could cover. VM extensions aren't compute, and AKS/Karpenter-managed
+// nodes are autoscaled (often spot), so reserving them is not a straightforward saving.
+func isReservationCandidate(resType string, tags map[string]string) bool {
+	t := strings.ToLower(resType)
+	if t != "microsoft.compute/virtualmachines" && t != "microsoft.compute/virtualmachinescalesets" {
+		return false
+	}
+	for k := range tags {
+		k = strings.ToLower(k)
+		if strings.HasPrefix(k, "aks-managed-") || strings.HasPrefix(k, "karpenter.") || k == "compute.aks.billing" {
+			return false
+		}
+	}
+	return true
+}
+
+// reservationBreakEvenMonths is how long an upfront reservation for termMonths at
+// rateOfOnDemand (e.g. 0.7 = 30% off) takes to cost less than running on demand.
+func reservationBreakEvenMonths(termMonths int, rateOfOnDemand float64) float64 {
+	return math.Round(float64(termMonths)*rateOfOnDemand*10) / 10
+}
 
 // forecastCacheKey identifies a forecast fetch the same way cost_forecast rows are keyed.
 func forecastCacheKey(subID string, days int) string {
