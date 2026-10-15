@@ -402,3 +402,84 @@ func TestFilterActiveSubscriptions(t *testing.T) {
 	}
 	assert.Equal(t, []string{"a", "c", "d"}, ids)
 }
+
+func TestInventoryLooksComplete(t *testing.T) {
+	tests := []struct {
+		name                            string
+		stored, current, pendingDropCnt int
+		expected                        bool
+	}{
+		{"empty scan is never complete", 12000, 0, 0, false},
+		{"first snapshot", 0, 12000, 0, true},
+		{"small change", 12000, 11900, 0, true},
+		{"exactly 80% kept", 10000, 8000, 0, true},
+		{"large drop held back", 12000, 300, 0, false},
+		{"large drop confirmed by second scan", 12000, 6000, 6100, true},
+		{"large drop not confirmed", 12000, 6000, 300, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, inventoryLooksComplete(tt.stored, tt.current, tt.pendingDropCnt))
+		})
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"localhost:8080":     true,
+		"127.0.0.1:8080":     true,
+		"[::1]:8080":         true,
+		"app.localhost":      true,
+		"localhost":          true,
+		"evil.com:8080":      false,
+		"192.168.1.5:8080":   false,
+		"localhost.evil.com": false,
+	} {
+		assert.Equal(t, want, isLoopbackHost(host), host)
+	}
+}
+
+func TestLocalRequestGuard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(localRequestGuard([]string{"http://localhost:5173"}))
+	r.GET("/api/x", func(c *gin.Context) { c.Status(200) })
+	r.POST("/api/x", func(c *gin.Context) { c.Status(200) })
+	r.DELETE("/api/x", func(c *gin.Context) { c.Status(200) })
+
+	tests := []struct {
+		name    string
+		method  string
+		host    string
+		headers map[string]string
+		body    string
+		want    int
+	}{
+		{"same-origin GET", "GET", "localhost:8080", nil, "", 200},
+		{"rebinding host", "GET", "evil.com:8080", nil, "", 403},
+		{"allowed dev origin", "GET", "localhost:8080", map[string]string{"Origin": "http://localhost:5173"}, "", 200},
+		{"foreign origin", "GET", "localhost:8080", map[string]string{"Origin": "https://evil.com"}, "", 403},
+		{"cross-site fetch", "GET", "localhost:8080", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}, "", 403},
+		{"cross-site navigation opens the page", "GET", "localhost:8080", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"}, "", 200},
+		{"text/plain POST body", "POST", "localhost:8080", map[string]string{"Content-Type": "text/plain"}, `{"a":1}`, 415},
+		{"JSON POST body", "POST", "localhost:8080", map[string]string{"Content-Type": "application/json"}, `{"a":1}`, 200},
+		{"bodyless DELETE", "DELETE", "localhost:8080", nil, "", 200},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/api/x", strings.NewReader(tt.body))
+			req.Host = tt.host
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			assert.Equal(t, tt.want, w.Code)
+		})
+	}
+}
+
+func TestCostManagementLimitersStayWithinTenantLimit(t *testing.T) {
+	perMin := float64(costLimiter.Limit()+forecastLimiter.Limit()) * 60
+	assert.LessOrEqual(t, perMin, float64(costManagementCallsPerMin)+1e-9)
+}

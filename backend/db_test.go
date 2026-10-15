@@ -1435,3 +1435,59 @@ func TestDBCache_GetForecastAnyAge(t *testing.T) {
 	assert.Equal(t, 2000.0, forecast)
 	assert.WithinDuration(t, time.Now().Add(-48*time.Hour), fetchedAt, time.Minute)
 }
+
+func TestDBCache_PruneHistory(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	old := time.Now().AddDate(0, 0, -100)
+	recent := time.Now().AddDate(0, 0, -1)
+	for _, ts := range []time.Time{old, old, recent} {
+		_, err := cache.db.Exec("INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, timestamp) VALUES ('id', 'n', 't', 'created', ?)", ts)
+		require.NoError(t, err)
+	}
+
+	n, err := cache.pruneHistory(time.Now().AddDate(0, 0, -30))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n, "Only rows older than the cutoff should be deleted")
+
+	n, err = cache.pruneHistory(time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "A zero cutoff should delete everything left")
+
+	require.NoError(t, cache.compact())
+}
+
+func TestDBCache_IsStaleFreshAndOld(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	assert.True(t, cache.isStale("missing-sub"), "A sub with no cost rows is stale")
+
+	colCost, colID := "Cost", "ResourceId"
+	cache.set("sub", "current", armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{
+		Columns: []*armcostmanagement.QueryColumn{{Name: &colCost}, {Name: &colID}},
+		Rows:    [][]any{{10.0, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"}},
+	}})
+	assert.False(t, cache.isStale("sub"), "Freshly cached costs are not stale")
+
+	_, err := cache.db.Exec("UPDATE costs SET fetched_at = ? WHERE subscription_id = 'sub'", time.Now().Add(-7*time.Hour))
+	require.NoError(t, err)
+	assert.True(t, cache.isStale("sub"), "Costs older than 6 hours are stale")
+}
+
+func TestDBCache_GetCachedDailyCostsIgnoresAge(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	today := time.Now().Format("2006-01-02")
+	cache.setDailyCosts("sub", []map[string]any{{"date": today, "cost": 42.0}})
+	_, err := cache.db.Exec("UPDATE cost_daily SET fetched_at = ? WHERE subscription_id = 'sub'", time.Now().Add(-72*time.Hour))
+	require.NoError(t, err)
+
+	_, fresh := cache.getDailyCosts("sub", time.Now().AddDate(0, 0, -1), time.Now())
+	assert.False(t, fresh, "72h-old rows should need a refresh")
+	rows := cache.getCachedDailyCosts("sub", time.Now().AddDate(0, 0, -1), time.Now())
+	require.Len(t, rows, 1, "Stale rows should still be returned for display")
+	assert.Equal(t, 42.0, rows[0]["cost"])
+}

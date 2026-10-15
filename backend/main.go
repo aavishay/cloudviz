@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"errors"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -55,14 +58,16 @@ var (
 	argClient      *armresourcegraph.Client
 	lastSync       time.Time
 	syncMutex      sync.Mutex
-	// Azure Cost Management tenant-level hard limit: 20 calls/min across all scopes.
+	// Azure Cost Management tenant-level hard limit: 20 calls/min across all scopes,
+	// split between query calls (costLimiter, 14/min) and forecast calls
+	// (forecastLimiter, 6/min). The two are separate queues so forecast backlogs can't
+	// push cost-sync waits past their deadlines, but together they stay within 20/min.
 	// Burst of 3 absorbs brief spikes without violating the per-minute ceiling.
-	costLimiter = rate.NewLimiter(rate.Limit(20.0/60.0), 3)
+	costLimiter = rate.NewLimiter(rate.Limit(costQueryCallsPerMin/60.0), 3)
 	// QPU limiter: 60 QPU/min sustained (1 token/s), burst 12 covers the 12 QPU/10s window.
 	qpuLimiter = rate.NewLimiter(rate.Limit(1.0), 12)
-	// forecastLimiter caps background forecast fetches to 6/min so they cannot consume
-	// more than ~30% of the 20/min tenant budget, leaving the rest for cost sync calls.
-	forecastLimiter = rate.NewLimiter(rate.Limit(6.0/60.0), 2)
+	// forecastLimiter caps background forecast fetches to their share of the tenant budget.
+	forecastLimiter = rate.NewLimiter(rate.Limit(forecastCallsPerMin/60.0), 2)
 	// HTTP client with connection pooling for reuse
 	httpClient     = &http.Client{
 		Timeout: 60 * time.Second,
@@ -108,6 +113,12 @@ func toAnySlice(ss []string) []any {
 	}
 	return result
 }
+
+const (
+	costManagementCallsPerMin = 20 // Azure tenant-level limit
+	forecastCallsPerMin       = 6
+	costQueryCallsPerMin      = costManagementCallsPerMin - forecastCallsPerMin
+)
 
 var Version = "2.1.11"
 
@@ -260,7 +271,37 @@ func main() {
 			fmt.Println("Cache cleared successfully.")
 		},
 	}
-	cacheCmd.AddCommand(cacheClearCmd)
+	var cachePruneHistoryCmd = &cobra.Command{
+		Use:   "prune-history",
+		Short: "Delete resource change history and compact the database",
+		Long: `Delete resource change history and compact the database.
+
+Versions before 2.1.12 recorded filtered resource lists as mass deletions and
+creations, so history recorded by them is unreliable. Stop the server first.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			all, _ := cmd.Flags().GetBool("all")
+			olderThanDays, _ := cmd.Flags().GetInt("older-than-days")
+			if all == (olderThanDays > 0) {
+				log.Fatalf("Error: pass exactly one of --all or --older-than-days N")
+			}
+			var cutoff time.Time
+			if !all {
+				cutoff = time.Now().AddDate(0, 0, -olderThanDays)
+			}
+			n, err := cache.pruneHistory(cutoff)
+			if err != nil {
+				log.Fatalf("Error: %v", err)
+			}
+			fmt.Printf("Deleted %d history rows. Compacting database...\n", n)
+			if err := cache.compact(); err != nil {
+				log.Fatalf("Error: %v", err)
+			}
+			fmt.Println("Done.")
+		},
+	}
+	cachePruneHistoryCmd.Flags().Bool("all", false, "Delete all history")
+	cachePruneHistoryCmd.Flags().Int("older-than-days", 0, "Delete history older than N days")
+	cacheCmd.AddCommand(cacheClearCmd, cachePruneHistoryCmd)
 
 	rootCmd.AddCommand(resourcesCmd, costsCmd, serveCmd, cacheCmd)
 	if err := rootCmd.Execute(); err != nil {
@@ -315,6 +356,76 @@ func filterActiveSubscriptions(subs []Subscription) []Subscription {
 		}
 	}
 	return active
+}
+
+const (
+	inventorySnapshotDelay    = 2 * time.Minute
+	inventorySnapshotInterval = 30 * time.Minute
+)
+
+// runInventorySnapshots periodically records resource changes from a full, unfiltered
+// inventory, which is the only input that can tell a deleted resource from a filtered one.
+func runInventorySnapshots(ctx context.Context) {
+	// Let startup traffic (filters, first resource load) through ARG before the first scan.
+	select {
+	case <-time.After(inventorySnapshotDelay):
+	case <-ctx.Done():
+		return
+	}
+	var pendingDropCount int
+	for {
+		pendingDropCount = snapshotInventory(ctx, pendingDropCount)
+		select {
+		case <-time.After(inventorySnapshotInterval):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// snapshotInventory fetches the full inventory and records changes against the stored
+// snapshot. pendingDropCount is the size of a previous scan that was rejected as a
+// suspicious drop; the new value to carry forward is returned.
+func snapshotInventory(ctx context.Context, pendingDropCount int) int {
+	sctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	res, _, err := FetchResourcesWithCosts(sctx, nil, nil, nil, nil, "", false, false, false, false, "", "")
+	if err != nil {
+		log.Printf("Inventory snapshot skipped: %v", err)
+		return pendingDropCount
+	}
+	var stored int
+	if err := cache.db.QueryRow("SELECT COUNT(*) FROM resources").Scan(&stored); err != nil {
+		log.Printf("Inventory snapshot skipped: failed to count stored resources: %v", err)
+		return pendingDropCount
+	}
+	if !inventoryLooksComplete(stored, len(res), pendingDropCount) {
+		log.Printf("Inventory snapshot held back: %d resources vs %d stored; waiting for a second scan to confirm the drop", len(res), stored)
+		return len(res)
+	}
+	recordResourceChanges(cache.db, res)
+	log.Printf("Inventory snapshot recorded: %d resources", len(res))
+	return 0
+}
+
+// inventoryLooksComplete guards change recording against partial scans (ARG throttling,
+// unresolved subscription names), which would otherwise be logged as mass deletions.
+// A drop of more than 20% is accepted only when a previous scan saw about the same count.
+func inventoryLooksComplete(stored, current, pendingDropCount int) bool {
+	if current == 0 {
+		return false
+	}
+	if stored == 0 || current*5 >= stored*4 {
+		return true
+	}
+	if pendingDropCount == 0 {
+		return false
+	}
+	diff := current - pendingDropCount
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff*20 <= pendingDropCount
 }
 
 // dailyCostsLookFlat reports whether all non-zero daily costs are identical.
@@ -378,9 +489,10 @@ func startServer(port string) {
 	}
 
 	origins := strings.Split(allowedOrigins, ",")
+	r.Use(localRequestGuard(origins))
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     origins,
-		AllowMethods:     []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
@@ -491,8 +603,9 @@ func startServer(port string) {
 				res[i].SubscriptionID = "masked-sub"
 			}
 		}
-		// Record changes asynchronously to not block the response
-		go recordResourceChanges(cache.db, res)
+		// Change history is recorded only by runInventorySnapshots from a full, unfiltered
+		// inventory. Recording here would log every resource outside the filter (or every
+		// masked rename) as a change.
 		c.JSON(200, gin.H{"data": res, "totalCost": totalCost, "total": len(res)})
 	})
 
@@ -588,8 +701,8 @@ func startServer(port string) {
 		byDate := make(map[string]float64)
 		flatSubs := make(map[string][]map[string]any)
 		for _, sid := range subs {
-			daily, ok := cache.getDailyCosts(sid, start, now)
-			if !ok {
+			daily := cache.getCachedDailyCosts(sid, start, now)
+			if len(daily) == 0 {
 				continue
 			}
 			// If the cached rows are suspiciously flat, hold them as a fallback
@@ -1004,13 +1117,13 @@ func startServer(port string) {
 				// Cache-only: never make live Azure calls from anomaly endpoints.
 				// Live data is fetched exclusively by the SSE sync stream to avoid
 				// competing for the Azure Cost Management rate limit (20 calls/min).
-				current, ok1 := cache.getDailyCosts(subID, currentStart, now)
-				if !ok1 {
+				current := cache.getCachedDailyCosts(subID, currentStart, now)
+				if len(current) == 0 {
 					return
 				}
 
-				previous, ok2 := cache.getDailyCosts(subID, previousStart, previousEnd)
-				if !ok2 {
+				previous := cache.getCachedDailyCosts(subID, previousStart, previousEnd)
+				if len(previous) == 0 {
 					return
 				}
 
@@ -1215,13 +1328,13 @@ func startServer(port string) {
 
 				// Cache-only: never make live Azure calls from anomaly endpoints.
 				// Live data is fetched exclusively by the SSE sync stream.
-				current, ok1 := cache.getDailyCosts(subID, currentStart, now)
-				if !ok1 {
+				current := cache.getCachedDailyCosts(subID, currentStart, now)
+				if len(current) == 0 {
 					return
 				}
 
-				previous, ok2 := cache.getDailyCosts(subID, previousStart, previousEnd)
-				if !ok2 {
+				previous := cache.getCachedDailyCosts(subID, previousStart, previousEnd)
+				if len(previous) == 0 {
 					return
 				}
 
@@ -1860,8 +1973,8 @@ func startServer(port string) {
 				defer func() { <-sem }()
 
 				// Cache-only: live fetches happen exclusively via the SSE sync.
-				daily, ok := cache.getDailyCosts(subID, start, now)
-				if !ok {
+				daily := cache.getCachedDailyCosts(subID, start, now)
+				if len(daily) == 0 {
 					return
 				}
 				mu.Lock()
@@ -2413,8 +2526,8 @@ func startServer(port string) {
 				defer func() { <-sem }()
 
 				// Cache-only: live fetches happen exclusively via the SSE sync.
-				daily, ok := cache.getDailyCosts(subID, start, now)
-				if !ok {
+				daily := cache.getCachedDailyCosts(subID, start, now)
+				if len(daily) == 0 {
 					return
 				}
 
@@ -4010,8 +4123,82 @@ func startServer(port string) {
 
 	// Background sync disabled - fetch costs on-demand via SSE only
 	// go backgroundSync(costClient)
+	go runInventorySnapshots(context.Background())
+	go cache.runWALCheckpoints(context.Background(), 10*time.Minute)
 	go openBrowser(fmt.Sprintf("http://localhost:%s", port))
-	r.Run(":" + port)
+	if err := serveLoopback(r, port); err != nil {
+		log.Fatalf("Server error: %v", err)
+	}
+}
+
+// serveLoopback serves the app on the IPv4 and IPv6 loopback addresses only, so other
+// machines on the network can't reach the (unauthenticated) API.
+func serveLoopback(handler http.Handler, port string) error {
+	v4, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: handler}
+	// Browsers often resolve localhost to ::1 first; serve it too when IPv6 is available.
+	if v6, err := net.Listen("tcp", net.JoinHostPort("::1", port)); err == nil {
+		go func() {
+			if err := srv.Serve(v6); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("IPv6 loopback listener stopped: %v", err)
+			}
+		}()
+	}
+	log.Printf("Listening on http://localhost:%s (loopback only)", port)
+	return srv.Serve(v4)
+}
+
+// isLoopbackHost reports whether a Host header (with optional port) names this machine.
+// Rejecting other hosts blocks DNS-rebinding pages from reading the API.
+func isLoopbackHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.ToLower(host), "[]")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// localRequestGuard rejects requests that a local, unauthenticated API must not serve:
+// a non-loopback Host (DNS rebinding), cross-site requests other than opening the page
+// itself, and request bodies that aren't JSON (cross-site "simple" POSTs skip CORS preflight).
+func localRequestGuard(allowedOrigins []string) gin.HandlerFunc {
+	allowed := make(map[string]bool, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		allowed[strings.TrimSpace(o)] = true
+	}
+	return func(c *gin.Context) {
+		req := c.Request
+		if !isLoopbackHost(req.Host) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden host"})
+			return
+		}
+		if origin := req.Header.Get("Origin"); origin != "" && !allowed[origin] {
+			if u, err := url.Parse(origin); err != nil || !isLoopbackHost(u.Host) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden origin"})
+				return
+			}
+		}
+		isNavigation := req.Method == http.MethodGet && req.Header.Get("Sec-Fetch-Mode") == "navigate"
+		if req.Header.Get("Sec-Fetch-Site") == "cross-site" && !isNavigation {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "cross-site request"})
+			return
+		}
+		switch req.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+			if req.ContentLength != 0 && !strings.HasPrefix(req.Header.Get("Content-Type"), "application/json") {
+				c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{"error": "request body must be application/json"})
+				return
+			}
+		}
+		c.Next()
+	}
 }
 
 // openBrowser opens the default browser at the given URL.
@@ -4539,8 +4726,9 @@ func sseHandler(c *gin.Context) {
 				freshCached = append(freshCached, sid)
 			}
 		}
-		// Stale subs get served immediately from cache, then queued for live re-fetch.
-		uncached = append(staleCached, uncached...)
+		// Stale subs get served immediately from cache, then queued for live re-fetch
+		// after the subs that have no data at all, so a reload doesn't starve those.
+		uncached = append(uncached, staleCached...)
 
 		// Send cached data in chunks of 10 subs to avoid oversized SSE messages.
 		// A single message for 60+ subs can exceed 8MB and cause silent browser failures.

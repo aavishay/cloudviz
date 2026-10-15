@@ -375,8 +375,10 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 				lim = actual.(*rate.Limiter)
 			}
 		}
-		if err := lim.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("Per-sub rate limiter error for %s: %v", logCtx, err)
+		// A limiter error means waiting would overrun ctx's deadline (or ctx is done).
+		// Fail rather than send the call unthrottled, which is what triggers Azure 429s.
+		if err := lim.Wait(ctx); err != nil {
+			return zero, fmt.Errorf("per-sub rate limit for %s: %w", logCtx, err)
 		}
 	}
 
@@ -387,12 +389,12 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 			}
 		}
 		// Tenant-level limit (20/min) — must not exceed across all concurrent sub calls.
-		if err := costLimiter.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("Rate limiter error for %s: %v", logCtx, err)
+		if err := costLimiter.Wait(ctx); err != nil {
+			return zero, fmt.Errorf("tenant rate limit for %s: %w", logCtx, err)
 		}
 		// QPU limit: 60 QPU/min, 12 QPU/10s burst. Each query counts as 1 QPU.
-		if err := qpuLimiter.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("QPU rate limiter error for %s: %v", logCtx, err)
+		if err := qpuLimiter.Wait(ctx); err != nil {
+			return zero, fmt.Errorf("QPU rate limit for %s: %w", logCtx, err)
 		}
 
 		result, err := fn()
@@ -431,8 +433,8 @@ func retryAfter429[T any](ctx context.Context, logCtx string, fn func() (T, erro
 
 // retryAfterForecast is the forecast-specific retry helper. It uses forecastLimiter
 // exclusively and never touches costLimiter or qpuLimiter, so forecast calls cannot
-// queue up on the shared tenant limiter and cause "would exceed context deadline" errors
-// for cost sync goroutines. Max backoff is capped at 60s (vs 120s for cost calls) because
+// queue up on the cost-query limiter and cause "would exceed context deadline" errors
+// for cost sync goroutines; the two limiters' rates sum to the tenant limit. Max backoff is capped at 60s (vs 120s for cost calls) because
 // forecast data is non-critical and a 90s context is used by the caller.
 func retryAfterForecast[T any](ctx context.Context, logCtx string, fn func() (T, error)) (T, error) {
 	var zero T
@@ -2111,8 +2113,8 @@ func fetchMarketplacePurchases(client *armcostmanagement.QueryClient, sid string
 			Grouping: []*armcostmanagement.QueryGrouping{
 				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ResourceId")},
 				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("ResourceGroup")},
-				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("PublisherType")},
-				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("PublisherName")},
+				// PublisherName isn't a valid grouping (Azure rejects the whole query with 400);
+				// the publisher is derived from the resource ID in parseMarketplaceResults.
 				{Type: to.Ptr(armcostmanagement.QueryColumnTypeDimension), Name: to.Ptr("Product")},
 			},
 			Granularity: to.Ptr(armcostmanagement.GranularityTypeDaily),
@@ -2135,6 +2137,18 @@ func fetchMarketplacePurchases(client *armcostmanagement.QueryClient, sid string
 		}
 		return parseMarketplaceResults(res.QueryResult), nil
 	})
+}
+
+// resourceProvider returns the provider namespace of an ARM resource ID
+// (e.g. "microsoft.saas"), or "" when the ID has no provider segment.
+func resourceProvider(resourceID string) string {
+	parts := strings.Split(resourceID, "/")
+	for i, p := range parts {
+		if strings.EqualFold(p, "providers") && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 // fetchCommitmentPurchases queries Azure Cost Management for RI and Savings Plan purchases
@@ -2385,7 +2399,7 @@ func parseMarketplaceResults(res armcostmanagement.QueryResult) []map[string]any
 			if strings.Contains(name, "resourcegroup") || strings.Contains(name, "resource_group") {
 				colResourceGroup = i
 			}
-			if strings.Contains(name, "publishername") || strings.Contains(name, "publisher") {
+			if name == "publishername" {
 				colPublisher = i
 			}
 			if strings.Contains(name, "product") {
@@ -2437,6 +2451,10 @@ func parseMarketplaceResults(res armcostmanagement.QueryResult) []map[string]any
 
 		if colPublisher >= 0 && colPublisher < len(row) {
 			purchase["publisher"] = fmt.Sprintf("%v", row[colPublisher])
+		} else if id, ok := purchase["resourceId"].(string); ok {
+			if publisher := resourceProvider(id); publisher != "" {
+				purchase["publisher"] = publisher
+			}
 		}
 
 		if colProduct >= 0 && colProduct < len(row) {

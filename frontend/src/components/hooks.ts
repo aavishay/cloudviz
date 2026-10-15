@@ -187,6 +187,8 @@ interface CacheEntry<T> {
 }
 
 const globalCache = new Map<string, CacheEntry<unknown>>();
+// Requests in flight per key, so concurrent callers share one network request.
+const inFlight = new Map<string, Promise<unknown>>();
 
 interface UseCachedFetchOptions {
   key: string;
@@ -210,24 +212,46 @@ export function useCachedFetch<T>(
   const [isLoading, setIsLoading] = useState(!data && enabled);
   const [error, setError] = useState<Error | null>(null);
 
-  const refetch = useCallback(async () => {
+  // Callers pass inline fetchers and callbacks, which are new on every render. Reading
+  // them through refs keeps refetch stable, so the effect below doesn't refetch on every
+  // render (or retry forever while a request keeps failing).
+  const fetcherRef = useRef(fetcher);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+    onErrorRef.current = onError;
+  });
+
+  // Resolves to null on failure; the error is reported through `error` and onError.
+  const refetch = useCallback(async (): Promise<T | null> => {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await fetcher();
+      let request = inFlight.get(key) as Promise<T> | undefined;
+      if (!request) {
+        request = fetcherRef.current();
+        inFlight.set(key, request);
+        request.then(
+          () => inFlight.delete(key),
+          () => inFlight.delete(key),
+        );
+      }
+      const result = await request;
       globalCache.set(key, { data: result, timestamp: Date.now(), ttl });
       setData(result);
       return result;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       setError(error);
-      onError?.(error);
-      throw error;
+      onErrorRef.current?.(error);
+      return null;
     } finally {
       setIsLoading(false);
     }
-  }, [fetcher, key, ttl, onError]);
+  }, [key, ttl]);
 
+  // Load once per key (or when enabled flips on). A failed load is not retried
+  // automatically; callers retry through refetch (e.g. a Refresh or Try Again button).
   useEffect(() => {
     if (!enabled) return;
 

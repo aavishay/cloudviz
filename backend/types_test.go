@@ -4,7 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/costmanagement/armcostmanagement"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewOllamaCircuitBreaker(t *testing.T) {
@@ -255,4 +257,32 @@ func TestRecommendation_Struct(t *testing.T) {
 	assert.Equal(t, "Downsize VM", rec.Action)
 	assert.Equal(t, 50.0, rec.EstimatedSavings)
 	assert.Equal(t, 1, rec.Priority)
+}
+
+func TestResourceProvider(t *testing.T) {
+	assert.Equal(t, "microsoft.saas", resourceProvider("/subscriptions/s/resourcegroups/rg/providers/microsoft.saas/resources/x"))
+	assert.Equal(t, "Microsoft.Compute", resourceProvider("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm"))
+	assert.Equal(t, "", resourceProvider("/subscriptions/s"))
+	assert.Equal(t, "", resourceProvider(""))
+}
+
+func TestParseMarketplaceResults_PublisherFromResourceID(t *testing.T) {
+	cols := []string{"PreTaxCost", "UsageDate", "ResourceId", "ResourceGroup", "Product", "Currency"}
+	var columns []*armcostmanagement.QueryColumn
+	for _, c := range cols {
+		name := c
+		columns = append(columns, &armcostmanagement.QueryColumn{Name: &name})
+	}
+	res := armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{
+		Columns: columns,
+		Rows: [][]any{
+			{2.0, float64(20260930), "/subscriptions/s/resourcegroups/rg/providers/microsoft.saas/resources/elastic", "rg", "Pay per use", "USD"},
+			{0.0, float64(20260930), "/subscriptions/s/resourcegroups/rg/providers/microsoft.saas/resources/free", "rg", "Free", "USD"},
+		},
+	}}
+	got := parseMarketplaceResults(res)
+	require.Len(t, got, 1, "Zero-cost rows should be skipped")
+	assert.Equal(t, "microsoft.saas", got[0]["publisher"])
+	assert.Equal(t, "Pay per use", got[0]["product"])
+	assert.Equal(t, "elastic", got[0]["resourceName"])
 }

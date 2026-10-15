@@ -18,7 +18,9 @@ type dbCache struct {
 
 func newDBCache(dbPath string) (*dbCache, error) {
 	// file: URI enables per-connection _pragma parameters (applied on every new connection in the pool)
-	dsn := "file:" + dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(15000)&_pragma=synchronous(NORMAL)"
+	// journal_size_limit truncates the WAL back to 64 MB after checkpoints; without it the
+	// WAL keeps its high-water size (it had grown past the database itself).
+	dsn := "file:" + dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(15000)&_pragma=synchronous(NORMAL)&_pragma=journal_size_limit(67108864)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -616,6 +618,14 @@ func (dc *dbCache) getDailyCosts(subID string, start, end time.Time) ([]map[stri
 	return results, true
 }
 
+// getCachedDailyCosts returns the cached daily rows in the window regardless of their age.
+// Read-only endpoints use it: stale rows beat a gap, and the SSE sync refreshes them.
+// getDailyCosts' ok result is for deciding whether to refetch, not whether to display.
+func (dc *dbCache) getCachedDailyCosts(subID string, start, end time.Time) []map[string]any {
+	rows, _ := dc.getDailyCosts(subID, start, end)
+	return rows
+}
+
 func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
 	if _, err := dc.db.Exec("DELETE FROM cost_daily WHERE subscription_id = ?", subID); err != nil {
 		log.Printf("Warning: failed to delete old daily costs: %v", err)
@@ -804,11 +814,63 @@ func (dc *dbCache) getCachedSubscriptions(subIDs []string, period string) ([]str
 // Used to decide whether to queue a background re-fetch after serving cached data.
 func (dc *dbCache) isStale(subID string) bool {
 	var fetchedAt time.Time
-	err := dc.db.QueryRow("SELECT MAX(fetched_at) FROM costs WHERE subscription_id = ? AND period = 'current'", subID).Scan(&fetchedAt)
+	// Not MAX(fetched_at): aggregates lose the column's DATETIME type, so the driver returns
+	// a string that can't scan into time.Time and every sub looked stale.
+	err := dc.db.QueryRow("SELECT fetched_at FROM costs WHERE subscription_id = ? AND period = 'current' ORDER BY fetched_at DESC LIMIT 1", subID).Scan(&fetchedAt)
 	if err != nil || fetchedAt.IsZero() {
 		return true
 	}
 	return time.Since(fetchedAt) > 6*time.Hour
+}
+
+// checkpointWAL folds the WAL back into the database and truncates it.
+func (dc *dbCache) checkpointWAL() error {
+	_, err := dc.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
+}
+
+// runWALCheckpoints truncates the WAL periodically. SQLite's automatic checkpoints never
+// shrink the file, and long-lived readers can keep them from completing.
+func (dc *dbCache) runWALCheckpoints(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := dc.checkpointWAL(); err != nil {
+				log.Printf("Warning: WAL checkpoint failed: %v", err)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// pruneHistory deletes resource_history rows older than the cutoff (all rows when the
+// cutoff is zero) and returns how many were removed.
+func (dc *dbCache) pruneHistory(olderThan time.Time) (int64, error) {
+	var res sql.Result
+	var err error
+	if olderThan.IsZero() {
+		res, err = dc.db.Exec("DELETE FROM resource_history")
+	} else {
+		res, err = dc.db.Exec("DELETE FROM resource_history WHERE timestamp < ?", olderThan)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// compact checkpoints the WAL and rebuilds the database file to release free pages.
+func (dc *dbCache) compact() error {
+	if err := dc.checkpointWAL(); err != nil {
+		return err
+	}
+	if _, err := dc.db.Exec("VACUUM"); err != nil {
+		return err
+	}
+	return dc.checkpointWAL()
 }
 
 func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
