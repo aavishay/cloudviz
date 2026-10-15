@@ -40,6 +40,7 @@ export {
   inferEnvFromRG,
   getTimeAgo
 } from './utils';
+export { normalizeEnvTag } from './env';
 
 // Types
 export type {

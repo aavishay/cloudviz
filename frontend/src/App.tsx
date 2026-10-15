@@ -19,6 +19,7 @@ import {
   EmptyState,
   friendlyType,
   inferEnvFromRG,
+  normalizeEnvTag,
   type AzureResource,
   type CostPrediction,
   type CostItem,
@@ -1962,14 +1963,14 @@ export default function App() {
               const projectedMonthly = forecastData?.runRateForecast && forecastData.runRateForecast > 0
                 ? forecastData.runRateForecast
                 : currentTotal + forecastTotal;
-              const dayOfMonth = new Date().getDate();
               return (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
                   {[
                     { label: 'Actual', value: `$${currentTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'incurred', color: 'var(--text-1)' },
                     { label: 'Forecast', value: `$${forecastTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'remaining', color: 'var(--accent)' },
                     { label: 'Month-End', value: `$${projectedMonthly.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: 'est. total', color: 'var(--text-1)' },
-                    { label: 'On Track', value: budgetLimit > 0 ? `${((budgetLimit / projectedMonthly) * 100 / 30 * dayOfMonth).toFixed(0)}%` : 'N/A', sub: 'of budget used', color: budgetLimit > 0 && projectedMonthly > budgetLimit ? 'var(--danger)' : 'var(--text-1)' },
+                    // Budget used so far this month, and where the month-end estimate lands.
+                    { label: 'Budget', value: budgetLimit > 0 ? `${((currentTotal / budgetLimit) * 100).toFixed(0)}%` : 'N/A', sub: budgetLimit > 0 ? `used · ${((projectedMonthly / budgetLimit) * 100).toFixed(0)}% projected` : 'no budget set', color: budgetLimit > 0 && projectedMonthly > budgetLimit ? 'var(--danger)' : 'var(--text-1)' },
                   ].map((stat, i) => (
                     <div key={i} style={{ padding: '12px 14px', background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)', textAlign: 'center' }}>
                       <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{stat.label}</div>
@@ -2959,18 +2960,9 @@ export default function App() {
             .filter((item: AggregatedCost) => item.previousCost > 0.01);
           const allItems = [...newItems, ...ghostItems];
 
-          setResources(prev => {
-            return prev.map(r => {
-              if (r.subscriptionId !== subId) return r;
-              const matchingCost = newItems.find((c: AggregatedCost) =>
-                c.resourceGroup.toLowerCase() === r.resourceGroup?.toLowerCase() &&
-                // Flexible match for types and exact match for normalized location
-                (c.resourceType.includes(r.type?.toLowerCase() || '') || (r.type?.toLowerCase() || '').includes(c.resourceType)) &&
-                c.resourceLocation.toLowerCase() === (r.location?.toLowerCase() || '').replace(/\s/g, '')
-              );
-              return { ...r, cost: matchingCost ? matchingCost.cost : r.cost };
-            });
-          });
+          // Resource costs come from /api/resources, which matches costs per resource.
+          // These items are resource-group/type/location aggregates, so they must not be
+          // copied onto individual resources.
 
           setCosts(prev => {
             const filtered = prev.filter(c => c.subscriptionId !== subId);
@@ -4366,9 +4358,16 @@ export default function App() {
 
   const debouncedCostSearch = useDebounce(costSearchQuery, 300);
 
+  // Costs for the selected subscriptions only, so dashboard totals follow the selection
+  // like the forecast, daily and anomaly panels do.
+  const selectedCosts = useMemo(() => {
+    const selected = new Set(activeSubs);
+    return costs.filter(c => selected.has(c.subscriptionId));
+  }, [costs, activeSubs]);
+
   const displayCosts = useMemo(() =>
-    costs.filter(c => c.resourceType?.toLowerCase() !== 'dailyaggregate'),
-  [costs]);
+    selectedCosts.filter(c => c.resourceType?.toLowerCase() !== 'dailyaggregate'),
+  [selectedCosts]);
 
   const filteredCosts = useMemo(() => {
     let result = displayCosts;
@@ -4404,7 +4403,7 @@ export default function App() {
     return result;
   }, [displayCosts, debouncedCostSearch, tagFilter, resources]);
 
-  const totalCostsSum = useMemo(() => costs.reduce((s, c) => s + c.cost, 0), [costs]);
+  const totalCostsSum = useMemo(() => selectedCosts.reduce((s, c) => s + c.cost, 0), [selectedCosts]);
 
   // Dashboard computed values
   const costsByType = useMemo(() => {
@@ -4433,19 +4432,12 @@ export default function App() {
 
   const costsBySubscription = useMemo(() => {
     const map = new Map<string, number>();
-    const nameMap = new Map<string, string>();
-    // Build a map of subscriptionId -> subscriptionName from resources
-    resources.forEach(r => {
-      if (r.subscriptionId && r.subscriptionName) {
-        nameMap.set(r.subscriptionId, r.subscriptionName);
-      }
-    });
-    costs.forEach(c => {
-      const subName = nameMap.get(c.subscriptionId) || c.subscriptionId.split('-')[0];
+    selectedCosts.forEach(c => {
+      const subName = subNameMap.get(c.subscriptionId) || c.subscriptionId.split('-')[0];
       map.set(subName, (map.get(subName) || 0) + c.cost);
     });
     return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [costs, resources]);
+  }, [selectedCosts, subNameMap]);
 
   const topSpenders = useMemo(() => {
     return [...displayCosts].sort((a, b) => b.cost - a.cost).slice(0, 5);
@@ -4481,8 +4473,7 @@ export default function App() {
   const costsByEnvironment = useMemo(() => {
     const envMap = new Map<string, number>();
     resources.forEach(r => {
-      const env = r.tags?.Environment || r.tags?.environment || r.tags?.env || 'Untagged';
-      const normalizedEnv = env.charAt(0).toUpperCase() + env.slice(1).toLowerCase();
+      const normalizedEnv = normalizeEnvTag(r.tags?.Environment || r.tags?.environment || r.tags?.env || '');
       envMap.set(normalizedEnv, (envMap.get(normalizedEnv) || 0) + (r.cost || 0));
     });
     return Array.from(envMap.entries())
@@ -4620,7 +4611,7 @@ export default function App() {
 
   // Reserved Instance recommendations (for consistent VMs)
   const riRecommendations = useMemo(() => {
-    const vmCosts = costs.filter(c =>
+    const vmCosts = selectedCosts.filter(c =>
       (c.resourceType || '').toLowerCase().includes('virtualmachines') ||
       (c.resourceType || '').toLowerCase().includes('compute/virtualmachines')
     );
@@ -4649,7 +4640,7 @@ export default function App() {
       .filter(r => r.monthlyCost > 500) // Only recommend for significant spend
       .sort((a, b) => b.potentialSavings - a.potentialSavings)
       .slice(0, 5);
-  }, [costs]);
+  }, [selectedCosts]);
 
   // Cost anomalies - significant cost spikes
   const costAnomalies = useMemo(() => {
