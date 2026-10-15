@@ -617,7 +617,14 @@ func startServer(port string) {
 		// Change history is recorded only by runInventorySnapshots from a full, unfiltered
 		// inventory. Recording here would log every resource outside the filter (or every
 		// masked rename) as a change.
-		c.JSON(200, gin.H{"data": res, "totalCost": totalCost, "total": len(res)})
+		resp := gin.H{"data": res, "totalCost": totalCost, "total": len(res)}
+		// Only an unfiltered list (subscriptions aside) can say how much billed cost matches
+		// no listed resource; with other filters the remainder is just filtered out.
+		if len(rgs) == 0 && len(types) == 0 && len(locs) == 0 && len(creators) == 0 && search == "" &&
+			!orphaned && !unattachedDiskOnly && !unassignedPIPOnly && !unattachedNICOnly && tagKey == "" {
+			resp["unallocatedCost"] = unallocatedCost(subs, totalCost)
+		}
+		c.JSON(200, resp)
 	})
 
 	r.GET("/api/filters", func(c *gin.Context) {
@@ -701,7 +708,8 @@ func startServer(port string) {
 			days = 30
 		}
 
-		now := time.Now()
+		// UTC: Azure billing days and cost_daily dates are UTC, so local dates shift buckets.
+		now := time.Now().UTC()
 		start := now.AddDate(0, 0, -days)
 
 		// Aggregate real daily cost data from the cache per subscription.
@@ -2407,7 +2415,8 @@ func startServer(port string) {
 		if periodDays <= 0 || periodDays > 365 {
 			periodDays = 30
 		}
-		now := time.Now()
+		// UTC: Azure billing days and cost_daily dates are UTC, so local dates shift buckets.
+		now := time.Now().UTC()
 
 		// Compare cost_daily totals only across subs whose cached daily history reaches back
 		// to the previous period's start. For other subs the previous period is unknown, not
@@ -2568,7 +2577,8 @@ func startServer(port string) {
 				return
 			}
 
-			now := time.Now()
+			// UTC: Azure billing days and cost_daily dates are UTC, so local dates shift buckets.
+			now := time.Now().UTC()
 			days := 30
 			if d := c.Query("days"); d != "" {
 				fmt.Sscanf(d, "%d", &days)
@@ -5244,6 +5254,23 @@ func computeRunRateForecast(subID string, now, monthStart, monthEnd time.Time) f
 }
 
 // Helper functions for enhanced reporting
+
+// unallocatedCost returns the current-period cost of the given subs (all cached subs when
+// none are given) that isn't attributed to a listed resource: deleted resources, and
+// charges with no ARM resource such as Visual Studio, GitHub or marketplace billing.
+func unallocatedCost(subs []string, allocated float64) float64 {
+	var total float64
+	q := "SELECT COALESCE(SUM(cost), 0) FROM costs WHERE period = 'current'"
+	var args []any
+	if len(subs) > 0 {
+		q += " AND subscription_id IN (" + placeholders(len(subs)) + ")"
+		args = toAnySlice(subs)
+	}
+	if err := cache.db.QueryRow(q, args...).Scan(&total); err != nil {
+		return 0
+	}
+	return math.Max(0, total-allocated)
+}
 
 // isReservationCandidate reports whether a resource is a VM or scale set whose compute a
 // reserved instance could cover. VM extensions aren't compute, and AKS/Karpenter-managed

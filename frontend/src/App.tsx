@@ -308,6 +308,8 @@ export default function App() {
   const [trueTotalResources, setTrueTotalResources] = useState(0);
   const [resourcesCountLoading, setResourcesCountLoading] = useState(true);
   const [filteredTotalCost, setFilteredTotalCost] = useState(0);
+  // Billed cost that matches no listed resource; null when filters make it meaningless.
+  const [unallocatedCost, setUnallocatedCost] = useState<number | null>(null);
 
   const debouncedSearch = useDebounce(searchQuery, 500);
 
@@ -2500,6 +2502,7 @@ export default function App() {
           return;
         }
         setResources(data.data || []); setTotalResources(data.total || 0); setFilteredTotalCost(data.totalCost || 0); setLoading(false);
+        setUnallocatedCost(typeof data.unallocatedCost === 'number' ? data.unallocatedCost : null);
       })
       .catch(err => { setError(err.message); setLoading(false); });
   }, [regionFilter, subFilter, rgFilter, typeFilter, creatorFilter, debouncedSearch, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, tagFilter, currentPage, sortConfig, piiMasking]);
@@ -5202,6 +5205,13 @@ export default function App() {
                     <span className="stat-value">${filteredTotalCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
                     <span style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>for {totalResources.toLocaleString()} resources</span>
                   </div>
+                  {unallocatedCost !== null && unallocatedCost >= 1 && (
+                    <div className="stat-pill" title="Billed in the last 30 days but not matched to a current resource: deleted resources, and charges with no Azure resource such as Visual Studio, GitHub or marketplace billing.">
+                      <span className="stat-label">Unallocated</span>
+                      <span className="stat-value neutral">${unallocatedCost.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>no matching resource</span>
+                    </div>
+                  )}
                   <div className="stat-pill">
                     <span className="stat-label">Showing</span>
                     <span className="stat-value neutral">{(showFavoritesOnly ? resources.filter(r => favorites.has(r.id)) : resources).length.toLocaleString()}</span>
