@@ -1330,8 +1330,10 @@ func newRouter() *gin.Engine {
 			}
 		}
 
-		now := time.Now()
+		now := time.Now().UTC()
 		currentStart := now.AddDate(0, 0, -30)
+		// End at yesterday: today's partial day always reads as a sharp drop.
+		currentEnd := now.AddDate(0, 0, -1)
 		previousStart := now.AddDate(0, 0, -60)
 		previousEnd := now.AddDate(0, 0, -30)
 
@@ -1357,7 +1359,7 @@ func newRouter() *gin.Engine {
 
 				// Cache-only: never make live Azure calls from anomaly endpoints.
 				// Live data is fetched exclusively by the SSE sync stream.
-				current := cache.getCachedDailyCosts(subID, currentStart, now)
+				current := cache.getCachedDailyCosts(subID, currentStart, currentEnd)
 				if len(current) == 0 {
 					return
 				}
@@ -1402,12 +1404,17 @@ func newRouter() *gin.Engine {
 				results := detector.Detect(subID, dates, costs, previousCosts, nil)
 
 				mu.Lock()
-				allResults = append(allResults, results.Anomalies...)
-				for sev, count := range results.Summary.BySeverity {
-					summaryMap[sev] += count
-				}
-				for method, count := range results.Summary.ByMethod {
-					methodMap[method] += count
+				for _, a := range results.Anomalies {
+					// Cost anomalies are unexpected spend: a day well below normal (e.g. after
+					// a cleanup) isn't one to act on.
+					if !isCostIncrease(a) {
+						continue
+					}
+					allResults = append(allResults, a)
+					summaryMap[a.Severity]++
+					for _, method := range a.Methods {
+						methodMap[method]++
+					}
 				}
 				mu.Unlock()
 			}(sid)
@@ -5380,6 +5387,12 @@ func copySQLiteDB(src, dst string) error {
 	defer db.Close()
 	_, err = db.Exec("VACUUM INTO ?", dst)
 	return err
+}
+
+// isCostIncrease reports whether an anomaly is spend above normal by any detection method.
+func isCostIncrease(a anomaly.EnhancedAnomalyResult) bool {
+	return a.ZScore > 0 || a.MADScore > 0 || a.SeasonalScore > 0 ||
+		(a.ExpectedCost > 0 && a.CurrentCost > a.ExpectedCost)
 }
 
 // csvSafe neutralizes spreadsheet formula injection: a cell starting with =, +, -, @, tab

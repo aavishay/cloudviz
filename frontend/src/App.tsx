@@ -20,6 +20,7 @@ import {
   friendlyType,
   inferEnvFromRG,
   normalizeEnvTag,
+  parseStored,
   toCSV,
   type AzureResource,
   type CostPrediction,
@@ -92,20 +93,20 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('cloudviz-search') || '');
   const [regionFilter, setRegionFilter] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-regionFilter');
-    return saved ? JSON.parse(saved) : [];
+    return parseStored(saved, []);
   });
   const [subFilter, setSubFilter] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-subFilter');
-    return saved ? JSON.parse(saved) : [];
+    return parseStored(saved, []);
   });
   const [rgFilter, setRgFilter] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-rgFilter');
-    return saved ? JSON.parse(saved) : [];
+    return parseStored(saved, []);
   });
   const [typeFilter, setTypeFilter] = useState(() => localStorage.getItem('cloudviz-typeFilter') || '');
   const [creatorFilter, setCreatorFilter] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-creatorFilter');
-    return saved ? JSON.parse(saved) : [];
+    return parseStored(saved, []);
   });
   const [showOrphanedOnly, setShowOrphanedOnly] = useState(() => localStorage.getItem('cloudviz-orphaned') === 'true');
   const [showUnattachedDiskOnly, setShowUnattachedDiskOnly] = useState(() => localStorage.getItem('cloudviz-unattachedDisk') === 'true');
@@ -114,7 +115,7 @@ export default function App() {
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(() => localStorage.getItem('cloudviz-favoritesOnly') === 'true');
   const [favorites, setFavorites] = useState<Set<string>>(() => {
     const saved = localStorage.getItem('cloudviz-favorites');
-    return new Set(saved ? JSON.parse(saved) : []);
+    return new Set(parseStored(saved, []));
   });
   const toggleFavorite = (resourceId: string) => {
     setFavorites(prev => {
@@ -131,19 +132,19 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-favoritesOnly', String(showFavoritesOnly)); }, [showFavoritesOnly]);
   const [tagFilter, setTagFilter] = useState<{ key: string; value: string } | null>(() => {
     const saved = localStorage.getItem('cloudviz-tag-filter');
-    return saved ? JSON.parse(saved) : null;
+    return parseStored(saved, null);
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [filterPresets, setFilterPresets] = useState<Array<{name: string; regionFilter: string[]; subFilter: string[]; rgFilter: string[]; typeFilter: string; showOrphanedOnly: boolean; showUnattachedDiskOnly: boolean; showUnassignedPIPOnly: boolean; showUnattachedNICOnly: boolean}>>(() => {
     const saved = localStorage.getItem('cloudviz-filterPresets');
-    return saved ? JSON.parse(saved) : [];
+    return parseStored(saved, []);
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('cloudviz-sidebarCollapsed') === 'true');
   const [dashboardOrder, setDashboardOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem('cloudviz-dashOrder');
     const defaultOrder = ['insights', 'summary', 'sla', 'costComparison', 'chartsRow', 'costBySub', 'costByEnv', 'costTiers', 'dailyTrends', 'optimization', 'waste', 'forecast', 'commitment', 'topology', 'tagAnalysis', 'riRecommendations', 'costAnomalies'];
-    if (saved) {
-      const parsed = JSON.parse(saved);
+    const parsed = parseStored<unknown>(saved, null);
+    if (Array.isArray(parsed)) {
       // Filter out removed panels and add any new default panels
       const filtered = parsed.filter((id: string) => defaultOrder.includes(id));
       const added = defaultOrder.filter((id: string) => !parsed.includes(id));
@@ -207,7 +208,7 @@ export default function App() {
 
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => {
     const saved = localStorage.getItem('cloudviz-sort');
-    return saved ? JSON.parse(saved) : { key: null, direction: 'asc' };
+    return parseStored(saved, { key: null, direction: 'asc' });
   });
   const [currentPage, setCurrentPage] = useState(() => {
     const saved = localStorage.getItem('cloudviz-currentPage');
@@ -222,7 +223,7 @@ export default function App() {
   const [costSearchQuery, setCostSearchQuery] = useState(() => localStorage.getItem('cloudviz-costSearchQuery') || '');
   const [costSortConfig, setCostSortConfig] = useState<{ key: keyof CostItem | null; direction: 'asc' | 'desc' }>(() => {
     const saved = localStorage.getItem('cloudviz-costSort');
-    return saved ? JSON.parse(saved) : { key: null, direction: 'asc' };
+    return parseStored(saved, { key: null, direction: 'asc' });
   });
   useEffect(() => { localStorage.setItem('cloudviz-costSort', JSON.stringify(costSortConfig)); }, [costSortConfig]);
   const [dailyCosts, setDailyCosts] = useState<{ date: string; cost: number }[]>([]);
@@ -2403,7 +2404,7 @@ export default function App() {
 
   // ── Fetch subscriptions first for immediate dropdown availability
   useEffect(() => {
-    fetch('http://localhost:8080/api/subscriptions?includeDisabled=true')
+    fetch('/api/subscriptions?includeDisabled=true')
       .then(r => r.json())
       .then(data => {
         // Dedicated auth_error flag from backend
@@ -2431,7 +2432,7 @@ export default function App() {
     refetch: refetchFilters
   } = useCachedFetch(
     async () => {
-      const res = await fetch('http://localhost:8080/api/filters');
+      const res = await fetch('/api/filters');
       const data = await res.json();
       // Check for Azure authentication errors
       if (data.error && typeof data.error === 'string') {
@@ -2458,9 +2459,9 @@ export default function App() {
 
   // ── Fetch true total resource count
   useEffect(() => {
-    fetch('http://localhost:8080/api/resources?limit=1')
+    fetch('/api/resources?limit=1')
 
-    fetch('http://localhost:8080/api/resources?limit=1')
+    fetch('/api/resources?limit=1')
       .then(r => r.json())
       .then(data => {
         // Check for Azure authentication errors
@@ -2502,7 +2503,7 @@ export default function App() {
     if (sortConfig.key) { params.append('sortBy', sortConfig.key); params.append('sortOrder', sortConfig.direction); }
     if (piiMasking) params.append('mask', 'true');
 
-    fetch(`http://localhost:8080/api/resources?${params}`, { signal: ctrl.signal })
+    fetch(`/api/resources?${params}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         // Check for Azure authentication errors
@@ -2608,7 +2609,7 @@ export default function App() {
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
     params.append('period', costPeriod);
-    fetch(`http://localhost:8080/api/costs/daily?${params}`, { signal: ctrl.signal })
+    fetch(`/api/costs/daily?${params}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -2628,7 +2629,7 @@ export default function App() {
 
   // Fetch commitment savings data
   useEffect(() => {
-    fetch('http://localhost:8080/api/commitment/savings')
+    fetch('/api/commitment/savings')
       .then(r => r.json())
       .then(data => { if (!data.error) setCommitmentSavings(data); })
       .catch(() => {});
@@ -2640,7 +2641,7 @@ export default function App() {
     const ctrl = new AbortController();
     if (activeSubs.length === 0) return;
     const subId = uniqueSubs[0];
-    fetch(`http://localhost:8080/api/costs/by-type/daily?subscriptionId=${subId}&period=${costPeriod}`, { signal: ctrl.signal })
+    fetch(`/api/costs/by-type/daily?subscriptionId=${subId}&period=${costPeriod}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => { if (!data.error) setTypeTrendData(data); })
       .catch(() => {});
@@ -2654,7 +2655,7 @@ export default function App() {
     refetch: refetchWaste
   } = useCachedFetch(
     async () => {
-      const res = await fetch('http://localhost:8080/api/waste/detect');
+      const res = await fetch('/api/waste/detect');
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       return data;
@@ -2683,7 +2684,7 @@ export default function App() {
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
-    fetch(`http://localhost:8080/api/costs/comparison?${params}&days=${costPeriod}`, { signal: ctrl.signal })
+    fetch(`/api/costs/comparison?${params}&days=${costPeriod}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         if (!data.error) {
@@ -2708,7 +2709,7 @@ export default function App() {
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
-    fetch(`http://localhost:8080/api/costs/forecast?${params}&days=${costPeriod}`)
+    fetch(`/api/costs/forecast?${params}&days=${costPeriod}`)
       .then(r => r.json())
       .then(data => { if (!data.error && data.actualCost !== undefined) setForecastData(data); })
       .catch(() => {});
@@ -2827,7 +2828,7 @@ export default function App() {
     params.append('threshold', anomalyThreshold.toString());
     params.append('minAmount', anomalyMinAmount.toString());
     params.append('minNewSpend', anomalyMinNewSpend.toString());
-    fetch(`http://localhost:8080/api/costs/anomalies?${params}`, { signal: ctrl.signal })
+    fetch(`/api/costs/anomalies?${params}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         if (data.anomalies === null) {
@@ -2847,7 +2848,7 @@ export default function App() {
     setEnhancedAnomalyLoading(true);
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
-    fetch(`http://localhost:8080/api/costs/anomalies/enhanced?${params}`, { signal: ctrl.signal })
+    fetch(`/api/costs/anomalies/enhanced?${params}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         // Normalize null anomalies to empty array so panel check works
@@ -2868,7 +2869,7 @@ export default function App() {
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
-    fetch(`http://localhost:8080/api/sla?${params}&days=30`, { signal: ctrl.signal })
+    fetch(`/api/sla?${params}&days=30`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => { if (data.data) setSlaData(data); })
       .catch(() => {});
@@ -2880,7 +2881,7 @@ export default function App() {
     setAiLoading(true);
     setAiInsight(null);
     try {
-      const res = await fetch(`http://localhost:8080/api/ai-insights?id=${encodeURIComponent(resource.id)}`);
+      const res = await fetch(`/api/ai-insights?id=${encodeURIComponent(resource.id)}`);
       setAiInsight(await res.json());
     } catch (err) {
       console.error('AI insight failed', err);
@@ -2921,7 +2922,7 @@ export default function App() {
     const params = new URLSearchParams();
     toFetch.forEach(s => params.append('subscriptionId', s));
 
-    const es = new EventSource(`http://localhost:8080/api/costs/stream?${params.toString()}`);
+    const es = new EventSource(`/api/costs/stream?${params.toString()}`);
     activeEventSourceRef.current = es;
 
     // Safety timeout: 70s per uncached sub (60s fetch + 10s buffer) + 10s base
@@ -3220,13 +3221,13 @@ export default function App() {
     setDataSubIds(new Set());
     setCostRetryCount({}); // Reset retry counts on manual refresh
     try {
-      await fetch('http://localhost:8080/api/costs/cache', { method: 'DELETE' });
+      await fetch('/api/costs/cache', { method: 'DELETE' });
     } catch (err) {
       console.error('Failed to clear cost cache', err);
     }
     // The resource list is served from an inventory rescanned every 15 minutes; ask for a
     // rescan now (it runs in the background).
-    fetch('http://localhost:8080/api/inventory/refresh', { method: 'POST' }).catch(() => {});
+    fetch('/api/inventory/refresh', { method: 'POST' }).catch(() => {});
 
     // Invalidate related caches to ensure fresh data
     invalidateCache('waste-data');
@@ -3321,7 +3322,7 @@ export default function App() {
     try {
       const params = new URLSearchParams({ days: String(days) });
       if (includeSystem) params.set('includeSystem', 'true');
-      const res = await fetch(`http://localhost:8080/api/history?${params}`);
+      const res = await fetch(`/api/history?${params}`);
       const data = await res.json();
       if (Array.isArray(data)) {
         // Legacy flat array response
@@ -3344,7 +3345,7 @@ export default function App() {
 
   const fetchRGTrends = async (days: 7 | 14 | 30 = 7) => {
     try {
-      const res = await fetch(`http://localhost:8080/api/history/rg-trends?days=${days}`);
+      const res = await fetch(`/api/history/rg-trends?days=${days}`);
       const data = await res.json();
       if (data.groups) setRGTrends(data);
     } catch (err) {
@@ -3384,7 +3385,7 @@ export default function App() {
     if (typeFilter) params.append('type', typeFilter);
     if (debouncedSearch) params.append('search', debouncedSearch);
     if (piiMasking) params.append('mask', 'true');
-    window.open(`http://localhost:8080/api/export?${params}`, '_blank');
+    window.open(`/api/export?${params}`, '_blank');
   };
 
   // Fetch enhanced report data for PDF export
@@ -3393,7 +3394,7 @@ export default function App() {
       const params = new URLSearchParams();
       subFilter.forEach(f => params.append('subscriptionId', f));
 
-      const response = await fetch(`http://localhost:8080/api/reports/enhanced?${params}`);
+      const response = await fetch(`/api/reports/enhanced?${params}`);
       if (!response.ok) throw new Error('Failed to fetch enhanced report');
       const data = await response.json();
       setEnhancedReportData(data);
@@ -5178,7 +5179,7 @@ export default function App() {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M6 8h.01M6 12h.01M6 16h.01" /></svg>
                     <kbd style={{ fontSize: 11, fontFamily: 'monospace', background: 'var(--bg-surface)', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)' }}>?</kbd>
                   </button>
-                  <button className="btn" onClick={() => { const name = prompt('Preset name:'); if (!name) return; const preset = { name, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly }; const saved = JSON.parse(localStorage.getItem('cloudviz-filterPresets') || '[]'); localStorage.setItem('cloudviz-filterPresets', JSON.stringify([...saved, preset])); setFilterPresets([...filterPresets, preset]); }} title="Save current filters as preset">
+                  <button className="btn" onClick={() => { const name = prompt('Preset name:'); if (!name) return; const preset = { name, regionFilter, subFilter, rgFilter, typeFilter, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly }; const saved = parseStored<unknown[]>(localStorage.getItem('cloudviz-filterPresets'), []); localStorage.setItem('cloudviz-filterPresets', JSON.stringify([...saved, preset])); setFilterPresets([...filterPresets, preset]); }} title="Save current filters as preset">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
                     Save Filters
                   </button>
@@ -6490,7 +6491,7 @@ export default function App() {
                   Data Cache
                 </label>
                 <button
-                  onClick={() => { fetch('http://localhost:8080/api/costs/cache', { method: 'DELETE' }); setTimeout(() => window.location.reload(), 500); }}
+                  onClick={() => { fetch('/api/costs/cache', { method: 'DELETE' }); setTimeout(() => window.location.reload(), 500); }}
                   className="btn"
                   style={{ width: '100%', justifyContent: 'center', background: 'rgba(244 63 94 / 0.1)', color: 'var(--danger)', border: '1px solid rgba(244 63 94 / 0.2)' }}
                 >

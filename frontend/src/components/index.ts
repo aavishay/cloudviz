@@ -42,6 +42,7 @@ export {
 } from './utils';
 export { normalizeEnvTag } from './env';
 export { toCSV, csvCell } from './csv';
+export { parseStored } from './storage';
 
 // Types
 export type {
