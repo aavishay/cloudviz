@@ -124,7 +124,7 @@ const (
 	costQueryCallsPerMin      = costManagementCallsPerMin - forecastCallsPerMin
 )
 
-var Version = "2.1.11"
+var Version = "2.1.12"
 
 func main() {
 	var rootCmd = &cobra.Command{
