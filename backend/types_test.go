@@ -310,3 +310,17 @@ func TestIsValidResourceID(t *testing.T) {
 		assert.False(t, isValidResourceID(bad), bad)
 	}
 }
+
+func TestExtractJSONObject(t *testing.T) {
+	want := `{"recommendations":[],"confidenceScore":0.8}`
+	for _, in := range []string{
+		want,
+		"```json\n" + want + "\n```",
+		"```\n" + want + "\n```",
+		"Here is my analysis:\n" + want + "\nHope this helps.",
+		"```json\n" + want, // unterminated fence (used to panic)
+	} {
+		assert.Equal(t, want, extractJSONObject(in), in)
+	}
+	assert.Equal(t, "no json here", extractJSONObject("no json here"))
+}

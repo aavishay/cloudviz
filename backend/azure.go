@@ -1659,25 +1659,16 @@ func fetchVMAvailability(ctx context.Context, resourceID string, days int) (upti
 
 // getResourceContext looks up a resource from Azure Resource Graph
 func getResourceContext(ctx context.Context, resourceID string) (*AzureResource, error) {
-	cred, err := getCachedCredential()
-	if err != nil {
-		return nil, err
-	}
-
-	parts := strings.Split(resourceID, "/")
-	if len(parts) < 3 {
-		return nil, fmt.Errorf("invalid resource ID format")
-	}
-
-	_ = parts[2] // subscription ID extracted for future use
-
-	argClient, err := armresourcegraph.NewClient(cred, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	if !isValidResourceID(resourceID) {
 		return nil, fmt.Errorf("invalid resource ID")
+	}
+	// Prefer the inventory: no Azure call, and the cost matches the resource list's.
+	if inv, err := getInventory(ctx); err == nil {
+		for _, r := range attachCosts(inv) {
+			if strings.EqualFold(r.ID, resourceID) {
+				return &r, nil
+			}
+		}
 	}
 	// Resource IDs compare case-insensitively (=~); Azure returns them in mixed case.
 	query := "Resources | where id =~ " + kqlQuote(resourceID) + " | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState"
@@ -1933,19 +1924,8 @@ Only respond with valid JSON. No markdown, no explanations outside the JSON.`, r
 		OverallCategory string           `json:"overallCategory"`
 	}
 
-	// Try to extract JSON from response (model might wrap in markdown)
-	jsonStr := result.Response
-	if strings.Contains(jsonStr, "```json") {
-		start := strings.Index(jsonStr, "```json") + 7
-		end := strings.Index(jsonStr, "```")
-		jsonStr = jsonStr[start:end]
-	} else if strings.Contains(jsonStr, "```") {
-		start := strings.Index(jsonStr, "```") + 3
-		end := strings.LastIndex(jsonStr, "```")
-		jsonStr = jsonStr[start:end]
-	}
-
-	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+	// The model may wrap the JSON in markdown fences or prose.
+	if err := json.Unmarshal([]byte(extractJSONObject(result.Response)), &parsed); err != nil {
 		ollamaCircuitBreaker.RecordFailure()
 		return nil, 0, "", fmt.Errorf("failed to parse Ollama response: %v", err)
 	}
@@ -1953,6 +1933,17 @@ Only respond with valid JSON. No markdown, no explanations outside the JSON.`, r
 	// Success - reset circuit breaker
 	ollamaCircuitBreaker.RecordSuccess()
 	return parsed.Recommendations, parsed.ConfidenceScore, parsed.OverallCategory, nil
+}
+
+// extractJSONObject returns the outermost {...} in s (e.g. inside ```json fences or after
+// a sentence of prose), or s unchanged when it has none.
+func extractJSONObject(s string) string {
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start < 0 || end < start {
+		return s
+	}
+	return s[start : end+1]
 }
 
 // fetchVMMetrics returns average CPU and memory utilization for a VM over the specified number of days

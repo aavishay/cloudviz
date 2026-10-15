@@ -1662,3 +1662,19 @@ func TestLoadInventoryFromDBRoundTrip(t *testing.T) {
 	assert.Equal(t, "Prod", byName["storage-disk"].Tags["Environment"])
 	assert.False(t, inventoryFetchedAt().IsZero())
 }
+
+func TestSystemResourceIDs(t *testing.T) {
+	res := []AzureResource{
+		{ID: "/n/vm1", SubscriptionID: "s", ResourceGroup: "rg-prod-aks-nodes", Tags: map[string]string{"karpenter.sh_nodepool": "general"}},
+		{ID: "/n/vm1/extensions/cse", SubscriptionID: "s", ResourceGroup: "rg-prod-aks-nodes", Tags: map[string]string{}},
+		{ID: "/mc/disk", SubscriptionID: "s", ResourceGroup: "MC_rg_cluster_westeurope"},
+		{ID: "/app/vm", SubscriptionID: "s", ResourceGroup: "rg-app", Tags: map[string]string{"env": "prod"}},
+		{ID: "/other/vm", SubscriptionID: "t", ResourceGroup: "rg-prod-aks-nodes"}, // same RG name, other subscription
+	}
+	ids := systemResourceIDs(res)
+	assert.True(t, ids["/n/vm1"], "Karpenter-tagged node")
+	assert.True(t, ids["/n/vm1/extensions/cse"], "untagged extension in the node resource group")
+	assert.True(t, ids["/mc/disk"], "MC_ resource group")
+	assert.False(t, ids["/app/vm"])
+	assert.False(t, ids["/other/vm"])
+}

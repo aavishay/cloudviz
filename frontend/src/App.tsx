@@ -258,6 +258,7 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyFetched, setHistoryFetched] = useState(false);
   const [historyDays, setHistoryDays] = useState<1 | 7 | 30 | 90>(7);
+  const [showSystemChanges, setShowSystemChanges] = useState(false);
   const [dailyImpact, setDailyImpact] = useState<Array<{date: string; totalDailyCost: number; addedCost: number; removedCost: number; createdCount: number; deletedCount: number}>>([]);
   const [rgTrends, setRGTrends] = useState<any>(null);
   const [rgTrendsPeriod, setRGTrendsPeriod] = useState<7 | 14 | 30>(7);
@@ -2873,7 +2874,7 @@ export default function App() {
     setAiLoading(true);
     setAiInsight(null);
     try {
-      const res = await fetch(`http://localhost:8080/api/ai-insights/${encodeURIComponent(resource.id)}`);
+      const res = await fetch(`http://localhost:8080/api/ai-insights?id=${encodeURIComponent(resource.id)}`);
       setAiInsight(await res.json());
     } catch (err) {
       console.error('AI insight failed', err);
@@ -3303,11 +3304,14 @@ export default function App() {
   }, [costsLoading, activeEventSourceRef.current, dataSubIds.size, uniqueSubs.length]);
 
   // Fetch resource change history since start of day (browser timezone)
-  const fetchHistory = async (days?: 1 | 7 | 30 | 90) => {
+  // Defaults to the selected range and node-churn toggle (switching to the tab used to
+  // ignore the selected range).
+  const fetchHistory = async (days: 1 | 7 | 30 | 90 = historyDays, includeSystem: boolean = showSystemChanges) => {
     setHistoryLoading(true);
     try {
-      const sinceParam = days ? `days=${days}` : '';
-      const res = await fetch(`http://localhost:8080/api/history?${sinceParam}`);
+      const params = new URLSearchParams({ days: String(days) });
+      if (includeSystem) params.set('includeSystem', 'true');
+      const res = await fetch(`http://localhost:8080/api/history?${params}`);
       const data = await res.json();
       if (Array.isArray(data)) {
         // Legacy flat array response
@@ -5607,6 +5611,8 @@ export default function App() {
               fetchHistory={fetchHistory}
               historyDays={historyDays}
               setHistoryDays={setHistoryDays}
+              showSystemChanges={showSystemChanges}
+              setShowSystemChanges={setShowSystemChanges}
               resources={resources}
               setSelectedResource={setSelectedResource}
               setCurrentPage={setCurrentPage}

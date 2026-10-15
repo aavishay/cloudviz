@@ -182,6 +182,14 @@ func newDBCache(dbPath string) (*dbCache, error) {
 		}
 	}
 
+	// is_system marks changes to AKS/Karpenter-managed resources (node churn), which the
+	// History view hides by default.
+	if !tableHasColumn(db, "resource_history", "is_system") {
+		if _, err := db.Exec(`ALTER TABLE resource_history ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0`); err != nil {
+			log.Printf("Warning: failed to add is_system column: %v", err)
+		}
+	}
+
 	// orphan_kind holds the inventory snapshot's orphan classification (see orphanKind),
 	// so the Waste view uses the same rules as the resource list.
 	if !tableHasColumn(db, "resources", "orphan_kind") {
@@ -1051,6 +1059,10 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 	}
 	defer tx.Rollback()
 
+	// Changes recorded below have ids above this one; used to flag system changes after.
+	var lastHistoryID int64
+	tx.QueryRow("SELECT COALESCE(MAX(id), 0) FROM resource_history").Scan(&lastHistoryID)
+
 	changeStmt, err := tx.Prepare(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by, resource_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		log.Printf("Error: failed to prepare change statement: %v", err)
@@ -1127,6 +1139,10 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 		}
 	}
 
+	if !isInitialLoad {
+		markSystemChanges(tx, lastHistoryID, newResources, oldMap)
+	}
+
 	if _, err := tx.Exec("DELETE FROM resources"); err != nil {
 		log.Printf("Warning: failed to delete old resources: %v", err)
 	}
@@ -1159,6 +1175,67 @@ func recordResourceChanges(db *sql.DB, newResources []AzureResource) {
 }
 
 // recordChangeStmtWithCost records a change with user and resource cost at time of change
+// isAKSManagedResource reports whether AKS or Karpenter manages a resource, from its tags
+// or managedBy. Such resources churn constantly as node pools scale.
+func isAKSManagedResource(tags map[string]string, managedBy, resourceGroup string) bool {
+	for k := range tags {
+		k = strings.ToLower(k)
+		if strings.HasPrefix(k, "aks-managed-") || strings.HasPrefix(k, "karpenter.") || k == "compute.aks.billing" {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(managedBy), "/managedclusters/") ||
+		strings.HasPrefix(strings.ToLower(resourceGroup), "mc_")
+}
+
+// systemResourceIDs returns the lowercased IDs of AKS-managed resources, counting every
+// resource in a resource group that holds AKS-managed resources (an AKS node resource
+// group) as AKS-managed too: node VM extensions and NICs carry no AKS tags themselves.
+func systemResourceIDs(resources []AzureResource) map[string]bool {
+	nodeRGs := make(map[string]bool)
+	for _, r := range resources {
+		if isAKSManagedResource(r.Tags, r.ManagedBy, r.ResourceGroup) {
+			nodeRGs[strings.ToLower(r.SubscriptionID+"/"+r.ResourceGroup)] = true
+		}
+	}
+	ids := make(map[string]bool)
+	for _, r := range resources {
+		if nodeRGs[strings.ToLower(r.SubscriptionID+"/"+r.ResourceGroup)] {
+			ids[strings.ToLower(r.ID)] = true
+		}
+	}
+	return ids
+}
+
+// markSystemChanges flags history rows recorded after afterID whose resources are
+// AKS-managed (in the new snapshot, or the old one for deletions).
+func markSystemChanges(tx *sql.Tx, afterID int64, newResources []AzureResource, oldMap map[string]AzureResource) {
+	all := make([]AzureResource, 0, len(newResources)+len(oldMap))
+	all = append(all, newResources...)
+	for _, r := range oldMap {
+		all = append(all, r)
+	}
+	system := systemResourceIDs(all)
+	rows, err := tx.Query("SELECT id, resource_id FROM resource_history WHERE id > ?", afterID)
+	if err != nil {
+		return
+	}
+	var flag []int64
+	for rows.Next() {
+		var id int64
+		var rid string
+		if rows.Scan(&id, &rid) == nil && system[strings.ToLower(rid)] {
+			flag = append(flag, id)
+		}
+	}
+	rows.Close()
+	for _, id := range flag {
+		if _, err := tx.Exec("UPDATE resource_history SET is_system = 1 WHERE id = ?", id); err != nil {
+			log.Printf("Warning: failed to flag system change: %v", err)
+		}
+	}
+}
+
 func recordChangeStmtWithCost(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, user string, cost float64) {
 	if user == "" {
 		user = "Unknown"

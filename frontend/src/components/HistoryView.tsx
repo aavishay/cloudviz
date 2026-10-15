@@ -8,16 +8,27 @@ interface HistoryViewProps {
   history: ResourceChange[];
   historyLoading: boolean;
   historyFetched: boolean;
-  fetchHistory: (days?: 1 | 7 | 30 | 90) => void;
+  fetchHistory: (days?: 1 | 7 | 30 | 90, includeSystem?: boolean) => void;
   historyDays: 1 | 7 | 30 | 90;
   setHistoryDays: (d: 1 | 7 | 30 | 90) => void;
+  showSystemChanges: boolean;
+  setShowSystemChanges: (v: boolean) => void;
   resources: AzureResource[];
   setSelectedResource: (r: AzureResource | null) => void;
   setCurrentPage: (p: number) => void;
   setAlertModal: (modal: { open: boolean; title: string; message: string; icon: 'warning' | 'danger' | 'info' }) => void;
 }
 
-export function HistoryView({ history, historyLoading, historyFetched, fetchHistory, historyDays, setHistoryDays, resources, setSelectedResource, setCurrentPage, setAlertModal }: HistoryViewProps) {
+export function HistoryView({ history, historyLoading, historyFetched, fetchHistory, historyDays, setHistoryDays, showSystemChanges, setShowSystemChanges, resources, setSelectedResource, setCurrentPage, setAlertModal }: HistoryViewProps) {
+  // AKS/Karpenter node churn is hidden unless asked for; it can be hundreds of changes a day.
+  const systemToggle = (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)', cursor: 'pointer' }}
+      title="Node VMs, disks, NICs and extensions that AKS and Karpenter create and delete as node pools scale">
+      <input type="checkbox" checked={showSystemChanges}
+        onChange={e => { setShowSystemChanges(e.target.checked); fetchHistory(historyDays, e.target.checked); }} />
+      Show AKS node churn
+    </label>
+  );
   const [filterType, setFilterType] = useState<'all' | 'created' | 'deleted' | 'modified'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [groupByDate, setGroupByDate] = useState(true);
@@ -141,15 +152,16 @@ export function HistoryView({ history, historyLoading, historyFetched, fetchHist
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320, gap: 12, color: 'var(--text-2)' }}>
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="10" /><path d="M12 8v4l3 3" /></svg>
         <span style={{ fontSize: 15, fontWeight: 500 }}>No changes recorded in {periodLabel}</span>
+        {systemToggle}
         <div style={{ display: 'flex', gap: 6 }}>
           {([1, 7, 30, 90] as const).map(d => (
             <button key={d} className={historyDays === d ? 'btn btn-primary' : 'btn'} style={{ fontSize: 12, padding: '4px 12px' }}
-              onClick={() => { setHistoryDays(d); fetchHistory(d); }}>
+              onClick={() => { setHistoryDays(d); fetchHistory(d, showSystemChanges); }}>
               {d === 1 ? 'Today' : `${d}d`}
             </button>
           ))}
         </div>
-        <button className="btn btn-secondary" onClick={() => fetchHistory(historyDays)} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button className="btn btn-secondary" onClick={() => fetchHistory(historyDays, showSystemChanges)} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.36" /></svg>
           Refresh
         </button>
@@ -256,11 +268,12 @@ export function HistoryView({ history, historyLoading, historyFetched, fetchHist
           <div style={{ display: 'flex', gap: 4 }}>
             {([1, 7, 30, 90] as const).map(d => (
               <button key={d} className={historyDays === d ? 'btn btn-primary' : 'btn'} style={{ fontSize: 12, padding: '5px 12px' }}
-                onClick={() => { setHistoryDays(d); fetchHistory(d); }}>
+                onClick={() => { setHistoryDays(d); fetchHistory(d, showSystemChanges); }}>
                 {d === 1 ? 'Today' : `${d}d`}
               </button>
             ))}
           </div>
+          {systemToggle}
           <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
           <div style={{ display: 'flex', gap: 4 }}>
             {(['all', 'created', 'deleted', 'modified'] as const).map(type => (

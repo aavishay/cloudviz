@@ -2755,26 +2755,28 @@ func startServer(port string) {
 		w.Flush()
 	})
 
-	r.GET("/api/ai-insights/:resourceId", func(c *gin.Context) {
-		rid := c.Param("resourceId")
-		if rid == "" {
-			c.JSON(400, gin.H{"error": "resourceId is required"})
+	// AI insights take the resource ID as ?id=: ARM IDs contain slashes, which a path
+	// parameter can't carry (Gin routes on the decoded path). The path form is kept for old
+	// clients via a catch-all.
+	aiInsights := func(c *gin.Context, rid string) {
+		if !isValidResourceID(rid) {
+			c.JSON(400, gin.H{"error": "a valid resource ID is required"})
 			return
 		}
 
 		// 1. Get resource context (cost, RG, location, type)
 		resource, err := getResourceContext(c.Request.Context(), rid)
 		if err != nil {
-			c.JSON(500, gin.H{"error": "failed to get resource context: " + err.Error()})
+			c.JSON(404, gin.H{"error": "failed to get resource context: " + err.Error()})
 			return
 		}
 
-		// 2. Fetch metrics
+		// 2. Fetch metrics. Without them the rule-based recommendation still applies.
 		resourceType := resource.Type
 		metrics, err := fetchResourceMetrics(c.Request.Context(), rid, resourceType)
 		if err != nil {
-			c.JSON(500, gin.H{"error": "failed to fetch metrics: " + err.Error()})
-			return
+			log.Printf("AI insights: metrics unavailable for %s: %v", rid, err)
+			metrics = nil
 		}
 
 		// 3. Calculate statistics
@@ -2807,6 +2809,10 @@ func startServer(port string) {
 			ConfidenceScore:  confidence,
 			OllamaAvailable:  ollamaErr == nil,
 		})
+	}
+	r.GET("/api/ai-insights", func(c *gin.Context) { aiInsights(c, c.Query("id")) })
+	r.GET("/api/ai-insights/*resourceId", func(c *gin.Context) {
+		aiInsights(c, "/"+strings.TrimLeft(c.Param("resourceId"), "/"))
 	})
 
 	r.GET("/api/costs/stream", sseHandler)
@@ -4255,16 +4261,8 @@ func openBrowser(url string) {
 }
 
 func historyHandler(c *gin.Context) {
-	sinceParam := c.Query("since")
-	var sinceTime time.Time
-	if sinceParam != "" {
-		// Accept RFC3339 or RFC3339Nano
-		if t, err := time.Parse(time.RFC3339Nano, sinceParam); err == nil {
-			sinceTime = t
-		} else if t, err := time.Parse(time.RFC3339, sinceParam); err == nil {
-			sinceTime = t
-		}
-	}
+	sinceTime := historySince(c.Query("since"), c.Query("days"), time.Now())
+	includeSystem := c.Query("includeSystem") == "true"
 	// Use plain "YYYY-MM-DD HH:MM:SS" string (matches stored timestamp format) so
 	// the idx_history_timestamp index works without a datetime() function wrapper.
 	var queryArgs []any
@@ -4273,11 +4271,20 @@ func historyHandler(c *gin.Context) {
 		h.new_value, h.timestamp, COALESCE(h.resource_cost, 0),
 		COALESCE(h.changed_by, 'Unknown')
 		FROM resource_history h`
+	var where []string
 	if !sinceTime.IsZero() {
 		// Format as plain date-time (same format as stored timestamps) for correct string comparison
 		sinceStr := sinceTime.In(time.Local).Format("2006-01-02 15:04:05")
-		baseQuery += ` WHERE h.timestamp >= ?`
+		where = append(where, "h.timestamp >= ?")
 		queryArgs = append(queryArgs, sinceStr)
+	}
+	if !includeSystem {
+		// AKS/Karpenter node churn (hundreds of node VMs, disks and extensions a day)
+		// drowns out changes people made; it's opt-in.
+		where = append(where, "COALESCE(h.is_system, 0) = 0")
+	}
+	if len(where) > 0 {
+		baseQuery += " WHERE " + strings.Join(where, " AND ")
 	}
 	baseQuery += ` ORDER BY h.timestamp DESC LIMIT 1000`
 
@@ -5402,19 +5409,35 @@ func isReservationCandidate(resType string, tags map[string]string) bool {
 	if t != "microsoft.compute/virtualmachines" && t != "microsoft.compute/virtualmachinescalesets" {
 		return false
 	}
-	for k := range tags {
-		k = strings.ToLower(k)
-		if strings.HasPrefix(k, "aks-managed-") || strings.HasPrefix(k, "karpenter.") || k == "compute.aks.billing" {
-			return false
-		}
-	}
-	return true
+	return !isAKSManagedResource(tags, "", "")
 }
 
 // reservationBreakEvenMonths is how long an upfront reservation for termMonths at
 // rateOfOnDemand (e.g. 0.7 = 30% off) takes to cost less than running on demand.
 func reservationBreakEvenMonths(termMonths int, rateOfOnDemand float64) float64 {
 	return math.Round(float64(termMonths)*rateOfOnDemand*10) / 10
+}
+
+// historySince returns the start of the history window: an RFC3339 since, or days back
+// (1 = since local midnight today), or zero for no limit.
+func historySince(since, days string, now time.Time) time.Time {
+	if since != "" {
+		if t, err := time.Parse(time.RFC3339Nano, since); err == nil {
+			return t
+		}
+		if t, err := time.Parse(time.RFC3339, since); err == nil {
+			return t
+		}
+	}
+	var n int
+	if _, err := fmt.Sscanf(days, "%d", &n); err == nil && n > 0 {
+		if n > 365 {
+			n = 365
+		}
+		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		return midnight.AddDate(0, 0, -(n - 1))
+	}
+	return time.Time{}
 }
 
 // csvSafe neutralizes spreadsheet formula injection: a cell starting with =, +, -, @, tab

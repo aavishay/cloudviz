@@ -566,3 +566,13 @@ func TestCSVSafe(t *testing.T) {
 	assert.Equal(t, "'@SUM(A1)", csvSafe("@SUM(A1)"))
 	assert.Equal(t, "", csvSafe(""))
 }
+
+func TestHistorySince(t *testing.T) {
+	now := time.Date(2026, 10, 15, 14, 30, 0, 0, time.UTC)
+	assert.Equal(t, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC), historySince("", "1", now), "1 day = since midnight today")
+	assert.Equal(t, time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), historySince("", "7", now), "7 days includes today")
+	assert.True(t, historySince("", "", now).IsZero())
+	assert.True(t, historySince("", "abc", now).IsZero())
+	assert.Equal(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), historySince("2026-10-01T00:00:00Z", "7", now), "since wins")
+	assert.Equal(t, now.AddDate(0, 0, -364).Truncate(24*time.Hour), historySince("", "9999", now), "capped at 365 days")
+}
