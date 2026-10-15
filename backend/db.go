@@ -298,6 +298,31 @@ func newDBCache(dbPath string) (*dbCache, error) {
 		log.Printf("Warning: failed to create daily index: %v", err)
 	}
 
+	// daily_fetches records the start of the date window each sub's cost_daily rows were
+	// last fetched for. Days in the window without a row had no spend; days before it are
+	// unknown, so period comparisons only use subs whose window covers both periods.
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS daily_fetches (
+		subscription_id TEXT PRIMARY KEY,
+		window_start TEXT NOT NULL,
+		fetched_at DATETIME NOT NULL
+	)`)
+	if err != nil {
+		return nil, err
+	}
+
+	// cost_fetches records every successful cost query, including ones that returned no
+	// rows, so a subscription with genuinely $0 spend reads as cached rather than missing.
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS cost_fetches (
+		subscription_id TEXT NOT NULL,
+		period TEXT NOT NULL,
+		fetched_at DATETIME NOT NULL,
+		row_count INTEGER NOT NULL,
+		PRIMARY KEY (subscription_id, period)
+	)`)
+	if err != nil {
+		return nil, err
+	}
+
 	// Cached aggregated sums table - avoids recalculating totals
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS cost_aggregates (
 		subscription_id TEXT,
@@ -426,28 +451,42 @@ func (dc *dbCache) get(subID string, period string) (armcostmanagement.QueryResu
 		}
 	}
 
+	// ok means the period has been fetched: it has rows, or a fetch recorded zero rows.
+	ok := len(resultRows) > 0 || dc.hasCostFetch(subID, period)
 	return armcostmanagement.QueryResult{
 		Properties: &armcostmanagement.QueryProperties{
 			Rows: resultRows,
 		},
-	}, true
+	}, ok
 }
 
+// hasCostFetch reports whether a cost query for the sub and period has been recorded.
+func (dc *dbCache) hasCostFetch(subID, period string) bool {
+	var n int
+	err := dc.db.QueryRow("SELECT COUNT(*) FROM cost_fetches WHERE subscription_id = ? AND period = ?", subID, period).Scan(&n)
+	return err == nil && n > 0
+}
+
+// set replaces the cached costs for a sub and period with a complete query result. An
+// empty result is stored as a recorded fetch with no rows ($0 spend), not ignored.
 func (dc *dbCache) set(subID string, period string, data armcostmanagement.QueryResult) {
-	if data.Properties == nil || data.Properties.Rows == nil {
-		return
+	if data.Properties == nil {
+		data.Properties = &armcostmanagement.QueryProperties{}
 	}
 
-	if _, err := dc.db.Exec("DELETE FROM costs WHERE subscription_id = ? AND period = ?", subID, period); err != nil {
-		log.Printf("Warning: failed to delete old costs: %v", err)
-	}
-
+	// Delete and insert in one transaction so readers never see the sub with no costs,
+	// and two concurrent refreshes of the same sub can't both insert their rows.
 	tx, err := dc.db.Begin()
 	if err != nil {
 		log.Printf("Error: failed to begin transaction: %v", err)
 		return
 	}
 	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM costs WHERE subscription_id = ? AND period = ?", subID, period); err != nil {
+		log.Printf("Warning: failed to delete old costs: %v", err)
+		return
+	}
 
 	stmt, err := tx.Prepare("INSERT INTO costs (subscription_id, resource_id, resource_group, resource_type, resource_location, cost, period, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
 	if err != nil {
@@ -507,6 +546,12 @@ func (dc *dbCache) set(subID string, period string, data armcostmanagement.Query
 		if _, err := stmt.Exec(subID, rid, rg, rt, rl, cost, period, now); err != nil {
 			log.Printf("Warning: failed to insert cost: %v", err)
 		}
+	}
+	if _, err := tx.Exec(`INSERT INTO cost_fetches (subscription_id, period, fetched_at, row_count) VALUES (?, ?, ?, ?)
+		ON CONFLICT(subscription_id, period) DO UPDATE SET fetched_at = excluded.fetched_at, row_count = excluded.row_count`,
+		subID, period, now, len(data.Properties.Rows)); err != nil {
+		log.Printf("Warning: failed to record cost fetch: %v", err)
+		return
 	}
 	if err := tx.Commit(); err != nil {
 		log.Printf("Error: failed to commit transaction: %v", err)
@@ -626,11 +671,52 @@ func (dc *dbCache) getCachedDailyCosts(subID string, start, end time.Time) []map
 	return rows
 }
 
-func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
-	if _, err := dc.db.Exec("DELETE FROM cost_daily WHERE subscription_id = ?", subID); err != nil {
-		log.Printf("Warning: failed to delete old daily costs: %v", err)
+// setDailyCostsForWindow replaces a sub's daily costs with a complete fetch that started
+// at windowStart, and records the window so comparisons know how far back it reaches.
+func (dc *dbCache) setDailyCostsForWindow(subID string, windowStart time.Time, items []map[string]any) {
+	dc.setDailyCosts(subID, items)
+	if _, err := dc.db.Exec(`INSERT INTO daily_fetches (subscription_id, window_start, fetched_at) VALUES (?, ?, ?)
+		ON CONFLICT(subscription_id) DO UPDATE SET window_start = excluded.window_start, fetched_at = excluded.fetched_at`,
+		subID, windowStart.Format("2006-01-02"), time.Now()); err != nil {
+		log.Printf("Warning: failed to record daily fetch window for %s: %v", subID, err)
 	}
-	stmt, err := dc.db.Prepare("INSERT INTO cost_daily (subscription_id, date, cost, fetched_at) VALUES (?, ?, ?, ?)")
+}
+
+// subsWithDailyHistorySince returns the subs whose recorded daily-cost window starts on or
+// before date (YYYY-MM-DD), i.e. whose cached daily rows fully cover days from date on.
+func (dc *dbCache) subsWithDailyHistorySince(subIDs []string, date string) map[string]bool {
+	covered := make(map[string]bool)
+	if len(subIDs) == 0 {
+		return covered
+	}
+	args := append(toAnySlice(subIDs), date)
+	rows, err := dc.db.Query("SELECT subscription_id FROM daily_fetches WHERE subscription_id IN ("+placeholders(len(subIDs))+") AND window_start <= ?", args...)
+	if err != nil {
+		return covered
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid string
+		if rows.Scan(&sid) == nil {
+			covered[sid] = true
+		}
+	}
+	return covered
+}
+
+func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
+	// One transaction, so readers never see the sub's daily costs half replaced.
+	tx, err := dc.db.Begin()
+	if err != nil {
+		log.Printf("Warning: failed to begin daily costs transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM cost_daily WHERE subscription_id = ?", subID); err != nil {
+		log.Printf("Warning: failed to delete old daily costs: %v", err)
+		return
+	}
+	stmt, err := tx.Prepare("INSERT INTO cost_daily (subscription_id, date, cost, fetched_at) VALUES (?, ?, ?, ?)")
 	if err != nil {
 		log.Printf("Warning: failed to prepare daily costs: %v", err)
 		return
@@ -646,6 +732,9 @@ func (dc *dbCache) setDailyCosts(subID string, items []map[string]any) {
 		if _, err := stmt.Exec(subID, date, cost, now); err != nil {
 			log.Printf("Warning: failed to insert daily cost: %v", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("Warning: failed to commit daily costs: %v", err)
 	}
 }
 
@@ -780,10 +869,13 @@ func (dc *dbCache) getCachedSubscriptions(subIDs []string, period string) ([]str
 
 	// Serve any sub that has data — stale-while-revalidate: show existing data
 	// immediately and refresh stale entries in the background via the uncached path.
+	in := strings.Join(placeholders, ",")
 	query := fmt.Sprintf(
-		`SELECT DISTINCT subscription_id FROM costs
-		WHERE subscription_id IN (%s) AND period = ?`,
-		strings.Join(placeholders, ","))
+		`SELECT subscription_id FROM costs WHERE subscription_id IN (%s) AND period = ?
+		UNION
+		SELECT subscription_id FROM cost_fetches WHERE subscription_id IN (%s) AND period = ?`,
+		in, in)
+	args = append(args, args...)
 
 	rows, err := dc.db.Query(query, args...)
 	if err != nil {
@@ -814,6 +906,10 @@ func (dc *dbCache) getCachedSubscriptions(subIDs []string, period string) ([]str
 // Used to decide whether to queue a background re-fetch after serving cached data.
 func (dc *dbCache) isStale(subID string) bool {
 	var fetchedAt time.Time
+	if err := dc.db.QueryRow("SELECT fetched_at FROM cost_fetches WHERE subscription_id = ? AND period = 'current'", subID).Scan(&fetchedAt); err == nil {
+		return time.Since(fetchedAt) > 6*time.Hour
+	}
+	// Fall back to the cost rows for data cached before fetches were recorded.
 	// Not MAX(fetched_at): aggregates lose the column's DATETIME type, so the driver returns
 	// a string that can't scan into time.Time and every sub looked stale.
 	err := dc.db.QueryRow("SELECT fetched_at FROM costs WHERE subscription_id = ? AND period = 'current' ORDER BY fetched_at DESC LIMIT 1", subID).Scan(&fetchedAt)

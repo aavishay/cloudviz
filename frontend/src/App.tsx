@@ -492,7 +492,7 @@ export default function App() {
           <div style={{ fontSize: 11, color: costComparison.isIncrease ? 'var(--danger)' : 'var(--accent)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
             {costComparison.isIncrease ? '↑' : '↓'} {Math.abs(costComparison.percentChange).toFixed(1)}% vs prior {costPeriod}d period
             <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>
-              ({costComparison.change > 0 ? '+' : ''}${costComparison.change.toLocaleString(undefined, { maximumFractionDigits: 0 })})
+              ({costComparison.change > 0 ? '+' : ''}${costComparison.change.toLocaleString(undefined, { maximumFractionDigits: 0 })}{costComparison.coveredSubs < costComparison.totalSubs ? `, ${costComparison.coveredSubs} of ${costComparison.totalSubs} subs` : ''})
             </span>
           </div>
         )}
@@ -642,7 +642,10 @@ export default function App() {
             </div>
             <div>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'block' }}>Month-over-Month</span>
-              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>Cost comparison</span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                Last {costPeriod}d vs prior {costPeriod}d
+                {costComparison.coveredSubs < costComparison.totalSubs && ` · ${costComparison.coveredSubs} of ${costComparison.totalSubs} subs with history`}
+              </span>
             </div>
           </div>
           <span style={{ fontSize: 10, fontWeight: 600, color: '#3b82f6', background: 'rgba(59 130 246 / 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(59 130 246 / 0.2)', cursor: 'pointer' }}>Click to view</span>
@@ -2651,17 +2654,14 @@ export default function App() {
       .then(data => {
         if (!data.error) {
           setPeriodComparison(data);
-          // Check for incomplete previous period data (likely due to auth issues)
-          const currentTotal = data.currentPeriod?.totalCost || 0;
-          const previousTotal = data.previousPeriod?.totalCost || 0;
-          if (currentTotal > 0 && previousTotal > 0) {
-            const ratio = previousTotal / currentTotal;
-            // If previous period is less than 60% of current, data may be incomplete
-            if (ratio < 0.6) {
-              setDataCompletenessWarning(`Previous period data appears incomplete ($${(previousTotal/1000).toFixed(0)}K vs $${(currentTotal/1000).toFixed(0)}K expected). Azure authentication may have expired - run "az login" to refresh.`);
-            } else {
-              setDataCompletenessWarning(null);
-            }
+          // Say how much of the comparison is backed by data. A large change between
+          // periods is not by itself a sign of missing data (new environments are real).
+          const covered = data.coverage?.coveredSubscriptions ?? 0;
+          const total = data.coverage?.subscriptions ?? 0;
+          if (total > 0 && covered < total) {
+            setDataCompletenessWarning(`Period-over-period comparison covers ${covered} of ${total} subscriptions. The rest don't have ${Number(costPeriod) * 2} days of synced cost history yet; they're included once the sync fetches it.`);
+          } else {
+            setDataCompletenessWarning(null);
           }
         }
       })
@@ -4549,14 +4549,14 @@ export default function App() {
     return { status: 'ok', message: `${percentage.toFixed(0)}% of budget`, color: 'var(--accent)' };
   }, [budgetLimit, totalCostsSum]);
 
-  // Month-over-month cost comparison
+  // Period-over-period comparison from /api/costs/comparison. The backend compares only
+  // subscriptions whose daily history covers both periods; for the rest the previous
+  // period is unknown (not $0), and counting them produced false spikes like "+1000%".
   const costComparison = useMemo(() => {
-    let currentTotal = 0, previousTotal = 0;
-    costs.forEach(c => {
-      currentTotal += c.cost;
-      previousTotal += c.previousCost || 0;
-    });
-    if (previousTotal === 0) return null;
+    const coverage = periodComparison?.coverage;
+    const currentTotal = Number(periodComparison?.currentPeriod?.totalCost) || 0;
+    const previousTotal = Number(periodComparison?.previousPeriod?.totalCost) || 0;
+    if (!coverage?.coveredSubscriptions || previousTotal === 0) return null;
     const change = currentTotal - previousTotal;
     let percentChange = ((change / previousTotal) * 100);
     if (percentChange > 1000) percentChange = 1000;
@@ -4566,9 +4566,12 @@ export default function App() {
       previous: previousTotal,
       change,
       percentChange,
-      isIncrease: change > 0
+      isIncrease: change > 0,
+      coveredSubs: coverage.coveredSubscriptions as number,
+      totalSubs: coverage.subscriptions as number,
+      coveredIds: new Set<string>(coverage.coveredIds || []),
     };
-  }, [costs]);
+  }, [periodComparison]);
 
   // Biggest cost changes (by absolute change) - aggregated by resource group
   const biggestChanges = useMemo(() => {
@@ -4577,7 +4580,11 @@ export default function App() {
     // Aggregate costs by resource group
     const rgMap = new Map<string, { resourceGroup: string; resourceType: string; cost: number; previousCost: number }>();
 
+    // Only subs with history for both periods: elsewhere a missing previous cost would
+    // label every resource group "New".
+    const covered = costComparison?.coveredIds;
     displayCosts.forEach(c => {
+      if (!covered?.has(c.subscriptionId)) return;
       const rg = c.resourceGroup || 'Uncategorized';
       const existing = rgMap.get(rg);
       if (existing) {
@@ -4609,7 +4616,7 @@ export default function App() {
       .filter(c => Math.abs(c.change) >= MIN_CHANGE || c.isNew)
       .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
       .slice(0, 5);
-  }, [displayCosts]);
+  }, [displayCosts, costComparison]);
 
   // Reserved Instance recommendations (for consistent VMs)
   const riRecommendations = useMemo(() => {

@@ -121,7 +121,7 @@ func (wn *WebhookNotifier) GetCurrentCost(alert Alert) (float64, error) {
 		query = `
 			SELECT COALESCE(SUM(cost), 0)
 			FROM costs
-			WHERE subscription_id = ? AND resource_group = ? AND period = 'current'
+			WHERE subscription_id = ? AND resource_group = lower(?) AND period = 'current'
 		`
 		args = []interface{}{alert.SubscriptionID, alert.ResourceGroup}
 	} else if alert.SubscriptionID != "" {

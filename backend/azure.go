@@ -20,6 +20,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	azruntime "github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/costmanagement/armcostmanagement"
@@ -504,8 +505,63 @@ func fetchSubCostsSync(client *armcostmanagement.QueryClient, sid string, period
 	if err != nil {
 		return nil, err
 	}
+	// Results come back 5,000 rows at a time. Cache only complete results: a truncated
+	// page set would silently under-report the largest subscriptions.
+	if err := appendCostPages(ctx, logCtx, &res.QueryResult, func(nextLink string) (armcostmanagement.QueryResult, error) {
+		return fetchNextCostPage(ctx, nextLink, props)
+	}); err != nil {
+		return nil, err
+	}
 	cache.set(sid, string(period), res.QueryResult)
 	return &res, nil
+}
+
+// maxCostPages bounds how many result pages one query may follow (5,000 rows each).
+const maxCostPages = 20
+
+// appendCostPages follows result.Properties.NextLink, appending each page's rows to
+// result, until there is no next page. It fails rather than return a partial result.
+func appendCostPages(ctx context.Context, logCtx string, result *armcostmanagement.QueryResult, fetchPage func(nextLink string) (armcostmanagement.QueryResult, error)) error {
+	for page := 2; result.Properties != nil && result.Properties.NextLink != nil && *result.Properties.NextLink != ""; page++ {
+		if page > maxCostPages {
+			return fmt.Errorf("%s: more than %d result pages", logCtx, maxCostPages)
+		}
+		nextLink := *result.Properties.NextLink
+		next, err := retryAfter429(ctx, logCtx, func() (armcostmanagement.QueryResult, error) {
+			return fetchPage(nextLink)
+		})
+		if err != nil {
+			return fmt.Errorf("%s: result page %d: %w", logCtx, page, err)
+		}
+		result.Properties.NextLink = nil
+		if next.Properties != nil {
+			result.Properties.Rows = append(result.Properties.Rows, next.Properties.Rows...)
+			result.Properties.NextLink = next.Properties.NextLink
+		}
+	}
+	return nil
+}
+
+// fetchNextCostPage POSTs the original query definition to a Cost Management nextLink.
+func fetchNextCostPage(ctx context.Context, nextLink string, props armcostmanagement.QueryDefinition) (armcostmanagement.QueryResult, error) {
+	var out armcostmanagement.QueryResult
+	req, err := azruntime.NewRequest(ctx, http.MethodPost, nextLink)
+	if err != nil {
+		return out, err
+	}
+	req.Raw().Header["Accept"] = []string{"application/json"}
+	if err := azruntime.MarshalAsJSON(req, props); err != nil {
+		return out, err
+	}
+	resp, err := costPipeline.Do(req)
+	if err != nil {
+		return out, err
+	}
+	if !azruntime.HasStatusCode(resp, http.StatusOK) {
+		return out, azruntime.NewResponseError(resp)
+	}
+	err = azruntime.UnmarshalAsJSON(resp, &out)
+	return out, err
 }
 
 // fetchDailyCosts queries Azure Cost Management grouped by date for daily trend data
@@ -1535,9 +1591,10 @@ func getResourceContext(ctx context.Context, resourceID string) (*AzureResource,
 	// Get cost from cache if available
 	cost := 0.0
 	if cache != nil {
+		// Match this resource's own cost rows only: matching on its resource group would
+		// report every resource in the group as this one's cost.
 		subID := safeStr(row["subscriptionId"])
-		namePattern := "%" + safeStr(row["name"]) + "%"
-		if rows2, err := cache.db.Query("SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id = ? AND (resource_group = ? OR resource_id LIKE ?)", subID, safeStr(row["resourceGroup"]), namePattern); err == nil {
+		if rows2, err := cache.db.Query("SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id = ? AND period = 'current' AND lower(resource_id) = lower(?)", subID, safeStr(row["id"])); err == nil {
 			defer rows2.Close()
 			if rows2.Next() {
 				rows2.Scan(&cost)

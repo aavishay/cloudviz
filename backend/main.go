@@ -22,7 +22,9 @@ import (
 	"embed"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
+	armruntime "github.com/Azure/azure-sdk-for-go/sdk/azcore/arm/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	azruntime "github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/costmanagement/armcostmanagement"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
 	"github.com/gin-contrib/cors"
@@ -58,6 +60,8 @@ var (
 	argClient      *armresourcegraph.Client
 	lastSync       time.Time
 	syncMutex      sync.Mutex
+	// costPipeline sends raw Cost Management requests (result-page nextLinks).
+	costPipeline azruntime.Pipeline
 	// Azure Cost Management tenant-level hard limit: 20 calls/min across all scopes,
 	// split between query calls (costLimiter, 14/min) and forecast calls
 	// (forecastLimiter, 6/min). The two are separate queues so forecast backlogs can't
@@ -152,6 +156,13 @@ func main() {
 			costClient, err = armcostmanagement.NewQueryClient(cred, clientOpts)
 			if err != nil {
 				return fmt.Errorf("failed to create Cost Management client: %w", err)
+			}
+
+			// The SDK's QueryClient has no pager, so later result pages are fetched by
+			// POSTing to nextLink through a pipeline with the same auth and policies.
+			costPipeline, err = armruntime.NewPipeline("cloudviz", Version, cred, azruntime.PipelineOptions{}, clientOpts)
+			if err != nil {
+				return fmt.Errorf("failed to create Cost Management pipeline: %w", err)
 			}
 
 			forecastClient, err = armcostmanagement.NewForecastClient(cred, clientOpts)
@@ -761,7 +772,7 @@ func startServer(port string) {
 					}
 					continue
 				}
-				cache.setDailyCosts(sid, daily)
+				cache.setDailyCostsForWindow(sid, start, daily)
 				for _, d := range daily {
 					if date, ok := d["date"].(string); ok {
 						byDate[date] += d["cost"].(float64)
@@ -1489,10 +1500,11 @@ func startServer(port string) {
 				var args []any
 
 				if rg != "" {
-					q = "SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id = ? AND resource_group = ? AND fetched_at >= ?"
+					// Cached resource groups are lowercased (dbCache.set); budgets keep the user's casing.
+					q = "SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id = ? AND resource_group = lower(?) AND period = 'current' AND fetched_at >= ?"
 					args = []any{subID, rg, periodStart}
 				} else {
-					q = "SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id = ? AND fetched_at >= ?"
+					q = "SELECT COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id = ? AND period = 'current' AND fetched_at >= ?"
 					args = []any{subID, periodStart}
 				}
 
@@ -2016,7 +2028,7 @@ func startServer(port string) {
 
 		// Fallback: if Azure returned no data or all zeros, build from cached costs
 		if len(byDateType) == 0 || fetchedTotal == 0 {
-			rows2, err := cache.db.Query("SELECT resource_type, COALESCE(SUM(cost), 0) FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+") GROUP BY resource_type", toAnySlice(subs)...)
+			rows2, err := cache.db.Query("SELECT resource_type, COALESCE(SUM(cost), 0) FROM costs WHERE period = 'current' AND subscription_id IN ("+placeholders(len(subs))+") GROUP BY resource_type", toAnySlice(subs)...)
 			if err == nil {
 				defer rows2.Close()
 				typeTotals := make(map[string]float64)
@@ -2420,37 +2432,39 @@ func startServer(port string) {
 			fmt.Sscanf(p, "%d", &periodDays)
 		}
 
+		if periodDays <= 0 || periodDays > 365 {
+			periodDays = 30
+		}
 		now := time.Now()
-		currentStart := now.AddDate(0, 0, -periodDays)
-		previousStart := now.AddDate(0, 0, -periodDays*2)
-		previousEnd := now.AddDate(0, 0, -periodDays)
 
-		// Query cost_daily table with actual date ranges for accurate comparison
+		// Compare cost_daily totals only across subs whose cached daily history reaches back
+		// to the previous period's start. For other subs the previous period is unknown, not
+		// $0, and counting them produced false spikes (e.g. "+1000%").
+		// Both windows are periodDays whole days and don't overlap: the current one ends
+		// today, the previous one ends the day before the current one starts.
 		var currentTotal, previousTotal float64
-		currentStartStr := currentStart.Format("2006-01-02")
-		nowStr := now.Format("2006-01-02")
-		previousStartStr := previousStart.Format("2006-01-02")
-		previousEndStr := previousEnd.Format("2006-01-02")
+		day := func(t time.Time) string { return t.Format("2006-01-02") }
+		curFrom, curTo := day(now.AddDate(0, 0, -(periodDays-1))), day(now)
+		prevFrom, prevTo := day(now.AddDate(0, 0, -(2*periodDays-1))), day(now.AddDate(0, 0, -periodDays))
 
-		// Query current period from cost_daily with date range
-		currentQuery := "SELECT COALESCE(SUM(cost), 0) FROM cost_daily WHERE date >= ? AND date <= ?"
-		if len(subs) > 0 {
-			currentQuery += " AND subscription_id IN (" + placeholders(len(subs)) + ")"
-			args := append([]any{currentStartStr, nowStr}, toAnySlice(subs)...)
-			cache.db.QueryRow(currentQuery, args...).Scan(&currentTotal)
-		} else {
-			cache.db.QueryRow(currentQuery, currentStartStr, nowStr).Scan(&currentTotal)
+		covered := cache.subsWithDailyHistorySince(subs, prevFrom)
+		var coveredSubs []string
+		for _, sid := range subs {
+			if covered[sid] {
+				coveredSubs = append(coveredSubs, sid)
+			}
 		}
-
-		// Query previous period from cost_daily with date range
-		previousQuery := "SELECT COALESCE(SUM(cost), 0) FROM cost_daily WHERE date >= ? AND date <= ?"
-		if len(subs) > 0 {
-			previousQuery += " AND subscription_id IN (" + placeholders(len(subs)) + ")"
-			args := append([]any{previousStartStr, previousEndStr}, toAnySlice(subs)...)
-			cache.db.QueryRow(previousQuery, args...).Scan(&previousTotal)
-		} else {
-			cache.db.QueryRow(previousQuery, previousStartStr, previousEndStr).Scan(&previousTotal)
+		sumDaily := func(from, to string) float64 {
+			var total float64
+			if len(coveredSubs) == 0 {
+				return 0
+			}
+			args := append([]any{from, to}, toAnySlice(coveredSubs)...)
+			cache.db.QueryRow("SELECT COALESCE(SUM(cost), 0) FROM cost_daily WHERE date >= ? AND date <= ? AND subscription_id IN ("+placeholders(len(coveredSubs))+")", args...).Scan(&total)
+			return total
 		}
+		currentTotal = sumDaily(curFrom, curTo)
+		previousTotal = sumDaily(prevFrom, prevTo)
 
 		var deltaPct, deltaAbs float64
 		if previousTotal > 0 {
@@ -2473,14 +2487,14 @@ func startServer(port string) {
 
 		c.JSON(200, map[string]any{
 			"currentPeriod": map[string]any{
-				"start":    currentStart.Format("2006-01-02"),
-				"end":      now.Format("2006-01-02"),
+				"start":    curFrom,
+				"end":      curTo,
 				"days":     periodDays,
 				"totalCost": currentTotal,
 			},
 			"previousPeriod": map[string]any{
-				"start":    previousStart.Format("2006-01-02"),
-				"end":      previousEnd.Format("2006-01-02"),
+				"start":    prevFrom,
+				"end":      prevTo,
 				"days":     periodDays,
 				"totalCost": previousTotal,
 			},
@@ -2489,6 +2503,11 @@ func startServer(port string) {
 				"percent":   deltaPct,
 				"trend":     trend,
 				"direction": map[bool]string{true: "increase", false: "decrease"}[deltaAbs > 0],
+			},
+			"coverage": map[string]any{
+				"subscriptions":       len(subs),
+				"coveredSubscriptions": len(coveredSubs),
+				"coveredIds":          coveredSubs,
 			},
 		})
 	})
@@ -2668,7 +2687,7 @@ func startServer(port string) {
 		})
 	r.GET("/api/costs", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
-		rows, err := cache.db.Query("SELECT resource_group, resource_type, resource_location, cost, subscription_id FROM costs WHERE subscription_id IN ("+placeholders(len(subs))+")", toAnySlice(subs)...)
+		rows, err := cache.db.Query("SELECT resource_group, resource_type, resource_location, cost, subscription_id FROM costs WHERE period = 'current' AND subscription_id IN ("+placeholders(len(subs))+")", toAnySlice(subs)...)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -4840,7 +4859,7 @@ func sseHandler(c *gin.Context) {
 							if dailyErr != nil {
 								log.Printf("SSE: failed to fetch daily costs for %s: %v", sid, dailyErr)
 							} else if len(dailyData) > 0 && !dailyCostsLookFlat(dailyData) {
-								cache.setDailyCosts(sid, dailyData)
+								cache.setDailyCostsForWindow(sid, dailyStart, dailyData)
 								log.Printf("SSE: cached %d daily cost entries for %s", len(dailyData), sid)
 							} else if len(dailyData) > 0 && dailyCostsLookFlat(dailyData) {
 								log.Printf("SSE: fetched daily costs for %s are still flat, not caching", sid)
@@ -5184,7 +5203,7 @@ func fetchDailyCostsWithCache(ctx context.Context, subID string, start, end time
 	}
 
 	if cache != nil {
-		cache.setDailyCosts(subID, daily)
+		cache.setDailyCostsForWindow(subID, start, daily)
 	}
 
 	return daily, nil

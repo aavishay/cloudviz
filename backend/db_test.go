@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -104,8 +106,8 @@ func TestDBCache_GetNonExistent(t *testing.T) {
 	defer cleanup()
 
 	result, found := cache.get("non-existent-sub", "current")
-	// The get function returns true even for empty results (design choice: serve whatever is in DB)
-	assert.True(t, found, "Function should return true even for empty results")
+	// A never-fetched sub is not found; an empty fetch is (see TestDBCache_EmptyFetchIsCachedNotMissing).
+	assert.False(t, found, "A never-fetched sub should not be found")
 	assert.Empty(t, result.Properties.Rows, "Result rows should be empty for non-existent data")
 	assert.NotNil(t, result.Properties, "Properties should not be nil")
 }
@@ -1060,7 +1062,7 @@ func TestDBCache_CacheMissScenarios(t *testing.T) {
 
 	// 1. Get non-existent subscription
 	result, found := cache.get("non-existent-sub", "current")
-	assert.True(t, found, "get returns true even for empty results")
+	assert.False(t, found, "get reports a never-fetched sub as not found")
 	assert.Empty(t, result.Properties.Rows, "Result should be empty for non-existent sub")
 
 	// 2. Get non-existent period
@@ -1079,7 +1081,7 @@ func TestDBCache_CacheMissScenarios(t *testing.T) {
 	cache.set("test-sub", "current", data)
 
 	result2, found2 := cache.get("test-sub", "non-existent-period")
-	assert.True(t, found2, "get returns true even for empty results")
+	assert.False(t, found2, "get reports a never-fetched period as not found")
 	assert.Empty(t, result2.Properties.Rows, "Result should be empty for non-existent period")
 
 	// 3. GetDailyCosts with no data
@@ -1471,9 +1473,19 @@ func TestDBCache_IsStaleFreshAndOld(t *testing.T) {
 	}})
 	assert.False(t, cache.isStale("sub"), "Freshly cached costs are not stale")
 
-	_, err := cache.db.Exec("UPDATE costs SET fetched_at = ? WHERE subscription_id = 'sub'", time.Now().Add(-7*time.Hour))
+	_, err := cache.db.Exec("UPDATE cost_fetches SET fetched_at = ? WHERE subscription_id = 'sub'", time.Now().Add(-7*time.Hour))
 	require.NoError(t, err)
 	assert.True(t, cache.isStale("sub"), "Costs older than 6 hours are stale")
+
+	// Data cached before fetches were recorded falls back to the cost rows' age.
+	_, err = cache.db.Exec("DELETE FROM cost_fetches")
+	require.NoError(t, err)
+	_, err = cache.db.Exec("UPDATE costs SET fetched_at = ? WHERE subscription_id = 'sub'", time.Now().Add(-7*time.Hour))
+	require.NoError(t, err)
+	assert.True(t, cache.isStale("sub"), "Legacy cost rows older than 6 hours are stale")
+	_, err = cache.db.Exec("UPDATE costs SET fetched_at = ? WHERE subscription_id = 'sub'", time.Now())
+	require.NoError(t, err)
+	assert.False(t, cache.isStale("sub"), "Fresh legacy cost rows are not stale")
 }
 
 func TestDBCache_GetCachedDailyCostsIgnoresAge(t *testing.T) {
@@ -1490,4 +1502,71 @@ func TestDBCache_GetCachedDailyCostsIgnoresAge(t *testing.T) {
 	rows := cache.getCachedDailyCosts("sub", time.Now().AddDate(0, 0, -1), time.Now())
 	require.Len(t, rows, 1, "Stale rows should still be returned for display")
 	assert.Equal(t, 42.0, rows[0]["cost"])
+}
+
+func TestDBCache_EmptyFetchIsCachedNotMissing(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	_, ok := cache.get("sub", "previous")
+	assert.False(t, ok, "Never-fetched period is not found")
+
+	// Azure returned no rows: the sub genuinely had no spend in the period.
+	cache.set("sub", "previous", armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{Rows: [][]any{}}})
+	res, ok := cache.get("sub", "previous")
+	assert.True(t, ok, "An empty fetch is cached as $0, not missing")
+	assert.Empty(t, res.Properties.Rows)
+
+	cached, missing := cache.getCachedSubscriptions([]string{"sub", "other"}, "previous")
+	assert.Equal(t, []string{"sub"}, cached)
+	assert.Equal(t, []string{"other"}, missing)
+
+	cache.set("sub", "current", armcostmanagement.QueryResult{})
+	assert.False(t, cache.isStale("sub"), "A fresh empty fetch is not stale, so it isn't refetched every sync")
+}
+
+func TestAppendCostPages(t *testing.T) {
+	link := func(s string) *string { return &s }
+	result := armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{
+		Rows: [][]any{{1.0}}, NextLink: link("page2"),
+	}}
+	pages := map[string]armcostmanagement.QueryResult{
+		"page2": {Properties: &armcostmanagement.QueryProperties{Rows: [][]any{{2.0}, {3.0}}, NextLink: link("page3")}},
+		"page3": {Properties: &armcostmanagement.QueryProperties{Rows: [][]any{{4.0}}}},
+	}
+	var fetched []string
+	err := appendCostPages(context.Background(), "sub/current", &result, func(nextLink string) (armcostmanagement.QueryResult, error) {
+		fetched = append(fetched, nextLink)
+		return pages[nextLink], nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"page2", "page3"}, fetched)
+	assert.Equal(t, [][]any{{1.0}, {2.0}, {3.0}, {4.0}}, result.Properties.Rows)
+	assert.Nil(t, result.Properties.NextLink)
+
+	// A failed page fails the whole query rather than returning truncated rows.
+	result = armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{Rows: [][]any{{1.0}}, NextLink: link("bad")}}
+	err = appendCostPages(context.Background(), "sub/current", &result, func(string) (armcostmanagement.QueryResult, error) {
+		return armcostmanagement.QueryResult{}, errors.New("boom")
+	})
+	assert.Error(t, err)
+}
+
+func TestDBCache_DailyHistoryCoverage(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	day := func(t time.Time) string { return t.Format("2006-01-02") }
+	cache.setDailyCostsForWindow("long", now.AddDate(0, 0, -90), []map[string]any{{"date": day(now), "cost": 1.0}})
+	cache.setDailyCostsForWindow("short", now.AddDate(0, 0, -30), []map[string]any{{"date": day(now), "cost": 1.0}})
+	cache.setDailyCosts("legacy", []map[string]any{{"date": day(now), "cost": 1.0}})
+
+	covered := cache.subsWithDailyHistorySince([]string{"long", "short", "legacy", "none"}, day(now.AddDate(0, 0, -59)))
+	assert.Equal(t, map[string]bool{"long": true}, covered, "Only subs whose fetch window reaches back far enough count as covered")
+
+	// A later, shorter refresh narrows the recorded window.
+	cache.setDailyCostsForWindow("long", now.AddDate(0, 0, -7), []map[string]any{{"date": day(now), "cost": 1.0}})
+	covered = cache.subsWithDailyHistorySince([]string{"long"}, day(now.AddDate(0, 0, -59)))
+	assert.Empty(t, covered)
 }
