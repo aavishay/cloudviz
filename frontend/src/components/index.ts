@@ -41,6 +41,7 @@ export {
   getTimeAgo
 } from './utils';
 export { normalizeEnvTag } from './env';
+export { toCSV, csvCell } from './csv';
 
 // Types
 export type {

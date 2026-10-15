@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -69,9 +70,7 @@ type WebhookNotifier struct {
 func NewWebhookNotifier(db *sql.DB) *WebhookNotifier {
 	return &WebhookNotifier{
 		db: db,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client: newWebhookClient(),
 	}
 }
 
@@ -175,7 +174,9 @@ func validateWebhookURL(urlStr string) error {
 	return nil
 }
 
-// isPrivateHost checks if a hostname resolves to a private/internal IP
+// isPrivateHost checks a webhook URL's host by name. It catches literal internal IPs and
+// obviously internal names up front; names that only resolve to internal addresses are
+// blocked at connect time by newWebhookClient.
 func isPrivateHost(host string) bool {
 	// Check for localhost variations
 	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
@@ -183,9 +184,8 @@ func isPrivateHost(host string) bool {
 	}
 
 	// Check for private IP ranges by parsing as IP
-	ip := net.ParseIP(host)
-	if ip != nil {
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+	if ip := net.ParseIP(host); ip != nil {
+		return isDisallowedWebhookIP(ip)
 	}
 
 	// Check for common internal hostname patterns
@@ -200,6 +200,50 @@ func isPrivateHost(host string) bool {
 	return false
 }
 
+// cgnatRange is shared address space (RFC 6598), also used for internal networks.
+var cgnatRange = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// isDisallowedWebhookIP reports whether a webhook may not connect to ip: loopback,
+// private, link-local (incl. the 169.254.169.254 metadata service), unspecified,
+// multicast and shared (CGNAT) addresses.
+func isDisallowedWebhookIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsMulticast() || ip.IsInterfaceLocalMulticast() || cgnatRange.Contains(ip)
+}
+
+// newWebhookClient returns an HTTP client for webhook delivery that refuses to connect to
+// internal addresses. The check runs on the address actually dialed (after DNS
+// resolution), so a public-looking hostname that resolves to an internal IP (e.g.
+// 169.254.169.254.nip.io, or DNS rebinding between validation and delivery) is blocked.
+// Redirects aren't followed, since they could point anywhere.
+func newWebhookClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if ip := net.ParseIP(host); ip == nil || isDisallowedWebhookIP(ip) {
+				return fmt.Errorf("webhook destination %s is not allowed", host)
+			}
+			return nil
+		},
+	}
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			// No proxy: connections go straight to the checked destination.
+			Proxy:               nil,
+			DialContext:         dialer.DialContext,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 // SendWebhook sends a webhook notification
 func (wn *WebhookNotifier) SendWebhook(alert Alert, currentCost float64) error {
 	if alert.WebhookURL == "" {
@@ -210,7 +254,11 @@ func (wn *WebhookNotifier) SendWebhook(alert Alert, currentCost float64) error {
 	if err := validateWebhookURL(alert.WebhookURL); err != nil {
 		return fmt.Errorf("webhook URL validation failed: %w", err)
 	}
+	return wn.deliverWebhook(alert, currentCost)
+}
 
+// deliverWebhook posts the alert payload to alert.WebhookURL with retries.
+func (wn *WebhookNotifier) deliverWebhook(alert Alert, currentCost float64) error {
 	percentage := 0.0
 	if alert.Threshold > 0 {
 		percentage = (currentCost / alert.Threshold) * 100
@@ -252,23 +300,21 @@ func (wn *WebhookNotifier) SendWebhook(alert Alert, currentCost float64) error {
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	// Create request
-	req, err := http.NewRequest("POST", alert.WebhookURL, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "CloudViz-Webhook/1.0")
-	req.Header.Set("X-CloudViz-Event", "budget.alert")
-	req.Header.Set("X-CloudViz-Signature", "") // Could add HMAC signature here
-
-	// Send with retries
+	// Send with retries. Each attempt builds a new request: a request's body is consumed
+	// by the first send, so reusing it made every retry send an empty body.
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * time.Second)
 		}
+
+		req, err := http.NewRequest("POST", alert.WebhookURL, bytes.NewReader(jsonPayload))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "CloudViz-Webhook/1.0")
+		req.Header.Set("X-CloudViz-Event", "budget.alert")
 
 		resp, err := wn.client.Do(req)
 		if err != nil {
@@ -355,20 +401,25 @@ func (wn *WebhookNotifier) CheckAndNotify() error {
 
 // shouldSendNotification checks if enough time has passed since last notification
 func (wn *WebhookNotifier) shouldSendNotification(alertID int) bool {
-	var lastSent sql.NullTime
+	// Latest attempt of any outcome, so a failing endpoint is retried hourly rather than
+	// on every 5-minute check. Not MAX(attempted_at): the aggregate loses the DATETIME
+	// type and fails to scan, which made every check send.
+	var lastAttempt sql.NullTime
 	err := wn.db.QueryRow(`
-		SELECT MAX(attempted_at)
+		SELECT attempted_at
 		FROM webhook_deliveries
-		WHERE alert_id = ? AND status_code >= 200 AND status_code < 300
-	`, alertID).Scan(&lastSent)
+		WHERE alert_id = ?
+		ORDER BY attempted_at DESC
+		LIMIT 1
+	`, alertID).Scan(&lastAttempt)
 
-	if err != nil || !lastSent.Valid {
-		// No previous successful delivery, send now
+	if err != nil || !lastAttempt.Valid {
+		// No previous attempt, send now
 		return true
 	}
 
 	// Rate limit: only send once per hour for the same alert
-	return time.Since(lastSent.Time) > time.Hour
+	return time.Since(lastAttempt.Time) > time.Hour
 }
 
 // CreateWebhookDeliveriesTable creates the table for tracking webhook deliveries

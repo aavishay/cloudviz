@@ -1,11 +1,16 @@
 package main
 
 import (
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Test Alert struct
@@ -228,4 +233,69 @@ func TestWebhookDelivery_WithError(t *testing.T) {
 
 	assert.Equal(t, "Connection refused", delivery.Error)
 	assert.Equal(t, 0, delivery.StatusCode)
+}
+
+func TestIsDisallowedWebhookIP(t *testing.T) {
+	for _, ip := range []string{"127.0.0.1", "::1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "0.0.0.0", "::", "100.64.0.1", "fd00::1", "224.0.0.1", "::ffff:10.0.0.1"} {
+		assert.True(t, isDisallowedWebhookIP(net.ParseIP(ip)), ip)
+	}
+	for _, ip := range []string{"8.8.8.8", "52.168.1.1", "2606:4700::1111"} {
+		assert.False(t, isDisallowedWebhookIP(net.ParseIP(ip)), ip)
+	}
+	assert.Error(t, validateWebhookURL("http://0.0.0.0:8080/x"))
+	assert.Error(t, validateWebhookURL("http://[::]:8080/x"))
+	assert.Error(t, validateWebhookURL("http://169.254.169.254/latest/meta-data"))
+}
+
+func TestWebhookClientRefusesInternalAddresses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer srv.Close()
+	// A hostname that resolves to loopback must be blocked at connect time, not just
+	// literal IPs at validation time.
+	url := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	_, err := newWebhookClient().Post(url, "application/json", strings.NewReader("{}"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not allowed")
+}
+
+func TestSendWebhookRetriesWithFullBody(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		if len(bodies) < 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	testCache, cleanup := setupTestDB(t)
+	defer cleanup()
+	db := testCache.db
+	require.NoError(t, CreateWebhookDeliveriesTable(db))
+	// The test server is on loopback, which the real client refuses; use a plain one.
+	wn := &WebhookNotifier{db: db, client: srv.Client()}
+
+	// validateWebhookURL rejects loopback, so call the delivery path directly.
+	alert := Alert{ID: 1, Name: "test", Threshold: 100, WebhookURL: srv.URL}
+	require.NoError(t, wn.deliverWebhook(alert, 50))
+	require.Len(t, bodies, 2)
+	assert.NotEmpty(t, bodies[1], "the retry carries the payload")
+	assert.Equal(t, bodies[0], bodies[1])
+}
+
+func TestShouldSendNotificationRateLimits(t *testing.T) {
+	testCache, cleanup := setupTestDB(t)
+	defer cleanup()
+	require.NoError(t, CreateWebhookDeliveriesTable(testCache.db))
+	wn := &WebhookNotifier{db: testCache.db}
+
+	assert.True(t, wn.shouldSendNotification(7), "first notification is sent")
+	wn.logDelivery(7, "https://example.com", "{}", 500, "", "boom", 0)
+	assert.False(t, wn.shouldSendNotification(7), "a recent failed attempt also waits an hour")
+	_, err := testCache.db.Exec("UPDATE webhook_deliveries SET attempted_at = datetime('now', '-2 hours')")
+	require.NoError(t, err)
+	assert.True(t, wn.shouldSendNotification(7), "after an hour it is sent again")
 }

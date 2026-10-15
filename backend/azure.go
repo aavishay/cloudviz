@@ -1,6 +1,7 @@
 package main
 
 import (
+	"regexp"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -29,20 +30,20 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// sanitizeKQL escapes single quotes and removes dangerous KQL operators to prevent injection
-func sanitizeKQL(input string) string {
-	if input == "" {
-		return ""
-	}
-	// Remove dangerous KQL operators that could be used for injection
-	dangerous := []string{"|", "where", "or", "union", "join", "extend", "project", "summarize", "take", "limit"}
-	result := strings.ToLower(input)
-	for _, d := range dangerous {
-		result = strings.ReplaceAll(result, d, "")
-	}
-	// Escape single quotes by doubling them (KQL escape sequence)
-	result = strings.ReplaceAll(result, "'", "\\'")
-	return result
+// kqlQuote returns s as a KQL verbatim string literal (@"..."), the safe way to embed a
+// value in a Resource Graph query: verbatim strings have no backslash escapes, and the
+// only special character, the double quote, is escaped by doubling it.
+func kqlQuote(s string) string {
+	return `@"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// armResourceIDPattern matches an ARM resource ID under a subscription: GUID subscription,
+// then path segments without quotes, backslashes or control characters.
+var armResourceIDPattern = regexp.MustCompile(`^/subscriptions/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(/[^/"'\\\x00-\x1f]+)*$`)
+
+// isValidResourceID reports whether s looks like an ARM resource ID.
+func isValidResourceID(s string) bool {
+	return len(s) <= 2048 && armResourceIDPattern.MatchString(s)
 }
 
 // metricsClients caches MetricsClient per subscription to avoid recreating them
@@ -658,14 +659,6 @@ func parseDailyCostResults(res armcostmanagement.QueryResult) []map[string]any {
 			len(results), results[0]["date"], results[len(results)-1]["date"], firstCost, lastCost, flat)
 	}
 	return results
-}
-
-func quoteAll(ss []string) []string {
-	quoted := make([]string, len(ss))
-	for i, s := range ss {
-		quoted[i] = fmt.Sprintf("'%s'", s)
-	}
-	return quoted
 }
 
 func placeholders(n int) string {
@@ -1683,9 +1676,11 @@ func getResourceContext(ctx context.Context, resourceID string) (*AzureResource,
 		return nil, err
 	}
 
-	// Sanitize resourceID to prevent KQL injection
-	sanitizedResourceID := sanitizeKQL(resourceID)
-	query := fmt.Sprintf("Resources | where id == '%s' | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState", sanitizedResourceID)
+	if !isValidResourceID(resourceID) {
+		return nil, fmt.Errorf("invalid resource ID")
+	}
+	// Resource IDs compare case-insensitively (=~); Azure returns them in mixed case.
+	query := "Resources | where id =~ " + kqlQuote(resourceID) + " | project id, name, type, location, subscriptionId, resourceGroup, tags, status=properties.provisioningState"
 	request := armresourcegraph.QueryRequest{
 		Query: to.Ptr(query),
 		Options: &armresourcegraph.QueryRequestOptions{

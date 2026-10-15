@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1599,6 +1600,12 @@ func startServer(port string) {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
+		if body.WebhookURL != "" {
+			if err := validateWebhookURL(body.WebhookURL); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+		}
 		if body.Type == "" {
 			body.Type = "budget"
 		}
@@ -1635,6 +1642,12 @@ func startServer(port string) {
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
+		}
+		if body.WebhookURL != "" {
+			if err := validateWebhookURL(body.WebhookURL); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		enabledVal := 0
 		if body.Enabled {
@@ -2734,10 +2747,12 @@ func startServer(port string) {
 		}
 		c.Header("Content-Type", "text/csv")
 		c.Header("Content-Disposition", "attachment; filename=cloudviz-export.csv")
-		fmt.Fprintln(c.Writer, "Name,Type,Location,Resource Group,Subscription ID,Cost,Optimization")
+		w := csv.NewWriter(c.Writer)
+		w.Write([]string{"Name", "Type", "Location", "Resource Group", "Subscription ID", "Cost", "Optimization"})
 		for _, r := range res {
-			fmt.Fprintf(c.Writer, "%s,%s,%s,%s,%s,%.2f,%s\n", r.Name, r.Type, r.Location, r.ResourceGroup, r.SubscriptionID, r.Cost, r.Optimization)
+			w.Write([]string{csvSafe(r.Name), csvSafe(r.Type), csvSafe(r.Location), csvSafe(r.ResourceGroup), csvSafe(r.SubscriptionID), fmt.Sprintf("%.2f", r.Cost), csvSafe(r.Optimization)})
 		}
+		w.Flush()
 	})
 
 	r.GET("/api/ai-insights/:resourceId", func(c *gin.Context) {
@@ -5400,6 +5415,16 @@ func isReservationCandidate(resType string, tags map[string]string) bool {
 // rateOfOnDemand (e.g. 0.7 = 30% off) takes to cost less than running on demand.
 func reservationBreakEvenMonths(termMonths int, rateOfOnDemand float64) float64 {
 	return math.Round(float64(termMonths)*rateOfOnDemand*10) / 10
+}
+
+// csvSafe neutralizes spreadsheet formula injection: a cell starting with =, +, -, @, tab
+// or carriage return is evaluated as a formula by Excel and others, so it gets a leading
+// apostrophe. (Quoting of commas and quotes is left to encoding/csv.)
+func csvSafe(v string) string {
+	if v != "" && strings.ContainsRune("=+-@\t\r", rune(v[0])) {
+		return "'" + v
+	}
+	return v
 }
 
 // forecastCacheKey identifies a forecast fetch the same way cost_forecast rows are keyed.

@@ -81,13 +81,11 @@ func (da *DependencyAnalyzer) queryResourceFromARG(ctx context.Context, resource
 		return nil, fmt.Errorf("could not extract subscription ID from resource ID")
 	}
 
-	// Escape double quotes in resourceID to prevent KQL injection
-	escapedResourceID := strings.ReplaceAll(resourceID, `"`, `\"`)
-	query := fmt.Sprintf(`
+	query := `
 		resources
-		| where id == "%s"
+		| where id =~ ` + kqlQuote(resourceID) + `
 		| project name, type, subscriptionId, resourceGroup
-	`, escapedResourceID)
+	`
 
 	result, err := da.argClient.Resources(ctx, armresourcegraph.QueryRequest{
 		Subscriptions: []*string{&[]string{subID}[0]},
@@ -132,6 +130,10 @@ func getStringValue(m map[string]interface{}, key string) string {
 
 // AnalyzeDependencies analyzes dependencies for a resource
 func (da *DependencyAnalyzer) AnalyzeDependencies(ctx context.Context, resourceID string) (*ResourceDependencyGraph, error) {
+	// Every query below embeds the resource ID; reject anything that isn't one.
+	if !isValidResourceID(resourceID) {
+		return nil, fmt.Errorf("invalid resource ID")
+	}
 	// Get resource details from database or Azure
 	var resourceName, resourceType, subscriptionID, resourceGroup string
 	err := da.db.QueryRow(`
@@ -190,8 +192,8 @@ func (da *DependencyAnalyzer) analyzeVM(ctx context.Context, resourceID, subscri
 	nics, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type == "microsoft.network/networkinterfaces"
-		| where subscriptionId == "`+subscriptionID+`"
-		| where properties.virtualMachine.id contains "`+resourceID+`"
+		| where subscriptionId == `+kqlQuote(subscriptionID)+`
+		| where properties.virtualMachine.id contains `+kqlQuote(resourceID)+`
 		| project id, name, type
 	`)
 	if err == nil {
@@ -211,9 +213,9 @@ func (da *DependencyAnalyzer) analyzeVM(ctx context.Context, resourceID, subscri
 	disks, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type == "microsoft.compute/disks"
-		| where subscriptionId == "`+subscriptionID+`"
+		| where subscriptionId == `+kqlQuote(subscriptionID)+`
 		| where properties.diskState == "Attached"
-		| where properties.managedBy contains "`+resourceID+`"
+		| where properties.managedBy contains `+kqlQuote(resourceID)+`
 		| project id, name, type
 	`)
 	if err == nil {
@@ -251,8 +253,8 @@ func (da *DependencyAnalyzer) analyzeNIC(ctx context.Context, resourceID, subscr
 	vms, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type == "microsoft.compute/virtualmachines"
-		| where subscriptionId == "`+subscriptionID+`"
-		| where properties.networkProfile.networkInterfaces contains "`+resourceID+`"
+		| where subscriptionId == `+kqlQuote(subscriptionID)+`
+		| where properties.networkProfile.networkInterfaces contains `+kqlQuote(resourceID)+`
 		| project id, name, type
 	`)
 	if err == nil {
@@ -272,7 +274,7 @@ func (da *DependencyAnalyzer) analyzeNIC(ctx context.Context, resourceID, subscr
 	subnets, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type == "microsoft.network/networkinterfaces"
-		| where id == "`+resourceID+`"
+		| where id == `+kqlQuote(resourceID)+`
 		| project subnetId = tostring(properties.ipConfigurations[0].properties.subnet.id)
 		| join kind=inner (
 			resources
@@ -312,9 +314,9 @@ func (da *DependencyAnalyzer) analyzeDisk(ctx context.Context, resourceID, subsc
 	vms, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type == "microsoft.compute/virtualmachines"
-		| where subscriptionId == "`+subscriptionID+`"
-		| where properties.storageProfile.osDisk.managedDisk.id == "`+resourceID+`"
-			or properties.storageProfile.dataDisks contains (managedDisk: { id: "`+resourceID+`" })
+		| where subscriptionId == `+kqlQuote(subscriptionID)+`
+		| where properties.storageProfile.osDisk.managedDisk.id == `+kqlQuote(resourceID)+`
+			or properties.storageProfile.dataDisks contains (managedDisk: { id: `+kqlQuote(resourceID)+` })
 		| project id, name, type
 	`)
 	if err == nil {
@@ -348,8 +350,8 @@ func (da *DependencyAnalyzer) analyzePublicIP(ctx context.Context, resourceID, s
 	nics, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type == "microsoft.network/networkinterfaces"
-		| where subscriptionId == "`+subscriptionID+`"
-		| where properties.ipConfigurations contains (properties: { publicIPAddress: { id: "`+resourceID+`" } })
+		| where subscriptionId == `+kqlQuote(subscriptionID)+`
+		| where properties.ipConfigurations contains (properties: { publicIPAddress: { id: `+kqlQuote(resourceID)+` } })
 		| project id, name, type
 	`)
 	if err == nil {
@@ -383,8 +385,8 @@ func (da *DependencyAnalyzer) analyzeVNet(ctx context.Context, resourceID, subsc
 	nics, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type == "microsoft.network/networkinterfaces"
-		| where subscriptionId == "`+subscriptionID+`"
-		| where properties.ipConfigurations contains (properties: { subnet: { id: contains("`+resourceID+`") } })
+		| where subscriptionId == `+kqlQuote(subscriptionID)+`
+		| where properties.ipConfigurations contains (properties: { subnet: { id: contains(`+kqlQuote(resourceID)+`) } })
 		| project id, name, type
 	`)
 	if err == nil {
@@ -418,8 +420,8 @@ func (da *DependencyAnalyzer) analyzeStorageAccount(ctx context.Context, resourc
 	vms, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type == "microsoft.compute/virtualmachines"
-		| where subscriptionId == "`+subscriptionID+`"
-		| where properties.diagnosticsProfile.bootDiagnostics.storageUri contains "`+resourceGroup+`"
+		| where subscriptionId == `+kqlQuote(subscriptionID)+`
+		| where properties.diagnosticsProfile.bootDiagnostics.storageUri contains `+kqlQuote(resourceGroup)+`
 		| project id, name, type
 	`)
 	if err == nil {
@@ -457,15 +459,15 @@ func (da *DependencyAnalyzer) analyzeGeneric(ctx context.Context, resourceID, su
 	})
 
 	// Query resources in same resource group (siblings)
-	siblings, err := da.queryRelatedResources(ctx, subscriptionID, fmt.Sprintf(`
+	siblings, err := da.queryRelatedResources(ctx, subscriptionID, `
 		resources
 		| where type != "microsoft.resources/resourcegroups"
-		| where resourceGroup == "%s"
-		| where subscriptionId == "%s"
-		| where id != "%s"
+		| where resourceGroup =~ `+kqlQuote(resourceGroup)+`
+		| where subscriptionId == `+kqlQuote(subscriptionID)+`
+		| where id !~ `+kqlQuote(resourceID)+`
 		| take 10
 		| project id, name, type
-	`, resourceGroup, subscriptionID, resourceID))
+	`)
 	if err == nil {
 		for _, sibling := range siblings {
 			graph.Dependents = append(graph.Dependents, ResourceDependency{
@@ -520,6 +522,10 @@ func RegisterDependencyRoutes(r *gin.Engine, db *sql.DB, argClient *armresourceg
 			c.JSON(400, gin.H{"error": "missing 'id' query parameter"})
 			return
 		}
+		if !isValidResourceID(resourceID) {
+			c.JSON(400, gin.H{"error": "invalid resource ID"})
+			return
+		}
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()
@@ -541,6 +547,12 @@ func RegisterDependencyRoutes(r *gin.Engine, db *sql.DB, argClient *armresourceg
 		}
 		if err := c.BindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": "invalid request"})
+			return
+		}
+		// Each ID costs several Resource Graph queries; bound the request.
+		const maxBulkResources = 50
+		if len(req.ResourceIDs) > maxBulkResources {
+			c.JSON(400, gin.H{"error": fmt.Sprintf("at most %d resourceIds per request", maxBulkResources)})
 			return
 		}
 

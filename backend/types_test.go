@@ -286,3 +286,27 @@ func TestParseMarketplaceResults_PublisherFromResourceID(t *testing.T) {
 	assert.Equal(t, "Pay per use", got[0]["product"])
 	assert.Equal(t, "elastic", got[0]["resourceName"])
 }
+
+func TestKQLQuote(t *testing.T) {
+	assert.Equal(t, `@"abc"`, kqlQuote("abc"))
+	assert.Equal(t, `@"a""b"`, kqlQuote(`a"b`), "double quotes are doubled")
+	assert.Equal(t, `@"a\'b\"`, kqlQuote(`a\'b\`), "backslashes are literal in verbatim strings")
+}
+
+func TestIsValidResourceID(t *testing.T) {
+	valid := "/subscriptions/83c6a07d-d882-42e8-85e3-089ca7711b6a/resourceGroups/rg-prod_1.a(b)/providers/Microsoft.Compute/virtualMachines/vm-1"
+	assert.True(t, isValidResourceID(valid))
+	assert.True(t, isValidResourceID("/subscriptions/83c6a07d-d882-42e8-85e3-089ca7711b6a"))
+	for _, bad := range []string{
+		"",
+		"vm-1",
+		"/subscriptions/not-a-guid/resourceGroups/rg",
+		valid + `" or 1==1 //`,
+		valid + `' | union authorizationresources`,
+		valid + `\`,
+		valid + "\n| take 1",
+		"/subscriptions/83c6a07d-d882-42e8-85e3-089ca7711b6a//double-slash",
+	} {
+		assert.False(t, isValidResourceID(bad), bad)
+	}
+}

@@ -20,6 +20,7 @@ import {
   friendlyType,
   inferEnvFromRG,
   normalizeEnvTag,
+  toCSV,
   type AzureResource,
   type CostPrediction,
   type CostItem,
@@ -188,7 +189,7 @@ export default function App() {
       r.cost?.toString() || '0',
       r.status || 'Unknown'
     ]);
-    const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${c}"`).join(','))].join('\n');
+    const csv = toCSV(headers, rows);
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -4727,10 +4728,7 @@ export default function App() {
     }));
 
     const headers = ['Subscription ID', 'Resource Group', 'Resource Type', 'Location', 'Cost (30d)', 'Previous Cost', 'Trend %'];
-    const csvContent = [
-      headers.join(','),
-      ...data.map(row => Object.values(row).join(','))
-    ].join('\n');
+    const csvContent = toCSV(headers, data.map(row => Object.values(row)));
 
     const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);

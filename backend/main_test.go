@@ -557,3 +557,12 @@ func TestCostSyncWorkerQueueAndBroadcast(t *testing.T) {
 	default:
 	}
 }
+
+func TestCSVSafe(t *testing.T) {
+	assert.Equal(t, "vm-1", csvSafe("vm-1"))
+	assert.Equal(t, "'=HYPERLINK(\"http://x\")", csvSafe(`=HYPERLINK("http://x")`))
+	assert.Equal(t, "'+1", csvSafe("+1"))
+	assert.Equal(t, "'-2", csvSafe("-2"))
+	assert.Equal(t, "'@SUM(A1)", csvSafe("@SUM(A1)"))
+	assert.Equal(t, "", csvSafe(""))
+}
