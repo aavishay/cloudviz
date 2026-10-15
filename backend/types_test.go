@@ -324,3 +324,11 @@ func TestExtractJSONObject(t *testing.T) {
 	}
 	assert.Equal(t, "no json here", extractJSONObject("no json here"))
 }
+
+func TestMonitorTimespanIsUTC(t *testing.T) {
+	loc := time.FixedZone("IDT", 3*3600)
+	start := time.Date(2026, 10, 8, 18, 16, 23, 0, loc)
+	got := monitorTimespan(start, start.Add(7*24*time.Hour))
+	assert.Equal(t, "2026-10-08T15:16:23Z/2026-10-15T15:16:23Z", got)
+	assert.NotContains(t, got, "+", "a '+' offset decodes as a space in the query string")
+}

@@ -1479,31 +1479,25 @@ func detectUnit(name string) string {
 // MetricConfig defines the metrics to fetch for a resource type
 var metricConfigs = map[string]struct {
 	metricNames string
-	fallback    map[string][]float64
 }{
 	"microsoft.compute/virtualmachines": {
-		metricNames: "Percentage CPU,Average_MemoryUsagePercentage,DataDiskReadBytesPerSecond,DataDiskWriteBytesPerSecond,OSDiskReadBytesPerSecond,OSDiskWriteBytesPerSecond,NetworkInTotal,NetworkOutTotal",
-		fallback:    map[string][]float64{"Percentage CPU": {12, 15, 18, 14, 22, 19, 15}, "Average_MemoryUsagePercentage": {30, 35, 28, 40, 25, 33, 29}},
+		// Platform metric names; one invalid name fails the whole request.
+		metricNames: "Percentage CPU,Available Memory Percentage,Disk Read Bytes,Disk Write Bytes,Network In Total,Network Out Total",
 	},
 	"microsoft.sql/servers/databases": {
 		metricNames: "cpu_percent,dtu_consumption_percent,data_space_used_percent,sessions_count,workers_count",
-		fallback:    map[string][]float64{"cpu_percent": {10, 15, 12, 18, 14, 20, 16}, "dtu_consumption_percent": {20, 25, 22, 28, 24, 30, 26}},
 	},
 	"microsoft.documentdb/databaseaccounts": {
 		metricNames: "TotalRequestUnits,Requests,DocumentCount,ProvisionedThroughput,MongoRequestUnits",
-		fallback:    map[string][]float64{"TotalRequestUnits": {100, 150, 120, 180, 140, 200, 160}, "Requests": {50, 75, 60, 90, 70, 100, 80}},
 	},
 	"microsoft.web/sites": {
 		metricNames: "AverageResponseTime,Requests,HttpQueueLength,MemoryWorkingSet,BytesReceived,BytesSent",
-		fallback:    map[string][]float64{"AverageResponseTime": {50, 80, 65, 100, 75, 120, 90}, "HttpQueueLength": {1, 2, 1, 3, 2, 4, 2}, "MemoryWorkingSet": {200, 250, 220, 300, 240, 320, 260}},
 	},
 	"microsoft.storage/storageaccounts": {
 		metricNames: "UsedCapacity,Transactions,BlobCapacity,TableCapacity,QueueCapacity",
-		fallback:    map[string][]float64{"UsedCapacity": {10000000000, 10500000000, 10200000000, 10800000000, 10400000000, 11000000000, 10600000000}, "Transactions": {1000, 1500, 1200, 1800, 1400, 2000, 1600}},
 	},
 	"microsoft.containerservice/managedclusters": {
 		metricNames: "clusterCpuUtilization,nodeCpuUtilization_Mean,nodeMemoryUtilization_Mean,podsCount_Free",
-		fallback:    map[string][]float64{"clusterCpuUtilization": {30, 35, 28, 40, 32, 45, 38}, "nodeMemoryUtilization_Mean": {50, 55, 48, 60, 52, 65, 58}},
 	},
 }
 
@@ -1523,18 +1517,18 @@ func fetchResourceMetrics(ctx context.Context, resourceID, resType string) (map[
 
 	parts := strings.Split(resourceID, "/")
 	if len(parts) < 3 {
-		return config.fallback, nil
+		return nil, fmt.Errorf("invalid resource ID")
 	}
 	subID := parts[2]
 
 	client, err := getMetricsClient(subID)
 	if err != nil {
-		return config.fallback, nil
+		return nil, err
 	}
 
 	endTime := time.Now()
 	startTime := endTime.Add(-7 * 24 * time.Hour)
-	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+	timespan := monitorTimespan(startTime, endTime)
 
 	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
 		Timespan:    &timespan,
@@ -1544,12 +1538,13 @@ func fetchResourceMetrics(ctx context.Context, resourceID, resType string) (map[
 	})
 
 	if err != nil {
-		return config.fallback, nil
+		return nil, err
 	}
 
+	// No made-up fallback series: recommendations must not rest on invented metrics.
 	metrics := parseMetricsResponse(res)
 	if len(metrics) == 0 {
-		return config.fallback, nil
+		return nil, fmt.Errorf("no metrics returned for %s", resourceID)
 	}
 
 	// Cache the metrics
@@ -1601,7 +1596,7 @@ func fetchVMAvailability(ctx context.Context, resourceID string, days int) (upti
 
 	endTime := time.Now().UTC()
 	startTime := endTime.AddDate(0, 0, -days)
-	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+	timespan := monitorTimespan(startTime, endTime)
 
 	// Try VmAvailabilityMetric first (Azure preview metric: 1 = available, 0 = not available)
 	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
@@ -1744,7 +1739,7 @@ func getRuleBasedRecommendation(resource *AzureResource, stats MetricsSummary) [
 	var recs []Recommendation
 
 	cpuStat, hasCPU := stats.Metrics["Percentage CPU"]
-	memStat, hasMem := stats.Metrics["Average_MemoryUsagePercentage"]
+	memStat, hasMem := stats.Metrics["Available Memory Percentage"]
 
 	avgCPU := -1.0
 	avgMem := -1.0
@@ -1752,7 +1747,7 @@ func getRuleBasedRecommendation(resource *AzureResource, stats MetricsSummary) [
 		avgCPU = cpuStat.Avg
 	}
 	if hasMem {
-		avgMem = memStat.Avg
+		avgMem = 100 - memStat.Avg // memory in use
 	}
 
 	// Rule: Unused resource
@@ -1935,6 +1930,13 @@ Only respond with valid JSON. No markdown, no explanations outside the JSON.`, r
 	return parsed.Recommendations, parsed.ConfidenceScore, parsed.OverallCategory, nil
 }
 
+// monitorTimespan formats an Azure Monitor timespan in UTC. A local offset like "+03:00"
+// reaches the API as " 03:00" (the "+" decodes as a space in the query string), which it
+// rejects as an invalid interval, so every metrics call failed outside UTC.
+func monitorTimespan(start, end time.Time) string {
+	return start.UTC().Format(time.RFC3339) + "/" + end.UTC().Format(time.RFC3339)
+}
+
 // extractJSONObject returns the outermost {...} in s (e.g. inside ```json fences or after
 // a sentence of prose), or s unchanged when it has none.
 func extractJSONObject(s string) string {
@@ -1973,9 +1975,12 @@ func fetchVMMetrics(ctx context.Context, resourceID string, days int) (map[strin
 
 	endTime := time.Now()
 	startTime := endTime.Add(-time.Duration(days) * 24 * time.Hour)
-	timespan := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+	timespan := monitorTimespan(startTime, endTime)
 
-	metricNames := "Percentage CPU,Average_MemoryUsagePercentage"
+	// "Available Memory Percentage" is the platform metric (memory in use = 100 - it);
+	// Average_MemoryUsagePercentage is a Log Analytics counter, and asking for it failed
+	// the whole request, so no VM ever had metrics.
+	metricNames := "Percentage CPU,Available Memory Percentage"
 	res, err := client.List(ctx, resourceID, &armmonitor.MetricsClientListOptions{
 		Timespan:    &timespan,
 		Interval:    to.Ptr("PT1H"),
@@ -2013,7 +2018,7 @@ func fetchVMMetrics(ctx context.Context, resourceID string, days int) (map[strin
 			if strings.Contains(strings.ToLower(name), "cpu") {
 				avgCPU = avg
 			} else if strings.Contains(strings.ToLower(name), "memory") {
-				avgMem = avg
+				avgMem = 100 - avg
 			}
 		}
 	}

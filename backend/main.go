@@ -95,6 +95,10 @@ var (
 	// Forecast fetches in flight, keyed by forecastCacheKey to match the
 	// (subscription_id, days) cache rows, so repeated dashboard loads don't
 	// queue duplicate fetches behind forecastLimiter.
+	// /api/sla responses by period and threshold.
+	slaCacheMu sync.Mutex
+	slaCache   = make(map[string]slaCacheEntry)
+
 	forecastInFlightMu sync.Mutex
 	forecastInFlight   = make(map[string]bool)
 )
@@ -3313,6 +3317,17 @@ func startServer(port string) {
 			fmt.Sscanf(t, "%f", &threshold)
 		}
 
+		// Cached: every dashboard load called this, and each call is a Resource Graph query
+		// plus Azure Monitor availability metrics for every running VM.
+		cacheKey := fmt.Sprintf("%d|%g", periodDays, threshold)
+		slaCacheMu.Lock()
+		if entry, ok := slaCache[cacheKey]; ok && time.Since(entry.at) < slaCacheTTL {
+			slaCacheMu.Unlock()
+			c.JSON(200, entry.body)
+			return
+		}
+		slaCacheMu.Unlock()
+
 		ctx := c.Request.Context()
 
 		// Query 1: running VMs only (power state = "VM running")
@@ -3336,6 +3351,7 @@ func startServer(port string) {
 			},
 		}, nil)
 		if err != nil {
+			log.Printf("SLA: failed to list running VMs: %v", err)
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
@@ -3446,12 +3462,16 @@ func startServer(port string) {
 			return ui < uj
 		})
 
-		c.JSON(200, gin.H{
+		body := gin.H{
 			"periodDays": periodDays,
 			"threshold":  threshold,
 			"totalVMs":   len(vms),
 			"data":       results,
-		})
+		}
+		slaCacheMu.Lock()
+		slaCache[cacheKey] = slaCacheEntry{at: time.Now(), body: body}
+		slaCacheMu.Unlock()
+		c.JSON(200, body)
 	})
 
 	// Serve Static Files from embedded FS
@@ -5448,6 +5468,13 @@ func csvSafe(v string) string {
 		return "'" + v
 	}
 	return v
+}
+
+const slaCacheTTL = 10 * time.Minute
+
+type slaCacheEntry struct {
+	at   time.Time
+	body gin.H
 }
 
 // forecastCacheKey identifies a forecast fetch the same way cost_forecast rows are keyed.
