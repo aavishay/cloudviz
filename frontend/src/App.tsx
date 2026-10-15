@@ -2663,7 +2663,7 @@ export default function App() {
           const covered = data.coverage?.coveredSubscriptions ?? 0;
           const total = data.coverage?.subscriptions ?? 0;
           if (total > 0 && covered < total) {
-            setDataCompletenessWarning(`Period-over-period comparison covers ${covered} of ${total} subscriptions. The rest don't have ${Number(costPeriod) * 2} days of synced cost history yet; they're included once the sync fetches it.`);
+            setDataCompletenessWarning(`Period-over-period comparison covers ${covered} of ${total} subscriptions${covered * 2 < total ? ', so it is hidden until at least half are covered' : ''}. The rest don't have ${Number(costPeriod) * 2} days of synced cost history yet; they're included once the sync fetches it.`);
           } else {
             setDataCompletenessWarning(null);
           }
@@ -4550,7 +4550,10 @@ export default function App() {
     const coverage = periodComparison?.coverage;
     const currentTotal = Number(periodComparison?.currentPeriod?.totalCost) || 0;
     const previousTotal = Number(periodComparison?.previousPeriod?.totalCost) || 0;
-    if (!coverage?.coveredSubscriptions || previousTotal === 0) return null;
+    // Hide the comparison until most subscriptions have history: a change computed from
+    // a handful of small subscriptions (e.g. "-100%, $9") says nothing about the total.
+    const covered = Number(coverage?.coveredSubscriptions) || 0;
+    if (covered === 0 || covered * 2 < (Number(coverage?.subscriptions) || 0) || previousTotal === 0) return null;
     const change = currentTotal - previousTotal;
     let percentChange = ((change / previousTotal) * 100);
     if (percentChange > 1000) percentChange = 1000;
