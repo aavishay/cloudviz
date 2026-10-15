@@ -521,3 +521,39 @@ func TestReservationBreakEvenMonths(t *testing.T) {
 	assert.Equal(t, 8.4, reservationBreakEvenMonths(12, 0.70))
 	assert.Equal(t, 19.8, reservationBreakEvenMonths(36, 0.55))
 }
+
+func TestCostSyncWorkerQueueAndBroadcast(t *testing.T) {
+	w := &costSyncWorker{queued: make(map[string]bool), wake: make(chan struct{}, 1), subscribers: make(map[chan costSyncEvent]bool)}
+
+	w.enqueue("a", "b")
+	w.enqueue("b", "c") // b is already queued
+	var order []string
+	for {
+		sid, ok := w.next()
+		if !ok {
+			break
+		}
+		order = append(order, sid)
+	}
+	assert.Equal(t, []string{"a", "b", "c"}, order, "FIFO without duplicates")
+	w.enqueue("a")
+	sid, ok := w.next()
+	assert.True(t, ok)
+	assert.Equal(t, "a", sid, "a dequeued sub can be queued again")
+
+	events, unsubscribe := w.subscribe()
+	w.broadcast(costSyncEvent{subID: "x"})
+	select {
+	case ev := <-events:
+		assert.Equal(t, "x", ev.subID)
+	default:
+		t.Fatal("subscriber did not receive the event")
+	}
+	unsubscribe()
+	w.broadcast(costSyncEvent{subID: "y"})
+	select {
+	case <-events:
+		t.Fatal("unsubscribed stream still received events")
+	default:
+	}
+}

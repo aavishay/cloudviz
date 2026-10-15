@@ -315,7 +315,7 @@ func getMetricsClient(subID string) (*armmonitor.MetricsClient, error) {
 		return client.(*armmonitor.MetricsClient), nil
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getCachedCredential()
 	if err != nil {
 		return nil, err
 	}
@@ -1666,7 +1666,7 @@ func fetchVMAvailability(ctx context.Context, resourceID string, days int) (upti
 
 // getResourceContext looks up a resource from Azure Resource Graph
 func getResourceContext(ctx context.Context, resourceID string) (*AzureResource, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getCachedCredential()
 	if err != nil {
 		return nil, err
 	}
@@ -1969,7 +1969,7 @@ func fetchVMMetrics(ctx context.Context, resourceID string, days int) (map[strin
 		}
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getCachedCredential()
 	if err != nil {
 		return fallbackVMMetrics(), nil
 	}
@@ -2156,7 +2156,7 @@ type ActivityLogEvent struct {
 
 // fetchActivityLogs fetches Azure Activity Logs for a subscription within a time range
 func fetchActivityLogs(ctx context.Context, subscriptionID string, startTime, endTime time.Time) (map[string][]ActivityLogEvent, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getCachedCredential()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get credentials: %w", err)
 	}

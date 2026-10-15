@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"embed"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	armruntime "github.com/Azure/azure-sdk-for-go/sdk/azcore/arm/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -132,7 +131,7 @@ func main() {
 		Short:   "CloudViz is an Azure resource and cost management tool",
 		Version: Version,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			cred, err := azidentity.NewDefaultAzureCredential(nil)
+			cred, err := getCachedCredential()
 			if err != nil {
 				return fmt.Errorf("failed to create credential: %w", err)
 			}
@@ -1790,7 +1789,7 @@ func startServer(port string) {
 			return
 		}
 
-		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		cred, err := getCachedCredential()
 		if err != nil {
 			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to create Azure credential: %v", err)})
 			return
@@ -4130,6 +4129,7 @@ func startServer(port string) {
 		log.Printf("Loaded %d resources from the stored inventory", n)
 	}
 	go runInventorySnapshots(context.Background())
+	go costSync.run(context.Background())
 	go cache.runWALCheckpoints(context.Background(), 10*time.Minute)
 	go openBrowser(fmt.Sprintf("http://localhost:%s", port))
 	if err := serveLoopback(r, port); err != nil {
@@ -4673,6 +4673,216 @@ type streamMsg struct {
 	Message string `json:"message,omitempty"`
 }
 
+// ─── Cost sync worker ───────────────────────────────────────────────────────
+
+// costSyncEvent is the outcome of syncing one subscription, as stream messages.
+type costSyncEvent struct {
+	subID string
+	msgs  []streamMsg
+}
+
+// costSyncWorker fetches subscription costs one at a time from a deduplicated queue and
+// broadcasts each result to subscribed streams. It runs on the server, so a sync doesn't
+// depend on a browser tab staying open, and several tabs share one queue instead of each
+// fetching every subscription (which multiplied Cost Management calls and 429s).
+type costSyncWorker struct {
+	mu          sync.Mutex
+	queue       []string
+	queued      map[string]bool
+	wake        chan struct{}
+	subscribers map[chan costSyncEvent]bool
+}
+
+var costSync = &costSyncWorker{
+	queued:      make(map[string]bool),
+	wake:        make(chan struct{}, 1),
+	subscribers: make(map[chan costSyncEvent]bool),
+}
+
+const (
+	costSyncPause       = 5 * time.Second  // between subscriptions
+	costSyncSubTimeout  = 90 * time.Second // per subscription, incl. one long Retry-After
+	costSyncRescanEvery = 30 * time.Minute // queue stale subscriptions this often
+)
+
+// enqueue adds subscriptions to the end of the queue, skipping ones already queued.
+func (w *costSyncWorker) enqueue(subIDs ...string) {
+	w.mu.Lock()
+	for _, sid := range subIDs {
+		if !w.queued[sid] {
+			w.queued[sid] = true
+			w.queue = append(w.queue, sid)
+		}
+	}
+	w.mu.Unlock()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (w *costSyncWorker) next() (string, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.queue) == 0 {
+		return "", false
+	}
+	sid := w.queue[0]
+	w.queue = w.queue[1:]
+	delete(w.queued, sid)
+	return sid, true
+}
+
+// subscribe returns a channel of sync results and a function to stop receiving them.
+func (w *costSyncWorker) subscribe() (<-chan costSyncEvent, func()) {
+	ch := make(chan costSyncEvent, 64)
+	w.mu.Lock()
+	w.subscribers[ch] = true
+	w.mu.Unlock()
+	return ch, func() {
+		w.mu.Lock()
+		delete(w.subscribers, ch)
+		w.mu.Unlock()
+	}
+}
+
+func (w *costSyncWorker) broadcast(ev costSyncEvent) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for ch := range w.subscribers {
+		select {
+		case ch <- ev:
+		default:
+			log.Printf("Cost sync: a stream is not keeping up; dropped result for %s", ev.subID)
+		}
+	}
+}
+
+// queueStaleSubscriptions queues active subscriptions with no cached costs first, then
+// those whose costs are older than the staleness window.
+func (w *costSyncWorker) queueStaleSubscriptions(ctx context.Context) {
+	subs, err := getActiveSubscriptions(ctx)
+	if err != nil {
+		log.Printf("Cost sync: failed to list subscriptions: %v", err)
+		return
+	}
+	ids := make([]string, 0, len(subs))
+	for _, sub := range subs {
+		ids = append(ids, sub.ID)
+	}
+	cached, missing := cache.getCachedSubscriptions(ids, "current")
+	var stale []string
+	for _, sid := range cached {
+		if cache.isStale(sid) {
+			stale = append(stale, sid)
+		}
+	}
+	if len(missing)+len(stale) > 0 {
+		log.Printf("Cost sync: queueing %d uncached and %d stale subscriptions", len(missing), len(stale))
+	}
+	w.enqueue(append(missing, stale...)...)
+}
+
+// run processes the queue until ctx ends, rescanning for stale subscriptions periodically.
+func (w *costSyncWorker) run(ctx context.Context) {
+	w.queueStaleSubscriptions(ctx)
+	rescan := time.NewTicker(costSyncRescanEvery)
+	defer rescan.Stop()
+	for {
+		sid, ok := w.next()
+		if !ok {
+			select {
+			case <-w.wake:
+			case <-rescan.C:
+				w.queueStaleSubscriptions(ctx)
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
+		var msgs []streamMsg
+		if _, ok := cache.get(sid, "current"); ok && !cache.isStale(sid) {
+			// Synced since it was queued (e.g. requested by two streams): send the cache.
+			msgs = cachedSubscriptionMsgs(sid)
+		} else {
+			subCtx, cancel := context.WithTimeout(ctx, costSyncSubTimeout)
+			msgs = syncSubscriptionCosts(subCtx, sid)
+			cancel()
+		}
+		w.broadcast(costSyncEvent{subID: sid, msgs: msgs})
+		select {
+		case <-time.After(costSyncPause):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// syncSubscriptionCosts fetches a subscription's current and previous costs and, when its
+// cached daily costs are stale or flat, its daily costs. It returns the stream messages
+// for the result: the sub's data (when any is cached) and a status.
+func syncSubscriptionCosts(ctx context.Context, sid string) []streamMsg {
+	now := time.Now()
+	log.Printf("Cost sync: fetching %s", sid)
+
+	_, currErr := fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
+	var prevErr error
+	if currErr == nil {
+		_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), ctx)
+	}
+
+	// Daily costs: refresh when cached rows are missing, stale or suspiciously flat (a flat
+	// line usually means stale fallback data). 90 days covers the 7/30/90-day UI periods.
+	dailyStart := now.AddDate(0, 0, -90)
+	cachedDaily, cachedOk := cache.getDailyCosts(sid, dailyStart, now)
+	if !cachedOk || dailyCostsLookFlat(cachedDaily) {
+		dailyData, dailyErr := fetchDailyCosts(costClient, sid, dailyStart, now, ctx)
+		switch {
+		case dailyErr != nil:
+			log.Printf("Cost sync: failed to fetch daily costs for %s: %v", sid, dailyErr)
+		case len(dailyData) > 0 && !dailyCostsLookFlat(dailyData):
+			cache.setDailyCostsForWindow(sid, dailyStart, dailyData)
+		case len(dailyData) > 0:
+			log.Printf("Cost sync: fetched daily costs for %s are still flat, not caching", sid)
+		}
+		// Only store daily aggregates as costs when the resource-level fetch failed.
+		if currErr != nil && dailyErr == nil && len(dailyData) > 0 {
+			cache.populateCostsFromDaily(sid, dailyData, "current")
+		}
+	}
+
+	_, hasCurrent := cache.get(sid, "current")
+	var msgs []streamMsg
+	switch {
+	case currErr != nil && !hasCurrent:
+		log.Printf("Cost sync: error fetching current %s: %v", sid, currErr)
+		return []streamMsg{{Type: "status", SubID: sid, Message: "error: " + currErr.Error()}}
+	case currErr != nil:
+		// Serve the cached data even though the refresh failed.
+		log.Printf("Cost sync: error fetching current %s (serving cached): %v", sid, currErr)
+	case prevErr != nil:
+		log.Printf("Cost sync: error fetching previous %s: %v", sid, prevErr)
+		msgs = append(msgs, streamMsg{Type: "status", SubID: sid, Message: "warning: previous period unavailable"})
+	}
+	return append(msgs, cachedSubscriptionMsgs(sid)...)
+}
+
+// cachedSubscriptionMsgs returns a sub's cached costs as a data message plus a "synced"
+// status.
+func cachedSubscriptionMsgs(sid string) []streamMsg {
+	data := gin.H{}
+	if curr, ok := cache.get(sid, "current"); ok {
+		data["current"] = normalizeResults(curr)
+		if prev, ok := cache.get(sid, "previous"); ok {
+			data["previous"] = normalizeResults(prev)
+		}
+	}
+	return []streamMsg{
+		{Type: "data", SubID: sid, Data: data},
+		{Type: "status", SubID: sid, Message: "synced"},
+	}
+}
+
 func sseHandler(c *gin.Context) {
 	subs := c.QueryArray("subscriptionId")
 	// Auto-discover active subscriptions when none are provided by the client
@@ -4703,15 +4913,6 @@ func sseHandler(c *gin.Context) {
 
 	// Get client context for cancellation detection
 	clientCtx := c.Request.Context()
-
-	// 10-second startup delay before fetching cost data
-	log.Printf("SSE: waiting 10s before starting cost fetch")
-	select {
-	case <-time.After(10 * time.Second):
-	case <-clientCtx.Done():
-		log.Printf("SSE: client disconnected during startup delay")
-		return
-	}
 
 	// Larger buffer to prevent blocking; use select with timeout on sends
 	msgChan := make(chan streamMsg, len(subs)*10)
@@ -4787,147 +4988,35 @@ func sseHandler(c *gin.Context) {
 			log.Printf("SSE: sent cached data for %d subscriptions in %d chunks", len(cachedResults), (len(cachedResults)+batchChunkSize-1)/batchChunkSize)
 		}
 
-		log.Printf("SSE: %d cached, %d uncached subscriptions - starting uncached fetch", cachedCount, len(uncached))
+		log.Printf("SSE: %d cached, %d to sync - waiting on the cost sync worker", cachedCount, len(uncached))
 
-		// Fetch one subscription at a time with 15s pacing. Sequential processing ensures
-		// the 3 API calls per sub always fit within the costLimiter burst and never
-		// contend with forecast goroutines, which use a separate forecastLimiter.
+		// The cost sync worker does the fetching, so it continues when this tab closes and
+		// several tabs share one queue. Forward its results for this stream's subs.
 		if len(uncached) > 0 {
-			const batchSize = 1
-			for batchStart := 0; batchStart < len(uncached); batchStart += batchSize {
-				// Check if client disconnected before starting batch
+			pending := make(map[string]bool, len(uncached))
+			for _, sid := range uncached {
+				pending[sid] = true
+			}
+			events, unsubscribe := costSync.subscribe()
+			defer unsubscribe()
+			costSync.enqueue(uncached...)
+			for len(pending) > 0 {
 				select {
 				case <-clientCtx.Done():
-					log.Printf("SSE: client disconnected before batch %d", batchStart)
 					return
-				default:
-				}
-
-				end := batchStart + batchSize
-				if end > len(uncached) {
-					end = len(uncached)
-				}
-				batch := uncached[batchStart:end]
-				var wg sync.WaitGroup
-				for i, subID := range batch {
-					wg.Add(1)
-					go func(sid string, idx int) {
-						defer wg.Done()
-						log.Printf("SSE: fetching sub %d/%d: %s", idx+1, len(uncached), sid)
-						now := time.Now()
-
-						// 90s context: covers 1 retry at worst-case 49s Retry-After + API
-						// overhead. Subs that stay throttled beyond that fall back to stale
-						// cache and are skipped so the queue keeps moving.
-						subCtx, subCancel := context.WithTimeout(clientCtx, 90*time.Second)
-						defer subCancel()
-
-						// Fetch current period first (required for dashboard totals)
-						_, currErr := fetchSubCostsSync(costClient, sid, CostPeriodCurrent, now.AddDate(0, 0, -30), subCtx)
-
-						// Fetch previous period next (for MoM comparisons)
-						var prevErr error
-						if currErr == nil {
-							_, prevErr = fetchSubCostsSync(costClient, sid, CostPeriodPrevious, now.AddDate(0, 0, -60), subCtx)
-						}
-
-						// Daily costs: fetch real daily trend data when cached rows are missing,
-						// stale, or suspiciously flat. A flat line almost always means stale
-						// fallback data got stuck in the cache; refreshing prevents it from
-						// persisting until the 24-hour TTL expires. We request 90 days to cover
-						// all UI period options (7/30/90).
-						dailyStart := now.AddDate(0, 0, -90)
-						cachedDaily, cachedOk := cache.getDailyCosts(sid, dailyStart, now)
-						if !cachedOk || dailyCostsLookFlat(cachedDaily) {
-							if cachedOk && dailyCostsLookFlat(cachedDaily) {
-								log.Printf("SSE: cached daily costs for %s look flat, refreshing", sid)
-							}
-							dailyData, dailyErr := fetchDailyCosts(costClient, sid, dailyStart, now, subCtx)
-							if dailyErr != nil {
-								log.Printf("SSE: failed to fetch daily costs for %s: %v", sid, dailyErr)
-							} else if len(dailyData) > 0 && !dailyCostsLookFlat(dailyData) {
-								cache.setDailyCostsForWindow(sid, dailyStart, dailyData)
-								log.Printf("SSE: cached %d daily cost entries for %s", len(dailyData), sid)
-							} else if len(dailyData) > 0 && dailyCostsLookFlat(dailyData) {
-								log.Printf("SSE: fetched daily costs for %s are still flat, not caching", sid)
-							}
-							// Only overwrite resource-level cost cache with daily aggregates when
-							// the normal fetch failed; otherwise keep the better-granularity data.
-							if currErr != nil && dailyErr == nil && len(dailyData) > 0 {
-								cache.populateCostsFromDaily(sid, dailyData, "current")
-							}
-						}
-
-						if currErr != nil {
-							log.Printf("SSE: error fetching current %s: %v", sid, currErr)
-							// Try to send cached data even on error (daily costs may have been populated)
-							data := gin.H{}
-							if res, ok := cache.get(sid, "current"); ok {
-								data["current"] = normalizeResults(res)
-								if prev, ok := cache.get(sid, "previous"); ok {
-									data["previous"] = normalizeResults(prev)
-								}
-								select {
-								case msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}:
-									log.Printf("SSE: sent cached data for failed sub %s", sid)
-								case <-clientCtx.Done():
-								case <-time.After(3 * time.Second):
-								}
-								select {
-								case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
-								case <-clientCtx.Done():
-								case <-time.After(3 * time.Second):
-								}
-							} else {
-								select {
-								case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "error: " + currErr.Error()}:
-								case <-clientCtx.Done():
-									log.Printf("SSE: client disconnected during error send")
-								case <-time.After(5 * time.Second):
-									log.Printf("SSE: timeout sending error status for %s", sid)
-								}
-							}
-							return
-						}
-						if prevErr != nil {
-							log.Printf("SSE: error fetching previous %s: %v", sid, prevErr)
-							select {
-							case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "warning: previous period unavailable"}:
-							case <-clientCtx.Done():
-							case <-time.After(3 * time.Second):
-							}
-						}
-
-						data := gin.H{}
-						if res, ok := cache.get(sid, "current"); ok {
-							data["current"] = normalizeResults(res)
-						}
-						if res, ok := cache.get(sid, "previous"); ok {
-							data["previous"] = normalizeResults(res)
-						}
+				case ev := <-events:
+					if !pending[ev.subID] {
+						continue
+					}
+					delete(pending, ev.subID)
+					for _, msg := range ev.msgs {
 						select {
-						case msgChan <- streamMsg{Type: "data", SubID: sid, Data: data}:
+						case msgChan <- msg:
 						case <-clientCtx.Done():
-							log.Printf("SSE: client disconnected during data send")
 							return
-						case <-time.After(5 * time.Second):
-							log.Printf("SSE: timeout sending data for %s", sid)
 						}
-						select {
-						case msgChan <- streamMsg{Type: "status", SubID: sid, Message: "synced"}:
-						case <-clientCtx.Done():
-							log.Printf("SSE: client disconnected during status send")
-							return
-						case <-time.After(5 * time.Second):
-							log.Printf("SSE: timeout sending status for %s", sid)
-						}
-
-					}(subID, batchStart+i)
+					}
 				}
-				wg.Wait()
-				// 5s between subscriptions. The 90s subCtx already enforces pacing
-				// on throttled subs; fast subs need only a short gap.
-				time.Sleep(5 * time.Second)
 			}
 		}
 		log.Printf("SSE: sending done message")
@@ -5170,7 +5259,7 @@ func fetchDailyCostsWithCache(ctx context.Context, subID string, start, end time
 	if costClient != nil {
 		client = costClient
 	} else {
-		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		cred, err := getCachedCredential()
 		if err != nil {
 			return nil, err
 		}
