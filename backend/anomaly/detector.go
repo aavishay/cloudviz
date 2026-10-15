@@ -131,6 +131,7 @@ func (d *EnhancedDetector) Detect(
 		// Track which methods flagged this
 		var methods []string
 		var scores []float64
+		isolationAgrees := false
 
 		// Z-Score detection
 		if d.config.UseZScore && stddev > 0 {
@@ -160,9 +161,12 @@ func (d *EnhancedDetector) Detect(
 				0, // Rolling avg
 			})
 			result.IsolationScore = isoResult.Score
+			// Corroboration only (no score): on a single feature (the other two are
+			// constant) and 14-90 points, ordinary days score 0.6-0.7, the same as real
+			// spikes, so alone it flagged every day, and scaling its score by 10 made each
+			// one "critical".
 			if isoResult.IsAnomaly {
-				methods = append(methods, "isolation_forest")
-				scores = append(scores, isoResult.Score*10) // Scale to ~z-score range
+				isolationAgrees = true
 			}
 		}
 
@@ -182,7 +186,11 @@ func (d *EnhancedDetector) Detect(
 			scores = append(scores, (currentCost-expectedCost)/expectedCost*5)
 		}
 
-		// Determine if this is an anomaly
+		// Determine if this is an anomaly: at least one of the statistical methods above
+		// must flag it; the isolation forest only adds itself to the methods when it agrees.
+		if len(methods) > 0 && isolationAgrees {
+			methods = append(methods, "isolation_forest")
+		}
 		if len(methods) > 0 {
 			result.Methods = methods
 

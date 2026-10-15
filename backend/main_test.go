@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // testExtractSubscriptionFromID extracts the subscription GUID from an Azure resource ID.
@@ -575,4 +578,47 @@ func TestHistorySince(t *testing.T) {
 	assert.True(t, historySince("", "abc", now).IsZero())
 	assert.Equal(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), historySince("2026-10-01T00:00:00Z", "7", now), "since wins")
 	assert.Equal(t, now.AddDate(0, 0, -364).Truncate(24*time.Hour), historySince("", "9999", now), "capped at 365 days")
+}
+
+func TestResolveDBPath(t *testing.T) {
+	// Not t.TempDir: SQLite may still be removing -wal/-shm files when its cleanup runs,
+	// which fails the test with "directory not empty".
+	home, err := os.MkdirTemp("", "cloudviz-home-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(home)
+	t.Setenv("HOME", home)
+	t.Setenv("CLOUDVIZ_DB", "")
+
+	p, err := resolveDBPath("/tmp/explicit.db")
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/explicit.db", p, "the flag wins")
+
+	t.Setenv("CLOUDVIZ_DB", "/tmp/env.db")
+	p, err = resolveDBPath("")
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/env.db", p, "then the environment")
+	t.Setenv("CLOUDVIZ_DB", "")
+
+	// A legacy database in the working directory is copied to the default location.
+	work, err := os.MkdirTemp("", "cloudviz-work-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(work)
+	wd, _ := os.Getwd()
+	require.NoError(t, os.Chdir(work))
+	defer os.Chdir(wd)
+	legacy, err := newDBCache(filepath.Join(work, legacyDBName))
+	require.NoError(t, err)
+	legacy.setDailyCosts("sub", []map[string]any{{"date": "2026-10-01", "cost": 5.0}})
+	legacy.db.Close()
+
+	p, err = resolveDBPath("")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".cloudviz", "cloudviz.db"), p)
+	copied, err := newDBCache(p)
+	require.NoError(t, err)
+	defer copied.db.Close()
+	rows := copied.getCachedDailyCosts("sub", time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	assert.Len(t, rows, 1, "the legacy data was copied")
+	_, err = os.Stat(filepath.Join(work, legacyDBName))
+	assert.NoError(t, err, "the legacy file is left in place")
 }

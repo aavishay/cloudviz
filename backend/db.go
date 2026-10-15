@@ -802,89 +802,6 @@ func (dc *dbCache) populateCostsFromDaily(subID string, daily []map[string]any, 
 
 // Batch cache operations for improved performance
 
-// getBatch returns cached cost data for multiple subscriptions in a single query
-func (dc *dbCache) getBatch(subIDs []string, period string) (map[string]armcostmanagement.QueryResult, []string) {
-	if len(subIDs) == 0 {
-		return make(map[string]armcostmanagement.QueryResult), nil
-	}
-
-	// Build placeholders for IN clause
-	placeholders := make([]string, len(subIDs))
-	args := make([]any, len(subIDs))
-	for i, subID := range subIDs {
-		placeholders[i] = "?"
-		args[i] = subID
-	}
-	args = append(args, period)
-
-	// Get all costs for the subscriptions in one query
-	query := fmt.Sprintf(`SELECT subscription_id, cost, resource_id, resource_group, resource_type, resource_location, fetched_at
-		FROM costs WHERE subscription_id IN (%s) AND period = ?`,
-		strings.Join(placeholders, ","))
-
-	rows, err := dc.db.Query(query, args...)
-	if err != nil {
-		return make(map[string]armcostmanagement.QueryResult), subIDs
-	}
-	defer rows.Close()
-
-	results := make(map[string]armcostmanagement.QueryResult)
-	fetchedAtMap := make(map[string]time.Time)
-
-	for rows.Next() {
-		var subID, id, rg, rt, rl string
-		var cost float64
-		var fetchedAt time.Time
-		if err := rows.Scan(&subID, &cost, &id, &rg, &rt, &rl, &fetchedAt); err != nil {
-			continue
-		}
-		if existing, ok := results[subID]; ok {
-			existing.Properties.Rows = append(existing.Properties.Rows, []any{cost, id, rg, rt, rl})
-		} else {
-			results[subID] = armcostmanagement.QueryResult{
-				Properties: &armcostmanagement.QueryProperties{
-					Rows: [][]any{{cost, id, rg, rt, rl}},
-				},
-			}
-		}
-		fetchedAtMap[subID] = fetchedAt
-	}
-
-	// Check freshness and return missing subscriptions
-	var missing []string
-	for _, subID := range subIDs {
-		if fetchedAt, ok := fetchedAtMap[subID]; !ok || time.Since(fetchedAt) > 24*time.Hour {
-			missing = append(missing, subID)
-			delete(results, subID)
-		}
-	}
-
-	return results, missing
-}
-
-// getAggregate returns cached aggregate totals for a subscription/period
-func (dc *dbCache) getAggregate(subID, period string) (totalCost float64, resourceCount int, ok bool) {
-	var fetchedAt time.Time
-	err := dc.db.QueryRow(
-		"SELECT total_cost, resource_count, fetched_at FROM cost_aggregates WHERE subscription_id = ? AND period = ?",
-		subID, period).Scan(&totalCost, &resourceCount, &fetchedAt)
-	if err != nil || time.Since(fetchedAt) > 24*time.Hour {
-		return 0, 0, false
-	}
-	return totalCost, resourceCount, true
-}
-
-// setAggregate caches aggregate totals for a subscription/period
-func (dc *dbCache) setAggregate(subID, period string, totalCost float64, resourceCount int) {
-	_, err := dc.db.Exec(
-		`INSERT OR REPLACE INTO cost_aggregates (subscription_id, period, total_cost, resource_count, fetched_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		subID, period, totalCost, resourceCount, time.Now())
-	if err != nil {
-		log.Printf("Warning: failed to cache aggregate: %v", err)
-	}
-}
-
 // getCachedSubscriptions returns subscriptions that have fresh cached data
 func (dc *dbCache) getCachedSubscriptions(subIDs []string, period string) ([]string, []string) {
 	if len(subIDs) == 0 {
@@ -1241,23 +1158,6 @@ func recordChangeStmtWithCost(stmt *sql.Stmt, resourceID, resourceName, resource
 		user = "Unknown"
 	}
 	if _, err := stmt.Exec(resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now(), user, cost); err != nil {
-		log.Printf("Warning: failed to record change: %v", err)
-	}
-}
-
-// recordChangeStmtWithUser records a change with user information (kept for compatibility)
-func recordChangeStmtWithUser(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, user string) {
-	recordChangeStmtWithCost(stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, user, 0)
-}
-
-// recordChangeStmt records a change using a prepared statement (backward compatible)
-func recordChangeStmt(stmt *sql.Stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {
-	recordChangeStmtWithCost(stmt, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, "Unknown", 0)
-}
-
-func recordChange(db *sql.DB, resourceID, resourceName, resourceType, changeType, field, oldVal, newVal string) {
-	if _, err := db.Exec(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		resourceID, resourceName, resourceType, changeType, field, oldVal, newVal, time.Now(), "Unknown"); err != nil {
 		log.Printf("Warning: failed to record change: %v", err)
 	}
 }

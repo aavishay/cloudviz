@@ -1,6 +1,8 @@
 package main
 
 import (
+	"database/sql"
+	"path/filepath"
 	"encoding/csv"
 	"context"
 	"encoding/json"
@@ -58,8 +60,6 @@ var (
 	costClient     *armcostmanagement.QueryClient
 	forecastClient *armcostmanagement.ForecastClient
 	argClient      *armresourcegraph.Client
-	lastSync       time.Time
-	syncMutex      sync.Mutex
 	// costPipeline sends raw Cost Management requests (result-page nextLinks).
 	costPipeline azruntime.Pipeline
 	// Azure Cost Management tenant-level hard limit: 20 calls/min across all scopes,
@@ -174,7 +174,12 @@ func main() {
 				return fmt.Errorf("failed to create Forecast client: %w", err)
 			}
 
-			cache, err = newDBCache("cloudviz.db")
+			flagPath, _ := cmd.Flags().GetString("db")
+			dbPath, err := resolveDBPath(flagPath)
+			if err != nil {
+				return err
+			}
+			cache, err = newDBCache(dbPath)
 			if err != nil {
 				return fmt.Errorf("failed to initialize database: %w", err)
 			}
@@ -318,6 +323,7 @@ creations, so history recorded by them is unreliable. Stop the server first.`,
 	cachePruneHistoryCmd.Flags().Int("older-than-days", 0, "Delete history older than N days")
 	cacheCmd.AddCommand(cacheClearCmd, cachePruneHistoryCmd)
 
+	rootCmd.PersistentFlags().String("db", "", "Database file (default $CLOUDVIZ_DB, else ~/.cloudviz/cloudviz.db)")
 	rootCmd.AddCommand(resourcesCmd, costsCmd, serveCmd, cacheCmd)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -494,7 +500,9 @@ func shouldRefreshFlatDailyCosts(subID string) bool {
 
 // ─── Web Server Implementation ──────────────────────────────────────────────
 
-func startServer(port string) {
+// newRouter returns the HTTP handler with every API route and the embedded frontend.
+// It starts no background work, so tests can exercise the real routes.
+func newRouter() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
@@ -515,23 +523,6 @@ func startServer(port string) {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	// Initialize webhook notifier and start background checker
-	webhookNotifier := NewWebhookNotifier(cache.db)
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-
-		// Run immediately on startup
-		if err := webhookNotifier.CheckAndNotify(); err != nil {
-			log.Printf("Webhook check error: %v", err)
-		}
-
-		for range ticker.C {
-			if err := webhookNotifier.CheckAndNotify(); err != nil {
-				log.Printf("Webhook check error: %v", err)
-			}
-		}
-	}()
 	r.GET("/api/resources", func(c *gin.Context) {
 		subs := c.QueryArray("subscriptionId")
 		rgs := c.QueryArray("resourceGroup")
@@ -4141,44 +4132,32 @@ func startServer(port string) {
 		c.JSON(200, report)
 	})
 
+	return r
+}
+
+func startServer(port string) {
+	r := newRouter()
+
+	// Initialize webhook notifier and start background checker
+	webhookNotifier := NewWebhookNotifier(cache.db)
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		// Run immediately on startup
+		if err := webhookNotifier.CheckAndNotify(); err != nil {
+			log.Printf("Webhook check error: %v", err)
+		}
+
+		for range ticker.C {
+			if err := webhookNotifier.CheckAndNotify(); err != nil {
+				log.Printf("Webhook check error: %v", err)
+			}
+		}
+	}()
+
 	fmt.Printf("CloudViz server starting at :%s\n", port)
 
-// DISABLED: 	// Pre-fetch daily costs for all subscriptions on startup
-// DISABLED: 	go func() {
-// DISABLED: 		log.Println("Startup: pre-fetching daily costs for all subscriptions...")
-// DISABLED: 		ctx := context.Background()
-// DISABLED: 		subs, err := getActiveSubscriptions(ctx)
-// DISABLED: 		if err != nil {
-// DISABLED: 			log.Printf("Startup: failed to get active subscriptions: %v", err)
-// DISABLED: 			return
-// DISABLED: 		}
-// DISABLED: 
-// DISABLED: 		now := time.Now()
-// DISABLED: 		start := now.AddDate(0, 0, -30)
-// DISABLED: 
-// DISABLED: 		for i, sub := range subs {
-// DISABLED: 			// Check if already cached
-// DISABLED: 			if _, ok := cache.getDailyCosts(sub.ID, start, now); ok {
-// DISABLED: 				continue
-// DISABLED: 			}
-// DISABLED: 
-// DISABLED: 			log.Printf("Startup: fetching daily costs for %s (%d/%d)", sub.Name, i+1, len(subs))
-// DISABLED: 			daily, err := fetchDailyCosts(costClient, sub.ID, start, now, ctx)
-// DISABLED: 			if err != nil {
-// DISABLED: 				log.Printf("Startup: failed to fetch daily costs for %s: %v", sub.Name, err)
-// DISABLED: 				continue
-// DISABLED: 			}
-// DISABLED: 			cache.setDailyCosts(sub.ID, daily)
-// DISABLED: 			log.Printf("Startup: cached %d daily cost entries for %s", len(daily), sub.Name)
-// DISABLED: 
-// DISABLED: 			// Sleep to avoid rate limits
-// DISABLED: 			time.Sleep(2 * time.Second)
-// DISABLED: 		}
-// DISABLED: 		log.Println("Startup: daily cost pre-fetch complete")
-// DISABLED: 	}()
-
-	// Background sync disabled - fetch costs on-demand via SSE only
-	// go backgroundSync(costClient)
 	if n := loadInventoryFromDB(cache); n > 0 {
 		log.Printf("Loaded %d resources from the stored inventory", n)
 	}
@@ -5114,112 +5093,6 @@ func sseHandler(c *gin.Context) {
 	}
 }
 
-func backgroundSync(client *armcostmanagement.QueryClient) {
-	log.Println("Starting background cost sync...")
-
-	// Fetch all subscriptions from filters
-	ctx := context.Background()
-	res, _, err := FetchResourcesWithCosts(ctx, nil, nil, nil, nil, "", false, false, false, false, "", "")
-	if err != nil {
-		log.Printf("Background sync: failed to get resources: %v", err)
-		return
-	}
-
-	// Get unique subscription IDs
-	subMap := make(map[string]bool)
-	for _, r := range res {
-		subMap[r.SubscriptionID] = true
-	}
-
-	var subs []string
-	for s := range subMap {
-		subs = append(subs, s)
-	}
-	log.Printf("Background sync: found %d subscriptions", len(subs))
-
-	// Identify subscriptions that need refreshing: missing data or data older than 6h.
-	var subsToWarm []string
-	var cachedCount int
-	for _, sid := range subs {
-		_, hasCurrent := cache.get(sid, "current")
-		_, hasPrevious := cache.get(sid, "previous")
-		if !hasCurrent || !hasPrevious || cache.isStale(sid) {
-			subsToWarm = append(subsToWarm, sid)
-		} else {
-			cachedCount++
-		}
-	}
-	log.Printf("Background sync: %d subscriptions already cached, %d need warming", cachedCount, len(subsToWarm))
-
-	if len(subsToWarm) == 0 {
-		log.Println("Background sync: all subscriptions cached, nothing to do")
-		return
-	}
-
-	// Process subscriptions using a worker pool with fixed number of workers
-	const numWorkers = 5
-	jobs := make(chan struct {
-		id  string
-		idx int
-	}, len(subsToWarm))
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	successCount := 0
-	failedCount := 0
-
-	now := time.Now()
-
-	// Start workers
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			for job := range jobs {
-				log.Printf("Background sync: worker %d fetching %s (%d/%d)", workerID, job.id, job.idx+1, len(subsToWarm))
-
-				// Timeout accounts for max retry backoff + API call time
-				ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-
-				var currErr, prevErr error
-
-				// Fetch current period
-				_, currErr = fetchSubCostsSync(client, job.id, CostPeriodCurrent, now.AddDate(0, 0, -30), ctx)
-
-				// Small delay between current and previous
-				time.Sleep(200 * time.Millisecond)
-
-				// Fetch previous period (aggressive caching for historical data)
-				_, prevErr = fetchSubCostsSync(client, job.id, CostPeriodPrevious, now.AddDate(0, 0, -60), ctx)
-
-				cancel()
-
-				mu.Lock()
-				if currErr != nil {
-					log.Printf("Background sync: failed for %s: %v", job.id, currErr)
-					failedCount++
-				} else {
-					successCount++
-					log.Printf("Background sync: completed %s (previous: %v)", job.id, prevErr)
-				}
-				mu.Unlock()
-			}
-		}(i)
-	}
-
-	// Queue all jobs
-	for i, sid := range subsToWarm {
-		jobs <- struct {
-			id  string
-			idx int
-		}{id: sid, idx: i}
-	}
-	close(jobs)
-
-	// Wait for all workers to complete
-	wg.Wait()
-	log.Printf("Background sync: completed - %d succeeded, %d failed", successCount, failedCount)
-}
-
 // Helper functions for enhanced reporting
 
 // getVisibleSubscriptions returns list of subscription IDs from fetched resources
@@ -5458,6 +5331,55 @@ func historySince(since, days string, now time.Time) time.Time {
 		return midnight.AddDate(0, 0, -(n - 1))
 	}
 	return time.Time{}
+}
+
+// legacyDBName is where versions before 2.1.16 kept the database: relative to the
+// directory the app was started from, which scattered copies across folders.
+const legacyDBName = "cloudviz.db"
+
+// resolveDBPath returns the database path: the --db flag, else $CLOUDVIZ_DB, else
+// ~/.cloudviz/cloudviz.db. When the default location has no database yet but the current
+// directory has a legacy one, that one is copied over (and left in place).
+func resolveDBPath(flagPath string) (string, error) {
+	if flagPath != "" {
+		return flagPath, nil
+	}
+	if env := os.Getenv("CLOUDVIZ_DB"); env != "" {
+		return env, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("can't find the home directory for the database (use --db): %w", err)
+	}
+	dir := filepath.Join(home, ".cloudviz")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("failed to create %s: %w", dir, err)
+	}
+	path := filepath.Join(dir, "cloudviz.db")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if legacy, err := filepath.Abs(legacyDBName); err == nil {
+			if _, err := os.Stat(legacy); err == nil {
+				if err := copySQLiteDB(legacy, path); err != nil {
+					log.Printf("Warning: failed to copy %s to %s: %v", legacy, path, err)
+				} else {
+					log.Printf("Copied the database from %s to %s; the old file is no longer used and can be deleted.", legacy, path)
+				}
+			}
+		}
+	}
+	return path, nil
+}
+
+// copySQLiteDB writes a consistent copy of the database at src (including anything still
+// in its write-ahead log) to dst.
+func copySQLiteDB(src, dst string) error {
+	db, err := sql.Open("sqlite", "file:"+src+"?_pragma=busy_timeout(15000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec("VACUUM INTO ?", dst)
+	return err
 }
 
 // csvSafe neutralizes spreadsheet formula injection: a cell starting with =, +, -, @, tab

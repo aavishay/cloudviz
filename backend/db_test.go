@@ -229,62 +229,6 @@ func TestDBCache_DailyCosts(t *testing.T) {
 	assert.False(t, ok2, "Should not find expired daily costs")
 }
 
-// TestDBCache_Aggregate tests aggregate cache operations
-func TestDBCache_Aggregate(t *testing.T) {
-	cache, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	subID := "test-sub"
-	period := "current"
-	totalCost := 10000.0
-	resourceCount := 50
-
-	// Set aggregate
-	cache.setAggregate(subID, period, totalCost, resourceCount)
-
-	// Get aggregate
-	gotCost, gotCount, ok := cache.getAggregate(subID, period)
-	assert.True(t, ok, "Should find cached aggregate")
-	assert.InDelta(t, totalCost, gotCost, 0.01, "Total cost should match")
-	assert.Equal(t, resourceCount, gotCount, "Resource count should match")
-}
-
-// TestDBCache_BatchOperations tests batch cache operations
-func TestDBCache_BatchOperations(t *testing.T) {
-	cache, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Set up test data for multiple subscriptions
-	subIDs := []string{"sub-1", "sub-2", "sub-3"}
-	period := "current"
-
-	for _, subID := range subIDs {
-		colCost := "Cost"
-		colID := "ResourceId"
-		columns := []*armcostmanagement.QueryColumn{
-			{Name: &colCost},
-			{Name: &colID},
-		}
-		data := armcostmanagement.QueryResult{
-			Properties: &armcostmanagement.QueryProperties{
-				Columns: columns,
-				Rows:    [][]any{{100.0, "/subscriptions/" + subID + "/resourceGroups/rg/providers/Microsoft.Compute/vm1"}},
-			},
-		}
-		cache.set(subID, period, data)
-	}
-
-	// Test batch get
-	results, missing := cache.getBatch(subIDs[:2], period)
-	assert.Len(t, results, 2, "Should get 2 results")
-	assert.Empty(t, missing, "Should have no missing subscriptions")
-
-	// Test with non-existent sub
-	results2, missing2 := cache.getBatch([]string{"sub-1", "non-existent"}, period)
-	assert.Len(t, results2, 1, "Should get 1 result")
-	assert.Len(t, missing2, 1, "Should have 1 missing")
-}
-
 // TestDBCache_GetCachedSubscriptions tests cached subscription retrieval
 func TestDBCache_GetCachedSubscriptions(t *testing.T) {
 	cache, cleanup := setupTestDB(t)
@@ -571,11 +515,6 @@ func TestDBCache_EmptySubscriptionList(t *testing.T) {
 	cache, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Test batch with empty list
-	results, missing := cache.getBatch([]string{}, "current")
-	assert.Empty(t, results, "Should return empty results for empty list")
-	assert.Nil(t, missing, "Should return nil missing for empty list")
-
 	// Test getCachedSubscriptions with empty list
 	cached, missing := cache.getCachedSubscriptions([]string{}, "current")
 	assert.Empty(t, cached, "Should return empty cached for empty list")
@@ -616,40 +555,6 @@ func TestRecordChangeStmtWithCost(t *testing.T) {
 
 	var count int
 	err = cache.db.QueryRow("SELECT COUNT(*) FROM resource_history WHERE resource_id = ?", "/test/res1").Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count, "Should have recorded the change")
-}
-
-// TestRecordChangeStmtWithUser tests backward compatibility
-func TestRecordChangeStmtWithUser(t *testing.T) {
-	cache, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	stmt, err := cache.db.Prepare(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by, resource_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	require.NoError(t, err)
-	defer stmt.Close()
-
-	recordChangeStmtWithUser(stmt, "/test/res2", "res2", "Microsoft.Compute/virtualMachines", "modified", "status", "Running", "Stopped", "admin@example.com")
-
-	var count int
-	err = cache.db.QueryRow("SELECT COUNT(*) FROM resource_history WHERE resource_id = ?", "/test/res2").Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count, "Should have recorded the change")
-}
-
-// TestRecordChangeStmtBackwardCompat tests backward compatible function
-func TestRecordChangeStmtBackwardCompat(t *testing.T) {
-	cache, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	stmt, err := cache.db.Prepare(`INSERT INTO resource_history (resource_id, resource_name, resource_type, change_type, field_name, old_value, new_value, timestamp, changed_by, resource_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	require.NoError(t, err)
-	defer stmt.Close()
-
-	recordChangeStmt(stmt, "/test/res3", "res3", "Microsoft.Compute/virtualMachines", "deleted", "", "", "")
-
-	var count int
-	err = cache.db.QueryRow("SELECT COUNT(*) FROM resource_history WHERE resource_id = ?", "/test/res3").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "Should have recorded the change")
 }
@@ -786,9 +691,6 @@ func TestDBCache_ClearCostCache(t *testing.T) {
 	// Insert daily costs
 	cache.setDailyCosts(subID, []map[string]any{{"date": "2024-01-01", "cost": 100.0}})
 
-	// Insert aggregates
-	cache.setAggregate(subID, "current", 1000.0, 10)
-
 	// Insert metrics
 	cache.setMetrics("/test/res", "vm", map[string][]float64{"cpu": {10.0}})
 
@@ -823,10 +725,6 @@ func TestDBCache_ClearCostCache(t *testing.T) {
 	// Verify daily costs cleared
 	_, ok3 := cache.getDailyCosts(subID, time.Now().AddDate(0, 0, -7), time.Now())
 	assert.False(t, ok3, "Daily costs should be cleared")
-
-	// Verify aggregates cleared
-	_, _, ok4 := cache.getAggregate(subID, "current")
-	assert.False(t, ok4, "Aggregates should be cleared")
 
 	// Verify metrics cleared
 	_, ok5 := cache.getMetrics("/test/res")
@@ -1095,11 +993,6 @@ func TestDBCache_CacheMissScenarios(t *testing.T) {
 	assert.Equal(t, float64(0), actual, "Actual should be 0")
 	assert.Equal(t, float64(0), forecast, "Forecast should be 0")
 
-	// 5. GetAggregate with no data
-	total, count, ok := cache.getAggregate("non-existent-sub", "current")
-	assert.False(t, ok, "Should not find aggregate for non-existent sub")
-	assert.Equal(t, float64(0), total, "Total should be 0")
-	assert.Equal(t, 0, count, "Count should be 0")
 
 	// 6. GetMetrics with no data
 	metrics, ok := cache.getMetrics("/non-existent/resource")
