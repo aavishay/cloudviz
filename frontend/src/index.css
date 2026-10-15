@@ -630,7 +630,15 @@ body, body * {
   border: 1px solid var(--border);
   border-radius: 12px;
   position: relative;
-  overflow: hidden;
+  /* Scroll instead of clipping when the window is too narrow for all tabs. */
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.tab-strip::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-strip::before {
@@ -642,6 +650,8 @@ body, body * {
 }
 
 .tab {
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 8px 20px;
   border-radius: 8px;
   font-size: 12px;

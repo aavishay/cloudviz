@@ -66,6 +66,7 @@ export default function App() {
   const [liveCompletedCount, setLiveCompletedCount] = useState<number>(0);
   const [errorSubIds, setErrorSubIds] = useState<Set<string>>(new Set());
   const activeEventSourceRef = useRef<EventSource | null>(null);
+  const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Track retry counts per subscription for explicit SSE errors only
   const [costRetryCount, setCostRetryCount] = useState<Record<string, number>>({});
   useEffect(() => { dataSubIdsRef.current = dataSubIds; }, [dataSubIds]);
@@ -442,6 +443,11 @@ export default function App() {
   useEffect(() => { localStorage.setItem('cloudviz-tag-filter', JSON.stringify(tagFilter)); }, [tagFilter]);
   useEffect(() => { localStorage.setItem('cloudviz-sort', JSON.stringify(sortConfig)); }, [sortConfig]);
   useEffect(() => { localStorage.setItem('cloudviz-tab', activeTab); }, [activeTab]);
+  // The tab strip scrolls when the window is narrow; keep the active tab in view (e.g. after
+  // a keyboard shortcut selects one that's scrolled off).
+  useEffect(() => {
+    document.querySelector('.tab-strip .tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeTab]);
   useEffect(() => { localStorage.setItem('cloudviz-sidebarCollapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
   useEffect(() => { localStorage.setItem('cloudviz-dashOrder', JSON.stringify(dashboardOrder)); }, [dashboardOrder]);
 
@@ -2888,11 +2894,13 @@ export default function App() {
     // Prevent concurrent fetches - if already loading, skip unless we have explicit targets
     if (costsLoading && !forceAll && !targetSubIds) return;
 
-    // Close any existing active connection
+    // Close any existing active connection, and cancel its safety timer: left running, it
+    // would clear the loading state while this new stream is still syncing.
     if (activeEventSourceRef.current) {
       activeEventSourceRef.current.close();
       activeEventSourceRef.current = null;
     }
+    clearTimeout(safetyTimeoutRef.current);
 
     const existing = forceAll ? new Set<string>() : new Set(costs.map(c => c.subscriptionId));
     const candidateSubs = targetSubIds && targetSubIds.length > 0 ? targetSubIds : activeSubs;
@@ -2919,13 +2927,14 @@ export default function App() {
     // Safety timeout: 70s per uncached sub (60s fetch + 10s buffer) + 10s base
     const estimatedMaxTime = Math.max(30000, toFetch.length * 70000 + 10000);
     const safetyTimeout = setTimeout(() => {
+      es.close();
+      // Only end the loading state if this is still the active stream.
+      if (activeEventSourceRef.current !== es) return;
+      activeEventSourceRef.current = null;
       setCostsLoading(false);
       setIsRefreshing(false);
-      es.close();
-      if (activeEventSourceRef.current === es) {
-        activeEventSourceRef.current = null;
-      }
     }, estimatedMaxTime);
+    safetyTimeoutRef.current = safetyTimeout;
 
     // Throttled forecast refresh - max once per 2 seconds during sync for real-time feel
     let lastForecastRefresh = 0;
@@ -3135,14 +3144,6 @@ export default function App() {
               }
               return next;
             });
-          } else if (msg.type === 'auth_error') {
-            // Dedicated auth error signal from backend
-            setAzureAuthError('not-logged-in');
-            setCostsLoading(false);
-            setIsRefreshing(false);
-            clearTimeout(safetyTimeout);
-            es.close();
-            if (activeEventSourceRef.current === es) activeEventSourceRef.current = null;
           } else if (msg.message?.includes('error')) {
             console.error('SSE status error for', msg.subId, ':', msg.message);
             // Detect Azure authentication errors
@@ -3168,6 +3169,15 @@ export default function App() {
               });
             }
           }
+        } else if (msg.type === 'auth_error') {
+          // Dedicated auth error signal from backend. (It used to sit inside the 'status'
+          // branch, where msg.type can never be 'auth_error', so it never ran.)
+          setAzureAuthError('not-logged-in');
+          setCostsLoading(false);
+          setIsRefreshing(false);
+          clearTimeout(safetyTimeout);
+          es.close();
+          if (activeEventSourceRef.current === es) activeEventSourceRef.current = null;
         } else if (msg.type === 'done') {
           clearTimeout(safetyTimeout);
           es.close();
