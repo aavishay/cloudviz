@@ -628,6 +628,19 @@ func startServer(port string) {
 		c.JSON(200, resp)
 	})
 
+	// Rescan the resource inventory in the background (the Refresh button). Requests keep
+	// being served from the current inventory until the scan publishes a new one.
+	r.POST("/api/inventory/refresh", func(c *gin.Context) {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if _, err := refreshInventory(ctx); err != nil {
+				log.Printf("Inventory refresh failed: %v", err)
+			}
+		}()
+		c.JSON(http.StatusAccepted, gin.H{"inventoryAt": inventoryFetchedAt()})
+	})
+
 	r.GET("/api/filters", func(c *gin.Context) {
 		res, _, err := FetchResourcesWithCosts(c.Request.Context(), nil, nil, nil, nil, "", false, false, false, false, "", "")
 		if err != nil {

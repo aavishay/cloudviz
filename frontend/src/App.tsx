@@ -34,6 +34,23 @@ export { ErrorBoundary } from './components';
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
+// Defined at module level: a component declared inside App is a new type on every App
+// render, so React unmounted and remounted every dashboard panel on each sync message.
+function PanelWrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="panel-wrapper"
+      style={{
+        position: 'relative',
+        borderRadius: 16,
+        overflow: 'visible',
+      }}
+    >
+      <div style={{ overflow: 'auto', height: '100%' }}>{children}</div>
+    </div>
+  );
+}
+
 export default function App() {
   const [resources, setResources] = useState<AzureResource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -308,6 +325,9 @@ export default function App() {
   const [trueTotalResources, setTrueTotalResources] = useState(0);
   const [resourcesCountLoading, setResourcesCountLoading] = useState(true);
   const [filteredTotalCost, setFilteredTotalCost] = useState(0);
+  // The full-screen splash only covers the first resource load, not later refetches that
+  // happen to start from an empty (filtered) list.
+  const [initialResourcesLoaded, setInitialResourcesLoaded] = useState(false);
   // Billed cost that matches no listed resource; null when filters make it meaningless.
   const [unallocatedCost, setUnallocatedCost] = useState<number | null>(null);
 
@@ -1574,21 +1594,6 @@ export default function App() {
   );
 
   // ── Panel wrapper ───────────────────────────────────────────────────────────────
-  const PanelWrapper = ({ children }: { children: React.ReactNode }) => {
-    return (
-      <div
-        className="panel-wrapper"
-        style={{
-          position: 'relative',
-          borderRadius: 16,
-          overflow: 'visible',
-        }}
-      >
-        <div style={{ overflow: 'auto', height: '100%' }}>{children}</div>
-      </div>
-    );
-  };
-
   const dashboardPanels: { id: string; render: () => React.ReactNode }[] = [
     { id: 'insights', render: renderInsights },
     { id: 'summary', render: renderSummary },
@@ -2466,6 +2471,8 @@ export default function App() {
 
   // Fetch resources
   useEffect(() => {
+    // Abort on input change so a slower, older response can't overwrite a newer one.
+    const ctrl = new AbortController();
     setLoading(true);
     const params = new URLSearchParams();
     regionFilter.forEach(f => params.append('location', f));
@@ -2487,7 +2494,7 @@ export default function App() {
     if (sortConfig.key) { params.append('sortBy', sortConfig.key); params.append('sortOrder', sortConfig.direction); }
     if (piiMasking) params.append('mask', 'true');
 
-    fetch(`http://localhost:8080/api/resources?${params}`)
+    fetch(`http://localhost:8080/api/resources?${params}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         // Check for Azure authentication errors
@@ -2499,12 +2506,15 @@ export default function App() {
             setError(data.error);
           }
           setLoading(false);
+          setInitialResourcesLoaded(true);
           return;
         }
-        setResources(data.data || []); setTotalResources(data.total || 0); setFilteredTotalCost(data.totalCost || 0); setLoading(false);
+        setResources(data.data || []); setTotalResources(data.total || 0); setFilteredTotalCost(data.totalCost || 0); setLoading(false); setInitialResourcesLoaded(true);
         setUnallocatedCost(typeof data.unallocatedCost === 'number' ? data.unallocatedCost : null);
       })
-      .catch(err => { setError(err.message); setLoading(false); });
+      .catch(err => {
+        if (err?.name === 'AbortError') return; setError(err.message); setLoading(false); setInitialResourcesLoaded(true); });
+    return () => ctrl.abort();
   }, [regionFilter, subFilter, rgFilter, typeFilter, creatorFilter, debouncedSearch, showOrphanedOnly, showUnattachedDiskOnly, showUnassignedPIPOnly, showUnattachedNICOnly, tagFilter, currentPage, sortConfig, piiMasking]);
 
   const handleSort = (key: string) => {
@@ -2554,10 +2564,13 @@ export default function App() {
     }
   }, [uniqueSubs, selectedSubsInitialized]);
 
-  const activeSubs = useMemo(() => {
-    if (selectedSubs.size === 0) return uniqueSubs;
-    return uniqueSubs.filter(s => selectedSubs.has(s));
+  // Keyed on the IDs, so reloading the same subscription list (from /api/subscriptions,
+  // then /api/filters, then the initial selection) doesn't refire every cost request.
+  const activeSubsKey = useMemo(() => {
+    const subs = selectedSubs.size === 0 ? uniqueSubs : uniqueSubs.filter(s => selectedSubs.has(s));
+    return subs.join(',');
   }, [uniqueSubs, selectedSubs]);
+  const activeSubs = useMemo(() => (activeSubsKey ? activeSubsKey.split(',') : []), [activeSubsKey]);
 
   // Sync subFilter with available subscriptions (including disabled) to remove stale IDs
   useEffect(() => {
@@ -2581,11 +2594,13 @@ export default function App() {
 
   // Fetch daily costs for dashboard trends - aggregate across all active subscriptions
   useEffect(() => {
+    // Abort on input change so a slower, older response can't overwrite a newer one.
+    const ctrl = new AbortController();
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
     params.append('period', costPeriod);
-    fetch(`http://localhost:8080/api/costs/daily?${params}`)
+    fetch(`http://localhost:8080/api/costs/daily?${params}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -2596,9 +2611,11 @@ export default function App() {
         }
       })
       .catch(err => {
+        if (err?.name === 'AbortError') return;
         console.error('Failed to fetch daily costs', err);
         setDailyCosts([]);
       });
+    return () => ctrl.abort();
   }, [activeSubs, costPeriod, costSyncVersion]);
 
   // Fetch commitment savings data
@@ -2611,12 +2628,15 @@ export default function App() {
 
   // Fetch cost by resource type daily trend
   useEffect(() => {
+    // Abort on input change so a slower, older response can't overwrite a newer one.
+    const ctrl = new AbortController();
     if (activeSubs.length === 0) return;
     const subId = uniqueSubs[0];
-    fetch(`http://localhost:8080/api/costs/by-type/daily?subscriptionId=${subId}&period=${costPeriod}`)
+    fetch(`http://localhost:8080/api/costs/by-type/daily?subscriptionId=${subId}&period=${costPeriod}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => { if (!data.error) setTypeTrendData(data); })
       .catch(() => {});
+    return () => ctrl.abort();
   }, [activeSubs, costPeriod]);
 
   // Fetch waste detection data with caching
@@ -2650,10 +2670,12 @@ export default function App() {
 
   // Fetch period-over-period cost comparison
   useEffect(() => {
+    // Abort on input change so a slower, older response can't overwrite a newer one.
+    const ctrl = new AbortController();
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
-    fetch(`http://localhost:8080/api/costs/comparison?${params}&days=${costPeriod}`)
+    fetch(`http://localhost:8080/api/costs/comparison?${params}&days=${costPeriod}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         if (!data.error) {
@@ -2670,6 +2692,7 @@ export default function App() {
         }
       })
       .catch(() => {});
+    return () => ctrl.abort();
   }, [activeSubs, costPeriod]);
 
   // Function to fetch forecast data - called during refresh/sync for real-time updates
@@ -2788,13 +2811,15 @@ export default function App() {
 
   // Fetch cost anomalies from backend
   useEffect(() => {
+    // Abort on input change so a slower, older response can't overwrite a newer one.
+    const ctrl = new AbortController();
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
     params.append('threshold', anomalyThreshold.toString());
     params.append('minAmount', anomalyMinAmount.toString());
     params.append('minNewSpend', anomalyMinNewSpend.toString());
-    fetch(`http://localhost:8080/api/costs/anomalies?${params}`)
+    fetch(`http://localhost:8080/api/costs/anomalies?${params}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         if (data.anomalies === null) {
@@ -2803,15 +2828,18 @@ export default function App() {
         setAnomalyData(data);
       })
       .catch(() => {});
+    return () => ctrl.abort();
   }, [activeSubs, anomalyThreshold, anomalyMinAmount, anomalyMinNewSpend]);
 
   // Fetch enhanced ML-based anomalies
   useEffect(() => {
+    // Abort on input change so a slower, older response can't overwrite a newer one.
+    const ctrl = new AbortController();
     if (activeSubs.length === 0) return;
     setEnhancedAnomalyLoading(true);
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
-    fetch(`http://localhost:8080/api/costs/anomalies/enhanced?${params}`)
+    fetch(`http://localhost:8080/api/costs/anomalies/enhanced?${params}`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => {
         // Normalize null anomalies to empty array so panel check works
@@ -2821,18 +2849,22 @@ export default function App() {
         setEnhancedAnomalyData(data);
         setEnhancedAnomalyLoading(false);
       })
-      .catch(() => { setEnhancedAnomalyLoading(false); });
+      .catch(err => { if (err?.name !== 'AbortError') setEnhancedAnomalyLoading(false); });
+    return () => ctrl.abort();
   }, [activeSubs]);
 
   // Fetch SLA / VM uptime data
   useEffect(() => {
+    // Abort on input change so a slower, older response can't overwrite a newer one.
+    const ctrl = new AbortController();
     if (activeSubs.length === 0) return;
     const params = new URLSearchParams();
     activeSubs.forEach(s => params.append('subscriptionId', s));
-    fetch(`http://localhost:8080/api/sla?${params}&days=30`)
+    fetch(`http://localhost:8080/api/sla?${params}&days=30`, { signal: ctrl.signal })
       .then(r => r.json())
       .then(data => { if (data.data) setSlaData(data); })
       .catch(() => {});
+    return () => ctrl.abort();
   }, [activeSubs]);
 
 
@@ -3180,6 +3212,9 @@ export default function App() {
     } catch (err) {
       console.error('Failed to clear cost cache', err);
     }
+    // The resource list is served from an inventory rescanned every 15 minutes; ask for a
+    // rescan now (it runs in the background).
+    fetch('http://localhost:8080/api/inventory/refresh', { method: 'POST' }).catch(() => {});
 
     // Invalidate related caches to ensure fresh data
     invalidateCache('waste-data');
@@ -6587,7 +6622,7 @@ export default function App() {
       )}
 
       {/* ── Full-screen loading ── */}
-      {loading && resources.length === 0 && (
+      {!initialResourcesLoaded && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
           <div style={{ position: 'relative' }}>
             <div style={{ width: 64, height: 64, border: '3px solid var(--border-strong)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
