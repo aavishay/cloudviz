@@ -3740,6 +3740,33 @@ func newRouter() *gin.Engine {
 		previousMonthStart := currentMonthStart.AddDate(0, -1, 0)
 		previousMonthEnd := currentMonthStart.Add(-time.Second)
 
+		// Cache and inventory only. This used to make live Cost Management calls per
+		// subscription (rate-limited to 14/min, so minutes for 77 subscriptions) and
+		// rebuild the costed inventory for every resource group: over 5 minutes per report.
+		type rgGroup struct {
+			name      string
+			resources []AzureResource
+		}
+		bySubRG := make(map[string]map[string]*rgGroup) // sub -> lowercased RG -> group
+		if inv, err := getInventory(c.Request.Context()); err == nil {
+			for _, r := range attachCosts(inv) {
+				if r.ResourceGroup == "" {
+					continue
+				}
+				if bySubRG[r.SubscriptionID] == nil {
+					bySubRG[r.SubscriptionID] = make(map[string]*rgGroup)
+				}
+				key := strings.ToLower(r.ResourceGroup)
+				g := bySubRG[r.SubscriptionID][key]
+				if g == nil {
+					g = &rgGroup{name: r.ResourceGroup}
+					bySubRG[r.SubscriptionID][key] = g
+				}
+				g.resources = append(g.resources, r)
+			}
+		}
+		subNames := subscriptionNamesFromCache()
+
 		var rgReports []ResourceGroupCostReport
 		var trendReports []CostTrendReport
 		var topChanges []CostChangeItem
@@ -3749,16 +3776,18 @@ func newRouter() *gin.Engine {
 		totalRGs := 0
 
 		for _, subID := range subs {
-			subName := getSubscriptionName(c.Request.Context(), subID)
+			subName := subNames[subID]
+			if subName == "" {
+				subName = subID
+			}
+			currentByRG := cache.resourceGroupCosts(subID, "current")
+			previousByRG := cache.resourceGroupCosts(subID, "previous")
 
-			// Get resource groups
-			rgs := getResourceGroupsForSubscription(c.Request.Context(), subID)
-
-			for _, rg := range rgs {
-				currentCost := fetchResourceGroupCost(c.Request.Context(), subID, rg, currentMonthStart, now)
-				previousCost := fetchResourceGroupCost(c.Request.Context(), subID, rg, previousMonthStart, previousMonthEnd)
-
-				resources, _, _ := FetchResourcesWithCosts(c.Request.Context(), []string{subID}, []string{rg}, nil, nil, "", false, false, false, false, "", "")
+			for rgKey, group := range bySubRG[subID] {
+				rg := group.name
+				currentCost := currentByRG[rgKey]
+				previousCost := previousByRG[rgKey]
+				resources := group.resources
 
 				totalCurrentCost += currentCost
 				totalPreviousCost += previousCost
@@ -3844,10 +3873,12 @@ func newRouter() *gin.Engine {
 			}
 
 			// Get daily trends for this subscription
-			currentDaily, _ := fetchDailyCostsWithCache(c.Request.Context(), subID, currentMonthStart, now)
-			previousDaily, _ := fetchDailyCostsWithCache(c.Request.Context(), subID, previousMonthStart, previousMonthEnd)
+			currentDaily := cache.getCachedDailyCosts(subID, currentMonthStart, now)
+			previousDaily := cache.getCachedDailyCosts(subID, previousMonthStart, previousMonthEnd)
 
-			var trends []DailyCostTrend
+			// Non-nil so it encodes as [] (a nil slice encodes as null, which the PDF
+			// export read as an array) for subscriptions without daily rows.
+			trends := []DailyCostTrend{}
 			subCurrentTotal := 0.0
 			subPreviousTotal := 0.0
 
@@ -5456,6 +5487,14 @@ func isCostIncrease(a anomaly.EnhancedAnomalyResult) bool {
 		(a.ExpectedCost > 0 && a.CurrentCost > a.ExpectedCost)
 }
 
+// prefix returns the first n bytes of s, or all of s when it is shorter.
+func prefix(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 // csvSafe neutralizes spreadsheet formula injection: a cell starting with =, +, -, @, tab
 // or carriage return is evaluated as a formula by Excel and others, so it gets a leading
 // apostrophe. (Quoting of commas and quotes is left to encoding/csv.)
@@ -5670,7 +5709,9 @@ func buildHistoricalTrends(subIDs []string) []HistoricalTrend {
 
 		// Aggregate costs across all subscriptions for this period
 		for _, subID := range subIDs {
-			dailyCosts, _ := fetchDailyCostsWithCache(context.Background(), subID, startDate, now)
+			// Cached rows only: the live fallback made Cost Management calls for every sub
+			// without cached rows (every $0 sub), on each of several periods.
+			dailyCosts := cache.getCachedDailyCosts(subID, startDate, now)
 			for _, d := range dailyCosts {
 				if day, ok := d["day"].(int); ok {
 					if cost, ok := d["cost"].(float64); ok {
@@ -6599,7 +6640,7 @@ func buildCostAlerts(rgReports []ResourceGroupCostReport, budgetLimit float64) [
 	for _, rg := range rgReports {
 		if rg.CostChangePercent > 50 {
 			alerts = append(alerts, CostAlert{
-				AlertID:       fmt.Sprintf("SPIKE-%s-%d", rg.ResourceGroup[:8], now.Unix()),
+				AlertID:       fmt.Sprintf("SPIKE-%s-%d", prefix(rg.ResourceGroup, 8), now.Unix()),
 				Type:          "spike",
 				Severity:      "high",
 				ResourceGroup: rg.ResourceGroup,

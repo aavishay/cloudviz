@@ -714,6 +714,25 @@ func (dc *dbCache) setDailyCostsForWindow(subID string, windowStart time.Time, i
 	}
 }
 
+// resourceGroupCosts returns a sub's cached cost per resource group (lowercased, as stored)
+// for a period ("current" or "previous").
+func (dc *dbCache) resourceGroupCosts(subID, period string) map[string]float64 {
+	out := make(map[string]float64)
+	rows, err := dc.db.Query("SELECT resource_group, SUM(cost) FROM costs WHERE subscription_id = ? AND period = ? GROUP BY resource_group", subID, period)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rg string
+		var cost float64
+		if rows.Scan(&rg, &cost) == nil {
+			out[strings.ToLower(rg)] += cost
+		}
+	}
+	return out
+}
+
 // dailyFetchFresh reports whether the sub's daily costs were fetched within maxAge
 // (whether or not the fetch returned any rows).
 func (dc *dbCache) dailyFetchFresh(subID string, maxAge time.Duration) bool {

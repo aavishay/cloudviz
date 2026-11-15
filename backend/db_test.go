@@ -1599,3 +1599,24 @@ func TestDBCache_StaleDailyHistoryIsNotCoverage(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, cache.subsWithDailyHistorySince([]string{"s"}, since)["s"], "history fetched three weeks ago doesn't reach today")
 }
+
+func TestDBCache_ResourceGroupCosts(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+	cols := []string{"Cost", "ResourceId", "ResourceGroup", "ResourceType", "ResourceLocation"}
+	var columns []*armcostmanagement.QueryColumn
+	for _, c := range cols {
+		name := c
+		columns = append(columns, &armcostmanagement.QueryColumn{Name: &name})
+	}
+	cache.set("s", "current", armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{Columns: columns, Rows: [][]any{
+		{10.0, "/a", "RG-One", "t", "westeurope"},
+		{5.0, "/b", "rg-one", "t", "westeurope"},
+		{2.0, "/c", "rg-two", "t", "westeurope"},
+	}}})
+	cache.set("s", "previous", armcostmanagement.QueryResult{Properties: &armcostmanagement.QueryProperties{Columns: columns, Rows: [][]any{
+		{7.0, "/a", "rg-one", "t", "westeurope"},
+	}}})
+	assert.Equal(t, map[string]float64{"rg-one": 15, "rg-two": 2}, cache.resourceGroupCosts("s", "current"))
+	assert.Equal(t, map[string]float64{"rg-one": 7}, cache.resourceGroupCosts("s", "previous"))
+}

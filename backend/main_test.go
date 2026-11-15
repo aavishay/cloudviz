@@ -659,3 +659,9 @@ func TestCostSyncWorkerStatus(t *testing.T) {
 	}
 	assert.Equal(t, costSyncStatus{}, w.status(), "a drained queue ends the round")
 }
+
+func TestPrefix(t *testing.T) {
+	assert.Equal(t, "rg-prod-", prefix("rg-prod-weu", 8))
+	assert.Equal(t, "rg-a", prefix("rg-a", 8), "short names (used to panic in buildCostAlerts)")
+	assert.Equal(t, "", prefix("", 8))
+}
