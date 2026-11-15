@@ -632,3 +632,30 @@ func TestResolveDBPath(t *testing.T) {
 	_, err = os.Stat(filepath.Join(work, legacyDBName))
 	assert.NoError(t, err, "the legacy file is left in place")
 }
+
+func TestCostSyncWorkerStatus(t *testing.T) {
+	w := &costSyncWorker{queued: make(map[string]bool), wake: make(chan struct{}, 1), subscribers: make(map[chan costSyncEvent]bool)}
+	assert.Equal(t, costSyncStatus{}, w.status(), "idle")
+
+	w.enqueue("a", "b", "c")
+	assert.Equal(t, costSyncStatus{Syncing: true, Completed: 0, Total: 3}, w.status())
+
+	sid, _ := w.next()
+	w.startProcessing(sid)
+	assert.Equal(t, costSyncStatus{Syncing: true, Completed: 0, Total: 3, Current: "a"}, w.status())
+	w.finishProcessing()
+	assert.Equal(t, costSyncStatus{Syncing: true, Completed: 1, Total: 3}, w.status())
+
+	w.enqueue("d") // queued mid-round: the total grows
+	assert.Equal(t, 4, w.status().Total)
+
+	for {
+		sid, ok := w.next()
+		if !ok {
+			break
+		}
+		w.startProcessing(sid)
+		w.finishProcessing()
+	}
+	assert.Equal(t, costSyncStatus{}, w.status(), "a drained queue ends the round")
+}

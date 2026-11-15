@@ -2825,6 +2825,7 @@ func newRouter() *gin.Engine {
 	})
 
 	r.GET("/api/costs/stream", sseHandler)
+	r.GET("/api/costs/sync-status", func(c *gin.Context) { c.JSON(200, costSync.status()) })
 	r.GET("/api/history", historyHandler)
 	r.GET("/api/history/cost-drivers", costDriversHandler)
 	r.GET("/api/history/rg-trends", rgTrendsHandler)
@@ -4739,6 +4740,51 @@ type costSyncWorker struct {
 	queued      map[string]bool
 	wake        chan struct{}
 	subscribers map[chan costSyncEvent]bool
+	// Progress of the current round (from the queue becoming non-empty until it drains),
+	// for the "Syncing (x/N)" indicator.
+	current   string
+	completed int
+}
+
+// costSyncStatus is the worker's progress, served at /api/costs/sync-status.
+type costSyncStatus struct {
+	Syncing   bool   `json:"syncing"`
+	Completed int    `json:"completed"`
+	Total     int    `json:"total"`
+	Current   string `json:"current,omitempty"`
+}
+
+func (w *costSyncWorker) status() costSyncStatus {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	inFlight := 0
+	if w.current != "" {
+		inFlight = 1
+	}
+	return costSyncStatus{
+		Syncing:   len(w.queue) > 0 || w.current != "",
+		Completed: w.completed,
+		Total:     w.completed + inFlight + len(w.queue),
+		Current:   w.current,
+	}
+}
+
+// startProcessing marks sid as in flight.
+func (w *costSyncWorker) startProcessing(sid string) {
+	w.mu.Lock()
+	w.current = sid
+	w.mu.Unlock()
+}
+
+// finishProcessing counts sid as done; a drained queue ends the round.
+func (w *costSyncWorker) finishProcessing() {
+	w.mu.Lock()
+	w.current = ""
+	w.completed++
+	if len(w.queue) == 0 {
+		w.completed = 0
+	}
+	w.mu.Unlock()
 }
 
 var costSync = &costSyncWorker{
@@ -4848,6 +4894,7 @@ func (w *costSyncWorker) run(ctx context.Context) {
 			}
 			continue
 		}
+		w.startProcessing(sid)
 		var msgs []streamMsg
 		if _, ok := cache.get(sid, "current"); ok && !cache.isStale(sid) {
 			// Synced since it was queued (e.g. requested by two streams): send the cache.
@@ -4857,6 +4904,7 @@ func (w *costSyncWorker) run(ctx context.Context) {
 			msgs = syncSubscriptionCosts(subCtx, sid)
 			cancel()
 		}
+		w.finishProcessing()
 		w.broadcast(costSyncEvent{subID: sid, msgs: msgs})
 		select {
 		case <-time.After(costSyncPause):

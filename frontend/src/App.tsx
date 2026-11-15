@@ -65,6 +65,9 @@ export default function App() {
   const [dataSubIds, setDataSubIds] = useState<Set<string>>(new Set());
   const dataSubIdsRef = useRef(dataSubIds);
   const [liveCompletedCount, setLiveCompletedCount] = useState<number>(0);
+  // Progress of the server's cost sync worker, which keeps syncing whether or not this
+  // tab's stream is open; drives the "Syncing (x/N)" indicator.
+  const [syncStatus, setSyncStatus] = useState<{ syncing: boolean; completed: number; total: number } | null>(null);
   const [errorSubIds, setErrorSubIds] = useState<Set<string>>(new Set());
   const activeEventSourceRef = useRef<EventSource | null>(null);
   const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -3255,6 +3258,33 @@ export default function App() {
     }
   }, [uniqueSubs, allPossibleFilters.subs, activeSubs]);
 
+  // Poll the sync worker: every 3s while it's syncing, every 30s otherwise. When a round
+  // finishes, reload costs and the panels derived from them.
+  const wasSyncingRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/costs/sync-status');
+        const st = await res.json();
+        if (cancelled) return;
+        setSyncStatus(st);
+        if (wasSyncingRef.current && !st.syncing) {
+          fetchCosts(true);
+          setCostSyncVersion(v => v + 1);
+        }
+        wasSyncingRef.current = !!st.syncing;
+        timer = setTimeout(poll, st.syncing ? 3000 : 30000);
+      } catch {
+        if (!cancelled) timer = setTimeout(poll, 30000);
+      }
+    };
+    poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Auto-complete loading when all subscription data has arrived (don't wait for SSE "done")
   useEffect(() => {
     if (dataSubIds.size > 0 && dataSubIds.size === uniqueSubs.length && costsLoading) {
@@ -4897,11 +4927,16 @@ export default function App() {
 
         <div style={{ flex: 1 }} />
 
-        {/* Sync indicator when loading costs */}
-        {costsLoading && (
+        {/* Sync indicator: the server worker's progress (it refreshes stale subscriptions
+            after the cached data is already on screen), else this tab's initial load. */}
+        {(syncStatus?.syncing || costsLoading) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 8, background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', marginRight: 8 }}>
             <div className="sync-spinner" style={{ width: 14, height: 14, border: '2px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--accent)' }}>Syncing ({liveCompletedCount}/{uniqueSubs.length} subs)...</span>
+            <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--accent)' }}>
+              {syncStatus?.syncing
+                ? `Syncing (${syncStatus.completed}/${syncStatus.total} subs)...`
+                : `Syncing (${liveCompletedCount}/${uniqueSubs.length} subs)...`}
+            </span>
           </div>
         )}
 
