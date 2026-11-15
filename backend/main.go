@@ -451,14 +451,20 @@ func inventoryLooksComplete(stored, current, pendingDropCount int) bool {
 	return diff*20 <= pendingDropCount
 }
 
-// dailyCostsLookFlat reports whether all non-zero daily costs are identical.
-// A perfectly flat line usually indicates stale fallback data or a sync bug.
+// minFlatDays is how many identical non-zero days it takes to look like a spread-out
+// fallback rather than real charges: a subscription billed once a month has one or two
+// identical non-zero days, and that data is real.
+const minFlatDays = 7
+
+// dailyCostsLookFlat reports whether at least minFlatDays non-zero daily costs are all
+// identical. A perfectly flat line usually indicates stale fallback data or a sync bug.
 func dailyCostsLookFlat(items []map[string]any) bool {
 	if len(items) == 0 {
 		return false
 	}
 	var first float64
 	found := false
+	nonZero := 0
 	for _, item := range items {
 		cost, ok := item["cost"].(float64)
 		if !ok {
@@ -467,6 +473,7 @@ func dailyCostsLookFlat(items []map[string]any) bool {
 		if cost == 0 {
 			continue
 		}
+		nonZero++
 		if !found {
 			first = cost
 			found = true
@@ -481,7 +488,7 @@ func dailyCostsLookFlat(items []map[string]any) bool {
 			return false
 		}
 	}
-	return found
+	return nonZero >= minFlatDays
 }
 
 // shouldRefreshFlatDailyCosts returns true only once every 5 minutes per
@@ -4875,15 +4882,21 @@ func syncSubscriptionCosts(ctx context.Context, sid string) []streamMsg {
 	// Daily costs: refresh when cached rows are missing, stale or suspiciously flat (a flat
 	// line usually means stale fallback data). 90 days covers the 7/30/90-day UI periods.
 	dailyStart := now.AddDate(0, 0, -90)
-	cachedDaily, cachedOk := cache.getDailyCosts(sid, dailyStart, now)
-	if !cachedOk || dailyCostsLookFlat(cachedDaily) {
+	// Refetch by fetch age, not by whether rows exist: a sub with no spend has no rows, and
+	// was refetched on every sync and never counted as having history.
+	cachedDaily := cache.getCachedDailyCosts(sid, dailyStart, now)
+	if !cache.dailyFetchFresh(sid, 24*time.Hour) || dailyCostsLookFlat(cachedDaily) {
 		dailyData, dailyErr := fetchDailyCosts(costClient, sid, dailyStart, now, ctx)
 		switch {
 		case dailyErr != nil:
 			log.Printf("Cost sync: failed to fetch daily costs for %s: %v", sid, dailyErr)
-		case len(dailyData) > 0 && !dailyCostsLookFlat(dailyData):
+		case len(dailyData) == 0:
+			// No rows: no spend in the window. Record the window so the sub's history
+			// counts as known ($0) rather than missing.
+			cache.setDailyCostsForWindow(sid, dailyStart, nil)
+		case !dailyCostsLookFlat(dailyData):
 			cache.setDailyCostsForWindow(sid, dailyStart, dailyData)
-		case len(dailyData) > 0:
+		default:
 			log.Printf("Cost sync: fetched daily costs for %s are still flat, not caching", sid)
 		}
 		// Only store daily aggregates as costs when the resource-level fetch failed.

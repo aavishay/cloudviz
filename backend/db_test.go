@@ -1571,3 +1571,31 @@ func TestSystemResourceIDs(t *testing.T) {
 	assert.False(t, ids["/app/vm"])
 	assert.False(t, ids["/other/vm"])
 }
+
+func TestDBCache_ZeroSpendSubHasHistory(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	now := time.Now()
+	assert.False(t, cache.dailyFetchFresh("zero", 24*time.Hour), "never fetched")
+	// Azure returned no daily rows: the sub had no spend in the window.
+	cache.setDailyCostsForWindow("zero", now.AddDate(0, 0, -90), nil)
+	assert.True(t, cache.dailyFetchFresh("zero", 24*time.Hour), "an empty fetch counts as fetched")
+	covered := cache.subsWithDailyHistorySince([]string{"zero"}, now.AddDate(0, 0, -59).Format("2006-01-02"))
+	assert.True(t, covered["zero"], "a $0 sub has known history")
+	_, err := cache.db.Exec("UPDATE daily_fetches SET fetched_at = ?", now.Add(-25*time.Hour))
+	require.NoError(t, err)
+	assert.False(t, cache.dailyFetchFresh("zero", 24*time.Hour))
+}
+
+func TestDBCache_StaleDailyHistoryIsNotCoverage(t *testing.T) {
+	cache, cleanup := setupTestDB(t)
+	defer cleanup()
+	now := time.Now()
+	cache.setDailyCostsForWindow("s", now.AddDate(0, 0, -90), []map[string]any{{"date": now.Format("2006-01-02"), "cost": 1.0}})
+	since := now.AddDate(0, 0, -59).Format("2006-01-02")
+	assert.True(t, cache.subsWithDailyHistorySince([]string{"s"}, since)["s"])
+	_, err := cache.db.Exec("UPDATE daily_fetches SET fetched_at = ?", now.AddDate(0, 0, -21))
+	require.NoError(t, err)
+	assert.False(t, cache.subsWithDailyHistorySince([]string{"s"}, since)["s"], "history fetched three weeks ago doesn't reach today")
+}

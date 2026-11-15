@@ -714,15 +714,28 @@ func (dc *dbCache) setDailyCostsForWindow(subID string, windowStart time.Time, i
 	}
 }
 
+// dailyFetchFresh reports whether the sub's daily costs were fetched within maxAge
+// (whether or not the fetch returned any rows).
+func (dc *dbCache) dailyFetchFresh(subID string, maxAge time.Duration) bool {
+	var fetchedAt time.Time
+	if err := dc.db.QueryRow("SELECT fetched_at FROM daily_fetches WHERE subscription_id = ?", subID).Scan(&fetchedAt); err != nil {
+		return false
+	}
+	return time.Since(fetchedAt) <= maxAge
+}
+
 // subsWithDailyHistorySince returns the subs whose recorded daily-cost window starts on or
-// before date (YYYY-MM-DD), i.e. whose cached daily rows fully cover days from date on.
+// before date (YYYY-MM-DD) and was fetched in the last 48 hours, i.e. whose cached daily
+// rows fully cover days from date until about now.
 func (dc *dbCache) subsWithDailyHistorySince(subIDs []string, date string) map[string]bool {
 	covered := make(map[string]bool)
 	if len(subIDs) == 0 {
 		return covered
 	}
-	args := append(toAnySlice(subIDs), date)
-	rows, err := dc.db.Query("SELECT subscription_id FROM daily_fetches WHERE subscription_id IN ("+placeholders(len(subIDs))+") AND window_start <= ?", args...)
+	// The fetch must also be recent: a window fetched weeks ago (e.g. the app wasn't
+	// running) ends long before today, so the current period would look like a big drop.
+	args := append(toAnySlice(subIDs), date, time.Now().Add(-48*time.Hour))
+	rows, err := dc.db.Query("SELECT subscription_id FROM daily_fetches WHERE subscription_id IN ("+placeholders(len(subIDs))+") AND window_start <= ? AND fetched_at >= ?", args...)
 	if err != nil {
 		return covered
 	}

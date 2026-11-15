@@ -2693,8 +2693,10 @@ export default function App() {
           // periods is not by itself a sign of missing data (new environments are real).
           const covered = data.coverage?.coveredSubscriptions ?? 0;
           const total = data.coverage?.subscriptions ?? 0;
-          if (total > 0 && covered < total) {
-            setDataCompletenessWarning(`Period-over-period comparison covers ${covered} of ${total} subscriptions${covered * 2 < total ? ', so it is hidden until at least half are covered' : ''}. The rest don't have ${Number(costPeriod) * 2} days of synced cost history yet; they're included once the sync fetches it.`);
+          // Only when the comparison is hidden; when shown, its card already says how many
+          // subscriptions it covers.
+          if (total > 0 && covered * 2 < total) {
+            setDataCompletenessWarning(`The period-over-period comparison appears once at least half of your subscriptions have ${Number(costPeriod) * 2} days of synced cost history (${covered} of ${total} so far). The background sync is fetching the rest.`);
           } else {
             setDataCompletenessWarning(null);
           }
@@ -5122,7 +5124,7 @@ export default function App() {
                     </div>
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--warning)', marginBottom: 2 }}>
-                        Incomplete Data
+                        Comparison not ready yet
                       </div>
                       <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
                         {dataCompletenessWarning}

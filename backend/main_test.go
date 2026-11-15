@@ -210,6 +210,14 @@ func TestCostPeriodValidation(t *testing.T) {
 	}
 }
 
+func days(costs ...float64) []map[string]any {
+	items := make([]map[string]any, len(costs))
+	for i, c := range costs {
+		items[i] = map[string]any{"cost": c}
+	}
+	return items
+}
+
 func TestDailyCostsLookFlat(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -218,10 +226,12 @@ func TestDailyCostsLookFlat(t *testing.T) {
 	}{
 		{"empty", nil, false},
 		{"all zero", []map[string]any{{"cost": 0.0}, {"cost": 0.0}}, false},
-		{"identical", []map[string]any{{"cost": 100.0}, {"cost": 100.0}, {"cost": 100.0}}, true},
-		{"within noise", []map[string]any{{"cost": 100.0}, {"cost": 100.49}, {"cost": 100.0}}, true},
-		{"varies", []map[string]any{{"cost": 100.0}, {"cost": 110.0}, {"cost": 100.0}}, false},
-		{"single value", []map[string]any{{"cost": 50.0}}, true},
+		{"week of identical days", days(100, 100, 100, 100, 100, 100, 100), true},
+		{"within noise", days(100, 100.49, 100, 100, 100.2, 100, 100), true},
+		{"varies", days(100, 110, 100, 100, 100, 100, 100), false},
+		{"single charge", days(50), false},
+		{"monthly charge billed twice", days(392.01, 0, 0, 392.01), false},
+		{"six identical days", days(100, 100, 100, 100, 100, 100), false},
 	}
 
 	for _, tt := range tests {
