@@ -43,6 +43,9 @@ export {
 export { normalizeEnvTag } from './env';
 export { toCSV, csvCell } from './csv';
 export { parseStored } from './storage';
+export { usePurchases } from './usePurchases';
+export { MarketplaceTab } from './MarketplaceTab';
+export { CommitmentsTab } from './CommitmentsTab';
 
 // Types
 export type {

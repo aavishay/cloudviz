@@ -19,6 +19,9 @@ import {
   friendlyType,
   inferEnvFromRG,
   normalizeEnvTag,
+  usePurchases,
+  MarketplaceTab,
+  CommitmentsTab,
   parseStored,
   toCSV,
   type AzureResource,
@@ -2724,103 +2727,9 @@ export default function App() {
     fetchForecastData();
   }, [fetchForecastData]);
 
-  // Marketplace data state
-  const [marketplaceData, setMarketplaceData] = useState<any>(null);
-  const [marketplaceLoading, setMarketplaceLoading] = useState(false);
-  const [marketplaceError, setMarketplaceError] = useState<string | null>(null);
-  const [marketplacePeriod, setMarketplacePeriod] = useState(() => parseInt(localStorage.getItem('cloudviz-marketplacePeriod') || '30', 10));
-  useEffect(() => { localStorage.setItem('cloudviz-marketplacePeriod', String(marketplacePeriod)); }, [marketplacePeriod]);
-
-  // Commitments data state
-  const [commitmentsData, setCommitmentsData] = useState<any>(null);
-  const [commitmentsLoading, setCommitmentsLoading] = useState(false);
-  const [commitmentsError, setCommitmentsError] = useState<string | null>(null);
-  const [commitmentsPeriod, setCommitmentsPeriod] = useState(() => parseInt(localStorage.getItem('cloudviz-commitmentsPeriod') || '90', 10));
-  useEffect(() => { localStorage.setItem('cloudviz-commitmentsPeriod', String(commitmentsPeriod)); }, [commitmentsPeriod]);
-
-  // Fetch marketplace data with caching
-  const marketplaceCacheKey = useMemo(() => {
-    return `marketplace-${marketplacePeriod}-${Array.from(activeSubs).sort().join(',')}`;
-  }, [marketplacePeriod, activeSubs]);
-
-  const {
-    data: marketplaceDataCached,
-    isLoading: marketplaceLoadingCached,
-    error: marketplaceErrorCached,
-    refetch: refetchMarketplace
-  } = useCachedFetch(
-    async () => {
-      if (activeSubs.length === 0) return null;
-      const params = new URLSearchParams();
-      activeSubs.forEach(s => params.append('subscriptionId', s));
-      params.append('period', String(marketplacePeriod));
-      const res = await fetch(`/api/costs/marketplace?${params}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      return res.json();
-    },
-    {
-      key: marketplaceCacheKey,
-      ttl: 15 * 60 * 1000, // 15 minutes cache
-      enabled: activeTab === 'marketplace' && activeSubs.length > 0
-    }
-  );
-
-  // Sync cached marketplace data with state
-  useEffect(() => {
-    if (marketplaceDataCached) {
-      setMarketplaceData(marketplaceDataCached);
-    }
-  }, [marketplaceDataCached]);
-  useEffect(() => {
-    setMarketplaceLoading(marketplaceLoadingCached);
-  }, [marketplaceLoadingCached]);
-  useEffect(() => {
-    if (marketplaceErrorCached) {
-      setMarketplaceError('Failed to load marketplace data. Please try again.');
-    }
-  }, [marketplaceErrorCached]);
-
-  // Fetch commitments data with caching
-  const commitmentsCacheKey = useMemo(() => {
-    return `commitments-${commitmentsPeriod}-${Array.from(activeSubs).sort().join(',')}`;
-  }, [commitmentsPeriod, activeSubs]);
-
-  const {
-    data: commitmentsDataCached,
-    isLoading: commitmentsLoadingCached,
-    error: commitmentsErrorCached,
-    refetch: refetchCommitments
-  } = useCachedFetch(
-    async () => {
-      if (activeSubs.length === 0) return null;
-      const params = new URLSearchParams();
-      activeSubs.forEach(s => params.append('subscriptionId', s));
-      params.append('period', String(commitmentsPeriod));
-      const res = await fetch(`/api/costs/commitments?${params}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      return res.json();
-    },
-    {
-      key: commitmentsCacheKey,
-      ttl: 15 * 60 * 1000, // 15 minutes cache
-      enabled: activeTab === 'commitments' && activeSubs.length > 0
-    }
-  );
-
-  // Sync cached commitments data with state
-  useEffect(() => {
-    if (commitmentsDataCached) {
-      setCommitmentsData(commitmentsDataCached);
-    }
-  }, [commitmentsDataCached]);
-  useEffect(() => {
-    setCommitmentsLoading(commitmentsLoadingCached);
-  }, [commitmentsLoadingCached]);
-  useEffect(() => {
-    if (commitmentsErrorCached) {
-      setCommitmentsError('Failed to load commitments data. Please try again.');
-    }
-  }, [commitmentsErrorCached]);
+  // Marketplace and RI/savings-plan purchases (also shown as header tab badges)
+  const marketplace = usePurchases('marketplace', 30, activeSubs, activeTab === 'marketplace');
+  const commitments = usePurchases('commitments', 90, activeSubs, activeTab === 'commitments');
 
   // Fetch cost anomalies from backend
   useEffect(() => {
@@ -3896,7 +3805,7 @@ export default function App() {
           <button className={`tab ${activeTab === 'marketplace' ? 'active' : ''}`} onClick={() => setActiveTab('marketplace')} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 6 }}><path d="M3 3h18v18H3z" /><path d="M12 8v8" /><path d="M8 12h8" /></svg>
             Marketplace
-            {marketplaceData?.summary?.count > 0 && (
+            {marketplace.data?.summary?.count > 0 && (
               <span style={{
                 marginLeft: 4,
                 padding: '2px 8px',
@@ -3908,14 +3817,14 @@ export default function App() {
                 border: `1px solid ${activeTab === 'marketplace' ? 'var(--accent)' : 'var(--border)'}`,
                 transition: 'all 0.2s ease'
               }}>
-                {marketplaceData.summary.count}
+                {marketplace.data.summary.count}
               </span>
             )}
           </button>
           <button className={`tab ${activeTab === 'commitments' ? 'active' : ''}`} onClick={() => setActiveTab('commitments')} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 6 }}><path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" /></svg>
             Commitments
-            {commitmentsData?.summary?.count > 0 && (
+            {commitments.data?.summary?.count > 0 && (
               <span style={{
                 marginLeft: 4,
                 padding: '2px 8px',
@@ -3927,7 +3836,7 @@ export default function App() {
                 border: `1px solid ${activeTab === 'commitments' ? 'var(--accent)' : 'var(--border)'}`,
                 transition: 'all 0.2s ease'
               }}>
-                {commitmentsData.summary.count}
+                {commitments.data.summary.count}
               </span>
             )}
           </button>
@@ -4685,309 +4594,23 @@ export default function App() {
               setCurrentPage={setCurrentPage}
             />
           ) : activeTab === 'marketplace' ? (
-            /* ── Marketplace Tab ── */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {/* Marketplace Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(245 158 11 / 0.3)' }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M3 3h18v18H3z" /><path d="M12 8v8" /><path d="M8 12h8" /></svg>
-                  </div>
-                  <div>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>Marketplace Purchases</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 12 }}>
-                      {marketplaceData?.summary ? `$${marketplaceData.summary.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })} total · ${marketplaceData.summary.count} purchases` : 'Loading...'}
-                    </span>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {/* Period selector */}
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {[7, 30, 90].map(days => {
-                      const isActive = marketplacePeriod === days;
-                      return (
-                        <button
-                          key={days}
-                          onClick={() => setMarketplacePeriod(days)}
-                          style={{
-                            padding: '5px 10px',
-                            fontSize: 11,
-                            fontWeight: 600,
-                            border: '1px solid',
-                            borderColor: isActive ? 'var(--accent)' : 'var(--border)',
-                            borderRadius: 6,
-                            background: isActive ? 'var(--accent)' : 'transparent',
-                            color: isActive ? 'white' : 'var(--text-2)',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          {days}d
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <button
-                    className="btn"
-                    onClick={refetchMarketplace}
-                    disabled={marketplaceLoading}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: marketplaceLoading ? 'spin 0.8s linear infinite' : 'none' }}>
-                      <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                    </svg>
-                    Refresh
-                  </button>
-                </div>
-              </div>
-
-              {marketplaceLoading && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 12, color: 'var(--text-2)', fontSize: 13 }}>
-                  <div className="spinner" />
-                  Loading marketplace data...
-                </div>
-              )}
-
-              {!marketplaceLoading && marketplaceError && (
-                <div className="card" style={{ padding: 24, textAlign: 'center', background: 'rgba(239,68,68,0.05)', border: '1px solid var(--danger)' }}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" style={{ marginBottom: 8 }}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger)', marginBottom: 8 }}>{marketplaceError}</div>
-                  <button className="btn" onClick={refetchMarketplace}>Try Again</button>
-                </div>
-              )}
-
-              {!marketplaceLoading && !marketplaceError && marketplaceData?.summary?.spikeDays?.length > 0 && (
-                <div className="card" style={{ padding: 16, background: 'linear-gradient(135deg, rgba(239,68,68,0.1) 0%, rgba(239,68,68,0.05) 100%)', border: '1px solid var(--danger)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger)' }}>Cost Spike Days Detected</span>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {marketplaceData.summary.spikeDays.map((spike: any, i: number) => (
-                      <div key={i} style={{ padding: '8px 12px', background: 'var(--bg-card)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>{spike.date}</div>
-                        <div style={{ fontSize: 11, color: 'var(--danger)', fontWeight: 700 }}>${spike.cost.toLocaleString(undefined, { maximumFractionDigits: 2 })} ({spike.ratio.toFixed(1)}x avg)</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Summary by Publisher */}
-              {!marketplaceLoading && marketplaceData?.summary?.byPublisher?.length > 0 && (
-                <div className="card" style={{ padding: 20 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', marginBottom: 16 }}>Top Publishers</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
-                    {marketplaceData.summary.byPublisher.slice(0, 6).map((pub: any, i: number) => (
-                      <div key={i} style={{ padding: 12, background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pub.name}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4 }}>{pub.count} purchases · ${pub.cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Purchases Table */}
-              {!marketplaceLoading && marketplaceData?.purchases?.length > 0 && (
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                  <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Purchase Details</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{marketplaceData.purchases.length} items</span>
-                  </div>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                      <thead>
-                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                          {[
-                            { key: 'date', label: 'Date' },
-                            { key: 'resourceName', label: 'Resource' },
-                            { key: 'resourceGroup', label: 'Resource Group' },
-                            { key: 'publisher', label: 'Publisher' },
-                            { key: 'product', label: 'Product' },
-                            { key: 'cost', label: 'Cost' },
-                          ].map(col => (
-                            <th
-                              key={col.key}
-                              style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--text-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}
-                            >
-                              {col.label}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {marketplaceData.purchases.slice(0, 100).map((purchase: any, i: number) => (
-                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-1)', fontWeight: 500, whiteSpace: 'nowrap' }}>{purchase.date}</td>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-1)' }}>{purchase.resourceName || '—'}</td>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-2)' }}>{purchase.resourceGroup || '—'}</td>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-2)' }}>{purchase.publisher || '—'}</td>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-2)' }}>{purchase.product || '—'}</td>
-                            <td style={{ padding: '10px 16px', color: 'var(--accent)', fontWeight: 700 }}>
-                              ${purchase.cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {!marketplaceLoading && !marketplaceError && (!marketplaceData?.purchases || marketplaceData.purchases.length === 0) && (
-                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-3)' }}>
-                  No marketplace purchases found for the selected period.
-                </div>
-              )}
-            </div>
+            <MarketplaceTab
+              marketplaceData={marketplace.data}
+              marketplaceLoading={marketplace.loading}
+              marketplaceError={marketplace.error}
+              marketplacePeriod={marketplace.period}
+              setMarketplacePeriod={marketplace.setPeriod}
+              refetchMarketplace={marketplace.refetch}
+            />
           ) : activeTab === 'commitments' ? (
-            /* ── Commitments Tab ── */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {/* Commitments Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(139 92 246 / 0.3)' }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" /></svg>
-                  </div>
-                  <div>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>RI & Savings Plan Purchases</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 12 }}>
-                      {commitmentsData?.summary ? `$${commitmentsData.summary.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })} total · ${commitmentsData.summary.count} purchases` : 'Loading...'}
-                    </span>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {/* Period selector */}
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {[30, 90, 180, 365].map(days => {
-                      const isActive = commitmentsPeriod === days;
-                      return (
-                        <button
-                          key={days}
-                          onClick={() => setCommitmentsPeriod(days)}
-                          style={{
-                            padding: '5px 10px',
-                            fontSize: 11,
-                            fontWeight: 600,
-                            border: '1px solid',
-                            borderColor: isActive ? 'var(--accent)' : 'var(--border)',
-                            borderRadius: 6,
-                            background: isActive ? 'var(--accent)' : 'transparent',
-                            color: isActive ? 'white' : 'var(--text-2)',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          {days >= 365 ? '1y' : days >= 180 ? '6m' : days >= 90 ? '3m' : '1m'}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <button
-                    className="btn"
-                    onClick={refetchCommitments}
-                    disabled={commitmentsLoading}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: commitmentsLoading ? 'spin 0.8s linear infinite' : 'none' }}>
-                      <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                    </svg>
-                    Refresh
-                  </button>
-                </div>
-              </div>
-
-              {commitmentsLoading && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: 12, color: 'var(--text-2)', fontSize: 13 }}>
-                  <div className="spinner" />
-                  Loading commitments data...
-                </div>
-              )}
-
-              {!commitmentsLoading && commitmentsError && (
-                <div className="card" style={{ padding: 24, textAlign: 'center', background: 'rgba(239,68,68,0.05)', border: '1px solid var(--danger)' }}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" style={{ marginBottom: 8 }}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger)', marginBottom: 8 }}>{commitmentsError}</div>
-                  <button className="btn" onClick={refetchCommitments}>Try Again</button>
-                </div>
-              )}
-
-              {/* Summary by Type */}
-              {!commitmentsLoading && commitmentsData?.summary?.byType?.length > 0 && (
-                <div className="card" style={{ padding: 20 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', marginBottom: 16 }}>By Commitment Type</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
-                    {commitmentsData.summary.byType.map((t: any, i: number) => (
-                      <div key={i} style={{ padding: 12, background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.type}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4 }}>{t.count} purchases · ${t.cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Purchases Table */}
-              {!commitmentsLoading && commitmentsData?.purchases?.length > 0 && (
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                  <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>Purchase Details</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{commitmentsData.purchases.length} items</span>
-                  </div>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                      <thead>
-                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                          {[
-                            { key: 'date', label: 'Date' },
-                            { key: 'commitmentType', label: 'Type' },
-                            { key: 'product', label: 'Product' },
-                            { key: 'category', label: 'Category' },
-                            { key: 'cost', label: 'Cost' },
-                          ].map(col => (
-                            <th
-                              key={col.key}
-                              style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--text-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}
-                            >
-                              {col.label}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {commitmentsData.purchases.slice(0, 100).map((purchase: any, i: number) => (
-                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-1)', fontWeight: 500, whiteSpace: 'nowrap' }}>{purchase.date}</td>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-1)' }}>
-                              <span style={{
-                                padding: '2px 8px',
-                                borderRadius: 4,
-                                fontSize: 10,
-                                fontWeight: 600,
-                                background: purchase.commitmentType === 'Reserved Instance' ? 'rgba(139,92,246,0.1)' : 'rgba(245,158,11,0.1)',
-                                color: purchase.commitmentType === 'Reserved Instance' ? '#8b5cf6' : '#f59e0b'
-                              }}>
-                                {purchase.commitmentType || '—'}
-                              </span>
-                            </td>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-2)' }}>{purchase.product || '—'}</td>
-                            <td style={{ padding: '10px 16px', color: 'var(--text-2)' }}>{purchase.category || '—'}</td>
-                            <td style={{ padding: '10px 16px', color: 'var(--accent)', fontWeight: 700 }}>
-                              ${purchase.cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {!commitmentsLoading && !commitmentsError && (!commitmentsData?.purchases || commitmentsData.purchases.length === 0) && (
-                <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-3)' }}>
-                  No Reserved Instance or Savings Plan purchases found for the selected period.
-                </div>
-              )}
-            </div>
+            <CommitmentsTab
+              commitmentsData={commitments.data}
+              commitmentsLoading={commitments.loading}
+              commitmentsError={commitments.error}
+              commitmentsPeriod={commitments.period}
+              setCommitmentsPeriod={commitments.setPeriod}
+              refetchCommitments={commitments.refetch}
+            />
           ) : (
             /* ── Cost Tab ── */
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
